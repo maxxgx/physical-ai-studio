@@ -10,6 +10,8 @@ from uuid import uuid4
 
 from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.loggers import CSVLogger
+from physicalai.devices import SingleXPUStrategy, XPUAccelerator
+from torchvision.transforms import v2 as transforms
 
 from core.logging.utils import job_logging_ctx
 from models.utils import setup_policy
@@ -70,6 +72,7 @@ class TrainingWorker(BaseProcessWorker):
                         snapshot_id=snapshot.id,
                         policy=payload.policy,
                         properties={},
+                        train_job_id=job.id,
                         created_at=None,
                     )
 
@@ -106,6 +109,8 @@ class TrainingWorker(BaseProcessWorker):
                 repo_id="snapshot",  # doesnt matter for loading the data.
                 root=snapshot.path,
                 train_batch_size=8,
+                # ACT's ResNet backbone does not resize internally, so large images cause OOM.
+                image_transforms=transforms.Resize((480, 640)) if model.policy == "act" else None,
             )
             policy = setup_policy(model)
 
@@ -118,6 +123,14 @@ class TrainingWorker(BaseProcessWorker):
             )
             csv_logger = CSVLogger(path.parent, name=path.stem)
 
+            kwargs: dict = {}
+            if training_device := get_torch_device() == "xpu":
+                kwargs["strategy"] = SingleXPUStrategy()
+                kwargs["accelerator"] = XPUAccelerator()
+            else:
+                kwargs["accelerator"] = training_device
+                kwargs["strategy"] = get_lightning_strategy()
+
             trainer = Trainer(
                 logger=csv_logger,
                 callbacks=[
@@ -128,9 +141,8 @@ class TrainingWorker(BaseProcessWorker):
                         dispatcher=dispatcher,
                     ),
                 ],
-                accelerator=get_torch_device(),
-                strategy=get_lightning_strategy(),
                 max_steps=10000,
+                **kwargs,
             )
 
             dispatcher.start()
