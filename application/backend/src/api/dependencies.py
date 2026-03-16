@@ -142,6 +142,13 @@ def get_camera_id(camera_id: str) -> UUID:
     return UUID(camera_id)
 
 
+def get_job_id(job_id: str) -> UUID:
+    """Initialize and validates a project ID."""
+    if not is_valid_uuid(job_id):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid job ID")
+    return UUID(job_id)
+
+
 def get_environment_id(environment_id: str) -> UUID:
     """Initialize and validates an environment ID."""
     if not is_valid_uuid(environment_id):
