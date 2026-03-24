@@ -11,6 +11,9 @@ from loguru import logger
 from pydantic import BaseModel
 
 from control.environment_integration import EnvironmentIntegration
+from control.steamdeck_client import SteamDeckClient
+from control.steamdeck_ik_mapper import SteamDeckIKMapper
+from control.steamdeck_mapper import SteamDeckMapper
 from control.sync_mixed_model_integration import SyncMixedModelIntegration
 from internal_datasets.dataset_client import DatasetClient
 from internal_datasets.lerobot.lerobot_dataset import InternalLeRobotDataset
@@ -29,7 +32,7 @@ class RobotControlState(BaseModel):
     dataset_loaded: bool = False
     environment_loaded: bool = False
     is_recording: bool = False
-    follower_source: Literal["model", "teleoperation"] | None = None
+    follower_source: Literal["model", "teleoperation", "steamdeck"] | None = None
 
 
 class WorkerEvents:
@@ -41,6 +44,8 @@ class WorkerEvents:
         self.save_episode = Event()
         self.discard_episode = Event()
         self.start_recording_mutation = Event()
+        self.connect_steamdeck = Event()
+        self.disconnect_steamdeck = Event()
 
 
 class RobotControlWorker(BaseThreadWorker):
@@ -52,6 +57,9 @@ class RobotControlWorker(BaseThreadWorker):
     state: RobotControlState
     model_integration: SyncMixedModelIntegration | None = None
     environment_integration: EnvironmentIntegration | None = None
+    steamdeck_client: SteamDeckClient | None = None
+    steamdeck_mapper: SteamDeckMapper | None = None
+    steamdeck_ik_mapper: SteamDeckIKMapper | None = None
     dataset: DatasetClient | None = None
     recording_mutation: RecordingMutation | None = None
 
@@ -73,6 +81,9 @@ class RobotControlWorker(BaseThreadWorker):
         self.state = RobotControlState()
         self.robot_client_factory = robot_client_factory
         self.events = WorkerEvents()
+        self.steamdeck_client = None
+        self.steamdeck_mapper = None
+        self.steamdeck_ik_mapper = None
 
     def start_task(self, task: str) -> None:
         if self.state.model_loaded and self.state.environment_loaded:
@@ -106,8 +117,27 @@ class RobotControlWorker(BaseThreadWorker):
         """Stop inference and teardown."""
         self.events.interrupt.set()
 
-    def set_follower_source(self, follower_source: Literal["model", "teleoperation"] | None) -> None:
+    def set_follower_source(self, follower_source: Literal["model", "teleoperation", "steamdeck"] | None) -> None:
         self.state.follower_source = follower_source
+        self._report_state()
+
+    def connect_steamdeck(self, url: str, mapping: dict | None = None, ik_mode: bool = False) -> None:
+        """Create Steam Deck client and mapper for gamepad control."""
+        from schemas.steamdeck import SteamDeckMapping
+
+        sdk_mapping = SteamDeckMapping.model_validate(mapping) if mapping else None
+        self.steamdeck_client = SteamDeckClient(url)
+        self.steamdeck_mapper = SteamDeckMapper(mapping=sdk_mapping)
+        if ik_mode:
+            self.steamdeck_ik_mapper = SteamDeckIKMapper()
+        else:
+            self.steamdeck_ik_mapper = None
+        self.events.connect_steamdeck.set()
+        self._report_state()
+
+    def disconnect_steamdeck(self) -> None:
+        """Request Steam Deck client teardown."""
+        self.events.disconnect_steamdeck.set()
         self._report_state()
 
     def load_model(self, model: Model, backend: str) -> None:
@@ -152,7 +182,7 @@ class RobotControlWorker(BaseThreadWorker):
         """Check if model and environment is loaded and no errors occurred."""
         return self.state.environment_loaded and self.recording_mutation is not None and self.state.task is not None
 
-    async def run_loop(self) -> None:
+    async def run_loop(self) -> None:  # noqa: PLR0912
         """inference loop."""
         try:
             self.start_episode_t = time.perf_counter()
@@ -165,6 +195,8 @@ class RobotControlWorker(BaseThreadWorker):
                     self._handle_start_recording(),
                     self._handle_save_episode(),
                     self._handle_discard_episode(),
+                    self._handle_connect_steamdeck(),
+                    self._handle_disconnect_steamdeck(),
                 )
 
                 goal_time = 1 / self.fps
@@ -193,6 +225,12 @@ class RobotControlWorker(BaseThreadWorker):
                                         actions = dict(zip(self.environment_integration.action_keys, action))
                                         report_observation["actions"] = actions
                                         await self.environment_integration.set_joints_state(actions, goal_time)
+                            case "steamdeck":
+                                actions = await self._apply_steamdeck_control(
+                                    observation, goal_time
+                                )
+                                if actions:
+                                    report_observation["actions"] = actions
 
                         if (
                             self.state.is_recording
@@ -227,9 +265,14 @@ class RobotControlWorker(BaseThreadWorker):
     async def _handle_setup_environment(self) -> None:
         if self.environment_integration and self.events.new_environment.is_set():
             self.events.new_environment.clear()
-            await self.environment_integration.setup()
-            self.state.environment_loaded = True
-            self._report_state()
+            try:
+                await self.environment_integration.setup()
+                self.state.environment_loaded = True
+                self._report_state()
+            except Exception as e:
+                logger.error(f"Failed to setup environment: {e}")
+                self.environment_integration = None
+                self._report_error(e)
 
     async def _handle_start_recording(self) -> None:
         if self.ready_for_recording and self.events.start_recording.is_set():
@@ -249,6 +292,60 @@ class RobotControlWorker(BaseThreadWorker):
             self.events.discard_episode.clear()
             self.recording_mutation.discard_buffer()
             self.state.is_recording = False
+            self._report_state()
+
+    async def _apply_steamdeck_control(
+        self, observation: dict, goal_time: float
+    ) -> dict[str, float] | None:
+        """Read gamepad state, compute velocity deltas, apply to follower."""
+        if not self.steamdeck_client or not self.environment_integration:
+            return None
+
+        gamepad = self.steamdeck_client.get_state()
+        if gamepad is None:
+            return None
+
+        # Current joint positions from follower observation
+        current = {k: v for k, v in observation.items() if k in self.environment_integration.action_keys}
+
+        # Choose mapper: IK (Cartesian) or direct (per-joint)
+        if self.steamdeck_ik_mapper:
+            deltas = self.steamdeck_ik_mapper.compute_deltas(gamepad, goal_time, current)
+        elif self.steamdeck_mapper:
+            deltas = self.steamdeck_mapper.compute_deltas(gamepad, goal_time)
+        else:
+            return None
+
+        # Always send position commands to servos (even with no deltas)
+        # to prevent gravity drift when inputs are idle.
+        target = {joint: current.get(joint, 0.0) + delta for joint, delta in deltas.items()}
+
+        # Fill in un-moved joints with current values
+        for joint in self.environment_integration.action_keys:
+            if joint not in target:
+                target[joint] = current.get(joint, 0.0)
+
+        await self.environment_integration.set_joints_state(target, goal_time)
+        return target
+
+    async def _handle_connect_steamdeck(self) -> None:
+        if self.steamdeck_client and self.events.connect_steamdeck.is_set():
+            self.events.connect_steamdeck.clear()
+            await self.steamdeck_client.start()
+            logger.info(f"Steam Deck client started: {self.steamdeck_client.url}")
+            self._report_state()
+
+    async def _handle_disconnect_steamdeck(self) -> None:
+        if self.events.disconnect_steamdeck.is_set():
+            self.events.disconnect_steamdeck.clear()
+            if self.steamdeck_client:
+                await self.steamdeck_client.stop()
+                self.steamdeck_client = None
+                self.steamdeck_mapper = None
+                self.steamdeck_ik_mapper = None
+            if self.state.follower_source == "steamdeck":
+                self.state.follower_source = None
+            logger.info("Steam Deck client disconnected")
             self._report_state()
 
     async def _handle_start_mutation(self):
@@ -271,6 +368,9 @@ class RobotControlWorker(BaseThreadWorker):
 
     async def teardown(self) -> None:
         """Disconnect robots and close queue."""
+        if self.steamdeck_client:
+            await self.steamdeck_client.stop()
+
         if self.environment_integration:
             await self.environment_integration.teardown()
 

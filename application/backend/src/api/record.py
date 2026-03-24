@@ -23,7 +23,7 @@ async def robot_control_websocket_openapi() -> Response:
     return Response(status_code=426)
 
 
-async def handle_incoming(websocket: WebSocket, process: RobotControlWorker) -> None:
+async def handle_incoming(websocket: WebSocket, process: RobotControlWorker) -> None:  # noqa: PLR0912
     """Handle incoming messages for robot control."""
     try:
         while True:
@@ -38,6 +38,14 @@ async def handle_incoming(websocket: WebSocket, process: RobotControlWorker) -> 
                     process.load_dataset(Dataset.model_validate(payload["dataset"]))
                 case "set_follower_source":
                     process.set_follower_source(payload["follower_source"])
+                case "connect_steamdeck":
+                    process.connect_steamdeck(
+                        url=payload["url"],
+                        mapping=payload.get("mapping"),
+                        ik_mode=payload.get("ik_mode", False),
+                    )
+                case "disconnect_steamdeck":
+                    process.disconnect_steamdeck()
                 case "start_recording":
                     process.start_recording(payload["task"])
                 case "save_episode":

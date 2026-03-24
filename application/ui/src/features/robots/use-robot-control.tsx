@@ -6,7 +6,7 @@ import { fetchClient } from '../../api/client';
 import { SchemaDatasetOutput, SchemaEnvironmentWithRelations, SchemaModel } from '../../api/openapi-spec';
 import useWebSocketWithResponse from '../../components/websockets/use-websocket-with-response';
 
-type FollowerSource = 'teleoperation' | 'model' | null;
+type FollowerSource = 'teleoperation' | 'model' | 'steamdeck' | null;
 
 interface RobotControlState {
     model_loaded: boolean;
@@ -173,6 +173,32 @@ export const useRobotControl = ({ environment, model, dataset, backend, onError 
         },
     });
 
+    const connectSteamDeck = useMutation({
+        meta: { skipInvalidation: true },
+        mutationFn: async ({ url, ikMode }: { url: string; ikMode: boolean }) => {
+            sendJsonMessageAndWait<RobotControlApiJsonResponse<RobotControlState>>(
+                { event: 'connect_steamdeck', data: { url, ik_mode: ikMode } },
+                () => true
+            );
+            const message = await sendJsonMessageAndWait<RobotControlApiJsonResponse<RobotControlState>>(
+                { event: 'set_follower_source', data: { follower_source: 'steamdeck' } },
+                ({ data }) => data['follower_source'] === 'steamdeck'
+            );
+            return message;
+        },
+    });
+
+    const disconnectSteamDeck = useMutation({
+        meta: { skipInvalidation: true },
+        mutationFn: async () => {
+            const message = await sendJsonMessageAndWait<RobotControlApiJsonResponse<RobotControlState>>(
+                { event: 'disconnect_steamdeck', data: {} },
+                ({ data }) => data['follower_source'] !== 'steamdeck'
+            );
+            return message;
+        },
+    });
+
     const readyForInference = state.environment_loaded && state.model_loaded;
     const readyForRecording = state.environment_loaded && state.dataset_loaded;
     const isConnected = readyState === 1;
@@ -188,6 +214,8 @@ export const useRobotControl = ({ environment, model, dataset, backend, onError 
         readyForInference,
         readyForRecording,
         setFollowerSource,
+        connectSteamDeck,
+        disconnectSteamDeck,
         startEpisode,
         saveEpisode,
         discardEpisode,

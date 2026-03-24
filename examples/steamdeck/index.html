@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Steam Deck Controller</title>
+<style>
+  :root { --bg: #1a1a2e; --surface: #16213e; --accent: #0f3460; --highlight: #e94560; --text: #eee; --dim: #888; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace; background: var(--bg); color: var(--text); min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 1rem; }
+  h1 { font-size: 1.2rem; margin-bottom: .5rem; }
+
+  /* ---- connection bar ---- */
+  .conn { display: flex; gap: .5rem; align-items: center; margin-bottom: 1rem; }
+  .conn input { background: var(--surface); border: 1px solid var(--accent); color: var(--text); padding: .3rem .6rem; border-radius: 4px; width: 280px; font-family: inherit; }
+  .conn button { background: var(--accent); color: var(--text); border: none; padding: .35rem 1rem; border-radius: 4px; cursor: pointer; }
+  .conn button:hover { background: var(--highlight); }
+  .status { font-size: .85rem; }
+  .status.connected { color: #4caf50; }
+  .status.disconnected { color: var(--highlight); }
+
+  /* ---- layout ---- */
+  .dashboard { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; width: 100%; max-width: 800px; }
+  .panel { background: var(--surface); border-radius: 8px; padding: 1rem; }
+  .panel h2 { font-size: .9rem; color: var(--dim); margin-bottom: .6rem; text-transform: uppercase; letter-spacing: .05em; }
+
+  /* ---- sticks ---- */
+  .sticks { display: flex; justify-content: space-around; }
+  .stick-container { text-align: center; }
+  .stick-container span { display: block; font-size: .75rem; color: var(--dim); margin-top: .3rem; }
+  canvas.stick { background: var(--accent); border-radius: 50%; }
+
+  /* ---- triggers ---- */
+  .trigger-row { display: flex; justify-content: space-between; gap: 1rem; }
+  .trigger { flex: 1; }
+  .trigger label { display: block; font-size: .75rem; color: var(--dim); margin-bottom: .2rem; }
+  .trigger-bar { height: 14px; background: var(--accent); border-radius: 7px; overflow: hidden; }
+  .trigger-fill { height: 100%; background: var(--highlight); border-radius: 7px; transition: width 30ms; }
+
+  /* ---- buttons ---- */
+  .button-grid { display: flex; flex-wrap: wrap; gap: .4rem; }
+  .btn { padding: .25rem .6rem; border-radius: 4px; font-size: .8rem; background: var(--accent); transition: background 50ms; }
+  .btn.pressed { background: var(--highlight); }
+
+  /* ---- trackpads ---- */
+  canvas.pad { background: var(--accent); border-radius: 8px; }
+  .pads { display: flex; justify-content: space-around; }
+  .pad-container { text-align: center; }
+  .pad-container span { display: block; font-size: .75rem; color: var(--dim); margin-top: .3rem; }
+
+  /* ---- raw data ---- */
+  .raw { grid-column: 1 / -1; }
+  pre { font-size: .75rem; color: var(--dim); white-space: pre-wrap; max-height: 200px; overflow-y: auto; }
+</style>
+</head>
+<body>
+  <h1>Steam Deck Controller Test</h1>
+
+  <div class="conn">
+    <input id="wsUrl" />
+    <button id="connectBtn" onclick="toggleConnection()">Connect</button>
+    <span id="status" class="status disconnected">disconnected</span>
+  </div>
+
+  <div class="dashboard">
+    <!-- Sticks -->
+    <div class="panel">
+      <h2>Sticks</h2>
+      <div class="sticks">
+        <div class="stick-container">
+          <canvas class="stick" id="leftStick" width="120" height="120"></canvas>
+          <span id="leftStickLabel">0.00, 0.00</span>
+        </div>
+        <div class="stick-container">
+          <canvas class="stick" id="rightStick" width="120" height="120"></canvas>
+          <span id="rightStickLabel">0.00, 0.00</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Triggers -->
+    <div class="panel">
+      <h2>Triggers</h2>
+      <div class="trigger-row">
+        <div class="trigger">
+          <label>L2</label>
+          <div class="trigger-bar"><div class="trigger-fill" id="lt"></div></div>
+        </div>
+        <div class="trigger">
+          <label>R2</label>
+          <div class="trigger-bar"><div class="trigger-fill" id="rt"></div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Buttons -->
+    <div class="panel">
+      <h2>Buttons</h2>
+      <div class="button-grid" id="buttonGrid"></div>
+    </div>
+
+    <!-- Trackpads -->
+    <div class="panel">
+      <h2>Trackpads</h2>
+      <div class="pads">
+        <div class="pad-container">
+          <canvas class="pad" id="leftPad" width="120" height="120"></canvas>
+          <span id="leftPadLabel">0.00, 0.00</span>
+        </div>
+        <div class="pad-container">
+          <canvas class="pad" id="rightPad" width="120" height="120"></canvas>
+          <span id="rightPadLabel">0.00, 0.00</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Raw JSON -->
+    <div class="panel raw">
+      <h2>Raw Data</h2>
+      <pre id="rawData">waiting for data…</pre>
+    </div>
+  </div>
+
+<script>
+"use strict";
+
+let ws = null;
+
+const statusEl   = document.getElementById("status");
+const connectBtn = document.getElementById("connectBtn");
+const rawDataEl  = document.getElementById("rawData");
+const buttonGrid = document.getElementById("buttonGrid");
+
+// ---- connection ----
+
+function toggleConnection() {
+  if (ws && ws.readyState <= WebSocket.OPEN) {
+    ws.close();
+  } else {
+    connect();
+  }
+}
+
+function connect() {
+  const url = document.getElementById("wsUrl").value.trim();
+  if (!url) return;
+
+  ws = new WebSocket(url);
+
+  ws.onopen = () => {
+    statusEl.textContent = "connected";
+    statusEl.className = "status connected";
+    connectBtn.textContent = "Disconnect";
+  };
+
+  ws.onclose = () => {
+    statusEl.textContent = "disconnected";
+    statusEl.className = "status disconnected";
+    connectBtn.textContent = "Connect";
+    ws = null;
+  };
+
+  ws.onerror = () => {
+    statusEl.textContent = "error";
+    statusEl.className = "status disconnected";
+  };
+
+  ws.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    render(data);
+  };
+}
+
+// ---- rendering ----
+
+function drawStick(canvasId, x, y) {
+  const c = document.getElementById(canvasId);
+  const ctx = c.getContext("2d");
+  const cx = c.width / 2;
+  const cy = c.height / 2;
+  const r = cx - 10;
+
+  ctx.clearRect(0, 0, c.width, c.height);
+
+  // outer ring
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.strokeStyle = "#334";
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // crosshair
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - r); ctx.lineTo(cx, cy + r);
+  ctx.moveTo(cx - r, cy); ctx.lineTo(cx + r, cy);
+  ctx.strokeStyle = "#223";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // dot
+  const dx = cx + x * r;
+  const dy = cy + y * r;
+  ctx.beginPath();
+  ctx.arc(dx, dy, 8, 0, Math.PI * 2);
+  ctx.fillStyle = "#e94560";
+  ctx.fill();
+}
+
+function drawPad(canvasId, x, y) {
+  const c = document.getElementById(canvasId);
+  const ctx = c.getContext("2d");
+  const w = c.width, h = c.height;
+
+  ctx.clearRect(0, 0, w, h);
+
+  // border
+  ctx.strokeStyle = "#334";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(4, 4, w - 8, h - 8);
+
+  // touch point
+  const dx = (w / 2) + x * (w / 2 - 10);
+  const dy = (h / 2) + y * (h / 2 - 10);
+  ctx.beginPath();
+  ctx.arc(dx, dy, 6, 0, Math.PI * 2);
+  ctx.fillStyle = "#4caf50";
+  ctx.fill();
+}
+
+function renderButtons(buttons) {
+  const keys = Object.keys(buttons).sort();
+  // rebuild grid only if button set changed
+  if (buttonGrid.childElementCount !== keys.length) {
+    buttonGrid.innerHTML = "";
+    for (const name of keys) {
+      const el = document.createElement("div");
+      el.className = "btn";
+      el.id = "btn_" + name;
+      el.textContent = name;
+      buttonGrid.appendChild(el);
+    }
+  }
+  for (const name of keys) {
+    const el = document.getElementById("btn_" + name);
+    if (el) {
+      el.className = buttons[name] ? "btn pressed" : "btn";
+    }
+  }
+}
+
+function triggerPercent(value) {
+  // value is -1..1 (centered), convert to 0..100
+  return Math.round(Math.max(0, (value + 1) / 2) * 100);
+}
+
+function render(data) {
+  const ax = data.axes || {};
+  const bt = data.buttons || {};
+
+  // sticks
+  drawStick("leftStick",  ax.left_stick_x  || 0, ax.left_stick_y  || 0);
+  drawStick("rightStick", ax.right_stick_x || 0, ax.right_stick_y || 0);
+
+  document.getElementById("leftStickLabel").textContent =
+    `${(ax.left_stick_x || 0).toFixed(2)}, ${(ax.left_stick_y || 0).toFixed(2)}`;
+  document.getElementById("rightStickLabel").textContent =
+    `${(ax.right_stick_x || 0).toFixed(2)}, ${(ax.right_stick_y || 0).toFixed(2)}`;
+
+  // triggers
+  document.getElementById("lt").style.width = triggerPercent(ax.left_trigger  || -1) + "%";
+  document.getElementById("rt").style.width = triggerPercent(ax.right_trigger || -1) + "%";
+
+  // trackpads
+  drawPad("leftPad",  ax.left_pad_x  || 0, ax.left_pad_y  || 0);
+  drawPad("rightPad", ax.right_pad_x || 0, ax.right_pad_y || 0);
+
+  document.getElementById("leftPadLabel").textContent =
+    `${(ax.left_pad_x || 0).toFixed(2)}, ${(ax.left_pad_y || 0).toFixed(2)}`;
+  document.getElementById("rightPadLabel").textContent =
+    `${(ax.right_pad_x || 0).toFixed(2)}, ${(ax.right_pad_y || 0).toFixed(2)}`;
+
+  // buttons
+  renderButtons(bt);
+
+  // raw
+  rawDataEl.textContent = JSON.stringify(data, null, 2);
+}
+
+// auto-connect on load
+connect();
+</script>
+</body>
+</html>

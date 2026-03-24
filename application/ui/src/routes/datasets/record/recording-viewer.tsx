@@ -10,7 +10,9 @@ import {
     Keyboard,
     ProgressCircle,
     StatusLight,
+    Switch,
     Text,
+    TextField,
     ToastQueue,
 } from '@geti/ui';
 
@@ -39,13 +41,25 @@ const getActionObservationSource = (observation?: Observation): { [joint: string
 };
 
 export const RecordingViewer = ({ environment, dataset }: RecordingViewerProps) => {
-    const { observation, state, startEpisode, discardEpisode, saveEpisode, readyForRecording } = useRobotControl({
+    const {
+        observation,
+        state,
+        startEpisode,
+        discardEpisode,
+        saveEpisode,
+        readyForRecording,
+        connectSteamDeck,
+        disconnectSteamDeck,
+    } = useRobotControl({
         environment,
         dataset,
         onError: ToastQueue.negative,
     });
 
     const [task, setTask] = useState<string>(dataset.default_task);
+    const [steamDeckUrl, setSteamDeckUrl] = useState<string>('ws://localhost:8080/ws');
+    const [ikMode, setIkMode] = useState<boolean>(true);
+    const isSteamDeckConnected = state.follower_source === 'steamdeck';
 
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
@@ -115,6 +129,39 @@ export const RecordingViewer = ({ environment, dataset }: RecordingViewerProps) 
                     >
                         <Item key={dataset.default_task}>{dataset.default_task}</Item>
                     </ComboBox>
+
+                    <TextField
+                        label='Steam Deck URL'
+                        value={steamDeckUrl}
+                        onChange={setSteamDeckUrl}
+                        isDisabled={isSteamDeckConnected}
+                        width='size-3000'
+                    />
+                    <Switch
+                        isSelected={ikMode}
+                        onChange={setIkMode}
+                        isDisabled={isSteamDeckConnected}
+                    >
+                        IK Mode
+                    </Switch>
+                    {isSteamDeckConnected ? (
+                        <Button
+                            variant='negative'
+                            onPress={() => disconnectSteamDeck.mutate()}
+                            isPending={disconnectSteamDeck.isPending}
+                        >
+                            Disconnect
+                        </Button>
+                    ) : (
+                        <Button
+                            variant='secondary'
+                            onPress={() => connectSteamDeck.mutate({ url: steamDeckUrl, ikMode })}
+                            isPending={connectSteamDeck.isPending}
+                            isDisabled={steamDeckUrl === ''}
+                        >
+                            Connect Gamepad
+                        </Button>
+                    )}
                 </Flex>
 
                 <Flex direction={'row'} flex gap={'size-100'}>

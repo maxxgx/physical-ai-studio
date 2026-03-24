@@ -38,7 +38,14 @@ class EnvironmentIntegration:
 
         self.follower = await self.robot_client_factory.build(robot.robot)
         if isinstance(robot.tele_operator, TeleoperatorRobotWithRobot) and robot.tele_operator.robot is not None:
-            self.leader = await self.robot_client_factory.build(robot.tele_operator.robot)
+            try:
+                self.leader = await self.robot_client_factory.build(robot.tele_operator.robot)
+            except Exception:
+                logger.warning(
+                    "Leader robot not available — teleoperation from leader will be disabled. "
+                    "Gamepad or model control will still work."
+                )
+                self.leader = None
         self.action_keys = self.follower.features()
 
         self.frame_captures = {}
