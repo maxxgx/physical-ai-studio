@@ -284,12 +284,10 @@ class TestSO101Observation:
             robot.connect()
             obs = robot.get_observation()
 
-        assert "state" in obs
-        assert "timestamp" in obs
-        assert isinstance(obs["state"], np.ndarray)
-        assert obs["state"].shape == (6,)
-        assert obs["state"].dtype == np.float32
-        assert isinstance(obs["timestamp"], float)
+        assert isinstance(obs.joint_positions, np.ndarray)
+        assert obs.joint_positions.shape == (6,)
+        assert obs.joint_positions.dtype == np.float32
+        assert isinstance(obs.timestamp, float)
 
     def test_observation_calibrated(self, mock_sdk: MagicMock, calibration_obj: Any) -> None:
         """Calibrated observation returns radians."""
@@ -301,7 +299,7 @@ class TestSO101Observation:
 
         # All servos return 2048 ticks. For joints with homing_offset=2048,
         # the result should be 0.0 radians.
-        state = obs["state"]
+        state = obs.joint_positions
         assert state.shape == (6,)
         assert state.dtype == np.float32
         # shoulder_pan: (2048 - 2048) * 1 * radians_per_tick = 0.0
