@@ -193,6 +193,7 @@ project-excludes = [
   ".venv/**",
   "dist/**",
 ]
+replace-imports-with-any = ["trossen_arm"]
 
 [tool.pytest.ini_options]
 addopts = ["--strict-markers", "--strict-config", "--showlocals", "-ra"]
