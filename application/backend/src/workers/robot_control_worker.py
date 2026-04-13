@@ -205,7 +205,9 @@ class RobotControlWorker(BaseThreadWorker):
                             dataset_observation = self.environment_integration.format_observation_for_dataset(
                                 observation
                             )
-                            self.recording_mutation.add_frame(dataset_observation, actions, self.state.task)
+                            await asyncio.to_thread(
+                                self.recording_mutation.add_frame, dataset_observation, actions, self.state.task
+                            )
                         self._report_observation(report_observation)
                 dt_s = time.perf_counter() - start_loop_t
                 wait_time = goal_time - dt_s
@@ -241,7 +243,7 @@ class RobotControlWorker(BaseThreadWorker):
     async def _handle_save_episode(self) -> None:
         if self.recording_mutation is not None and self.events.save_episode.is_set():
             self.events.save_episode.clear()
-            self.recording_mutation.save_episode()
+            await asyncio.to_thread(self.recording_mutation.save_episode)
             self.state.is_recording = False
             self.state.episodes_recorded += 1
             self._report_state()
@@ -249,7 +251,7 @@ class RobotControlWorker(BaseThreadWorker):
     async def _handle_discard_episode(self) -> None:
         if self.recording_mutation is not None and self.events.discard_episode.is_set():
             self.events.discard_episode.clear()
-            self.recording_mutation.discard_buffer()
+            await asyncio.to_thread(self.recording_mutation.discard_buffer)
             self.state.is_recording = False
             self._report_state()
 
@@ -263,12 +265,16 @@ class RobotControlWorker(BaseThreadWorker):
             self.events.start_recording_mutation.clear()
             features = self.environment_integration.build_lerobot_dataset_features()
 
-            self.recording_mutation = self.dataset.start_recording_mutation(
+            robot_type = (
+                self.environment_integration.follower.name
+                if self.environment_integration.follower is not None
+                else "unknown"
+            )
+            self.recording_mutation = await asyncio.to_thread(
+                self.dataset.start_recording_mutation,
                 fps=self.fps,
                 features=features,
-                robot_type=self.environment_integration.follower.name
-                if self.environment_integration.follower is not None
-                else "unknown",
+                robot_type=robot_type,
             )
             self.state.dataset_loaded = True
             self._report_state()
@@ -282,7 +288,7 @@ class RobotControlWorker(BaseThreadWorker):
             self.model_integration.teardown()
 
         if self.recording_mutation:
-            self.recording_mutation.teardown()
+            await asyncio.to_thread(self.recording_mutation.teardown)
 
         # Wait for .5 seconds before closing queue to allow messages through
         await asyncio.sleep(0.5)
