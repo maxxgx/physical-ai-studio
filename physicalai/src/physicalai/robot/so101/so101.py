@@ -280,7 +280,9 @@ class SO101(Robot):
             raise ConnectionError(msg)
 
         # Set a packet timeout so pings/reads don't block forever.
-        port_handler.setPacketTimeoutMillis(50.0)
+        # 200ms accommodates USB serial adapters with variable latency
+        # (e.g. when sharing a USB controller with cameras).
+        port_handler.setPacketTimeoutMillis(200.0)
 
         if not port_handler.setBaudRate(self.baudrate):
             port_handler.closePort()
@@ -602,12 +604,12 @@ class SO101(Robot):
         self._write_joint_positions(raw.astype(np.int32))
         self._set_torque(enabled=True)
 
-    def _read_joint_positions(self, num_retry: int = 1) -> np.ndarray:
+    def _read_joint_positions(self, num_retry: int = 3) -> np.ndarray:
         """Bulk-read present positions from all servos via sync read.
 
         Args:
             num_retry: Number of retry attempts on transient communication
-                errors (e.g. USB timing glitches). Defaults to 1.
+                errors (e.g. USB timing glitches). Defaults to 3.
 
         Returns:
             Int32 array of raw tick positions, shape ``(6,)``.

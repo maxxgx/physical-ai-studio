@@ -171,7 +171,11 @@ class RobotControlWorker(BaseThreadWorker):
                 goal_time = 1 / self.fps
                 start_loop_t = time.perf_counter()
                 if self.environment_integration:
-                    observation = await self.environment_integration.get_observation()
+                    try:
+                        observation = await self.environment_integration.get_observation()
+                    except ConnectionError:
+                        logger.warning("Serial read failed, skipping frame")
+                        continue
                     timestamp = time.perf_counter() - self.start_episode_t
                     if observation:
                         report_observation = self.environment_integration.format_observation_for_reporting(
@@ -179,21 +183,26 @@ class RobotControlWorker(BaseThreadWorker):
                         )
 
                         actions = None
-                        match self.state.follower_source:
-                            case "teleoperation":
-                                actions = await self.environment_integration.set_follower_position_from_leader(
-                                    goal_time
-                                )
-                            case "model":
-                                if self.model_integration:
-                                    dataset_observation = self.environment_integration.format_model_input_observation(
-                                        observation, task=self.state.task
+                        try:
+                            match self.state.follower_source:
+                                case "teleoperation":
+                                    actions = await self.environment_integration.set_follower_position_from_leader(
+                                        goal_time
                                     )
-                                    action = self.model_integration.select_action(dataset_observation)
-                                    if action is not None:
-                                        actions = dict(zip(self.environment_integration.action_keys, action))
-                                        report_observation["actions"] = actions
-                                        await self.environment_integration.set_joints_state(actions, goal_time)
+                                case "model":
+                                    if self.model_integration:
+                                        dataset_observation = (
+                                            self.environment_integration.format_model_input_observation(
+                                                observation, task=self.state.task
+                                            )
+                                        )
+                                        action = self.model_integration.select_action(dataset_observation)
+                                        if action is not None:
+                                            actions = dict(zip(self.environment_integration.action_keys, action))
+                                            report_observation["actions"] = actions
+                                            await self.environment_integration.set_joints_state(actions, goal_time)
+                        except ConnectionError:
+                            logger.warning("Serial write failed, skipping action")
 
                         if (
                             self.state.is_recording
