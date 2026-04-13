@@ -602,18 +602,29 @@ class SO101(Robot):
         self._write_joint_positions(raw.astype(np.int32))
         self._set_torque(enabled=True)
 
-    def _read_joint_positions(self) -> np.ndarray:
+    def _read_joint_positions(self, num_retry: int = 1) -> np.ndarray:
         """Bulk-read present positions from all servos via sync read.
+
+        Args:
+            num_retry: Number of retry attempts on transient communication
+                errors (e.g. USB timing glitches). Defaults to 1.
 
         Returns:
             Int32 array of raw tick positions, shape ``(6,)``.
 
         Raises:
-            ConnectionError: If sync read fails.
+            ConnectionError: If sync read fails after all retries.
         """
         conn = self._require_connection()
 
-        comm_result = conn.group_sync_read.txRxPacket()
+        for attempt in range(1 + num_retry):
+            comm_result = conn.group_sync_read.txRxPacket()
+            if comm_result == 0:
+                break
+            if attempt < num_retry:
+                logger.warning(f"Sync read failed (comm={comm_result}), retrying ({attempt + 1}/{num_retry})...")
+                time.sleep(0.005)  # 5ms pause to let the bus settle
+
         if comm_result != 0:
             msg = f"Sync read failed with comm result {comm_result}"
             raise ConnectionError(msg)

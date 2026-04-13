@@ -10,6 +10,9 @@ be extracted when a second robot type migrates to physicalai.
 """
 
 import asyncio
+import time
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from typing import Literal
 
 import numpy as np
@@ -54,9 +57,14 @@ class SO101Adapter(RobotClient):
         self._robot = robot
         self._mode = mode
         self._bus_lock = asyncio.Lock()
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"so101-{mode}")
 
         self.previous_target: dict[str, float] | None = None
         self.is_controlled: bool = False
+
+        # Cached observation to avoid redundant serial reads within the same frame
+        self._last_obs_radians: np.ndarray | None = None
+        self._last_obs_time: float = 0.0
 
         self._joint_params: dict[str, dict] = {}
         for name in SO101_JOINT_ORDER:
@@ -126,8 +134,9 @@ class SO101Adapter(RobotClient):
     async def connect(self) -> None:
         logger.info(f"Connecting to SO101 {self._mode} on {self._robot.port}")
         try:
+            loop = asyncio.get_running_loop()
             async with self._bus_lock, asyncio.timeout(HARDWARE_TIMEOUT_CONNECT):
-                await asyncio.to_thread(self._robot.connect)
+                await loop.run_in_executor(self._executor, self._robot.connect)
 
             if self._mode == "follower":
                 self.is_controlled = True
@@ -143,13 +152,16 @@ class SO101Adapter(RobotClient):
     async def disconnect(self) -> None:
         logger.info(f"Disconnecting SO101 {self._mode} on {self._robot.port}")
         try:
+            loop = asyncio.get_running_loop()
             async with self._bus_lock, asyncio.timeout(HARDWARE_TIMEOUT_COMMAND):
-                await asyncio.to_thread(self._robot.disconnect)
+                await loop.run_in_executor(self._executor, self._robot.disconnect)
             logger.info("Robot disconnected")
         except TimeoutError:
             logger.warning("Timeout during robot disconnect - forcing cleanup")
         except Exception as e:
             logger.error(f"Error during robot disconnect: {e}")
+        finally:
+            self._executor.shutdown(wait=False)
 
     async def ping(self) -> dict:
         return self._create_event("pong")
@@ -160,15 +172,17 @@ class SO101Adapter(RobotClient):
 
     async def enable_torque(self) -> dict:
         logger.info("Enabling torque")
+        loop = asyncio.get_running_loop()
         async with self._bus_lock, asyncio.timeout(HARDWARE_TIMEOUT_COMMAND):
-            await asyncio.to_thread(self._robot._set_torque, enabled=True)
+            await loop.run_in_executor(self._executor, partial(self._robot._set_torque, enabled=True))
         self.is_controlled = True
         return self._create_event("torque_was_enabled")
 
     async def disable_torque(self) -> dict:
         logger.info("Disabling torque")
+        loop = asyncio.get_running_loop()
         async with self._bus_lock, asyncio.timeout(HARDWARE_TIMEOUT_COMMAND):
-            await asyncio.to_thread(self._robot._set_torque, enabled=False)
+            await loop.run_in_executor(self._executor, partial(self._robot._set_torque, enabled=False))
         self.is_controlled = False
         return self._create_event("torque_was_disabled")
 
@@ -198,17 +212,24 @@ class SO101Adapter(RobotClient):
         return [f"{name}.pos" for name in SO101_JOINT_ORDER]
 
     async def _get_state(self) -> dict[str, float]:
+        loop = asyncio.get_running_loop()
         async with self._bus_lock, asyncio.timeout(HARDWARE_TIMEOUT_COMMAND):
-            obs = await asyncio.to_thread(self._robot.get_observation)
+            obs = await loop.run_in_executor(self._executor, self._robot.get_observation)
+        self._last_obs_radians = obs.joint_positions.copy()
+        self._last_obs_time = time.perf_counter()
         return self._radians_to_normalized(obs.joint_positions)
 
     async def _move_to_target(self, joints: dict, goal_time: float) -> None:
         max_rad = MAX_SPEED_RAD_S * goal_time
+        loop = asyncio.get_running_loop()
 
-        # Read current state in radians
-        async with self._bus_lock, asyncio.timeout(HARDWARE_TIMEOUT_COMMAND):
-            obs = await asyncio.to_thread(self._robot.get_observation)
-        current_rad = obs.joint_positions
+        # Reuse cached state if it was read within this frame, otherwise re-read
+        if self._last_obs_radians is not None and (time.perf_counter() - self._last_obs_time) < goal_time:
+            current_rad = self._last_obs_radians
+        else:
+            async with self._bus_lock, asyncio.timeout(HARDWARE_TIMEOUT_COMMAND):
+                obs = await loop.run_in_executor(self._executor, self._robot.get_observation)
+            current_rad = obs.joint_positions
 
         # Convert target from normalized to radians
         target_rad = self._normalized_to_radians(joints)
@@ -228,4 +249,4 @@ class SO101Adapter(RobotClient):
         self.previous_target = self._radians_to_normalized(clamped_rad)
 
         async with self._bus_lock, asyncio.timeout(HARDWARE_TIMEOUT_COMMAND):
-            await asyncio.to_thread(self._robot.send_action, clamped_rad)
+            await loop.run_in_executor(self._executor, self._robot.send_action, clamped_rad)
