@@ -53,7 +53,6 @@ class SO101Adapter(RobotClient):
     ) -> None:
         self._robot = robot
         self._mode = mode
-        self._calibration = calibration
         self._bus_lock = asyncio.Lock()
 
         self.previous_target: dict[str, float] | None = None
@@ -61,7 +60,7 @@ class SO101Adapter(RobotClient):
 
         self._joint_params: dict[str, dict] = {}
         for name in SO101_JOINT_ORDER:
-            cal_val = self._calibration.values[name]
+            cal_val = calibration.values[name]
             direction = -1 if cal_val.drive_mode == 1 else 1
             rng = cal_val.range_max - cal_val.range_min
             is_gripper = name == "gripper"
