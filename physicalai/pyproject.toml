@@ -25,7 +25,10 @@ dependencies = [
 
 [project.optional-dependencies]
 tests = ["pytest", "mypy"]
-realsense = []
+realsense = [
+    "pyrealsense2; sys_platform != 'darwin'",
+    "pyrealsense2-macosx; sys_platform == 'darwin'",
+]
 basler = []
 genicam = []
 capture = [
