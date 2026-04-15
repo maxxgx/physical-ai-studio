@@ -5,8 +5,6 @@
 
 # ruff: noqa: D103, INP001
 
-import sys
-
 from physicalai.capture.cameras.uvc import UVCCamera
 
 
