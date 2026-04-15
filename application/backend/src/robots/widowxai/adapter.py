@@ -172,6 +172,7 @@ class WidowXAIAdapter(RobotClient):
 
     async def set_forces(self, forces: dict) -> dict:
         if self._mode == "follower":
+            logger.warning("Cannot send forces to a follower arm")
             return forces
 
         efforts = np.zeros(len(self._robot.joint_names))
