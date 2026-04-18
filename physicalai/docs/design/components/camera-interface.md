@@ -109,6 +109,13 @@ physical-ai/
         │   ├── basler.py        # BaslerCamera
         │   ├── genicam.py       # GenicamCamera
         │   └── ip.py            # IPCamera
+        ├── transport/
+        │   ├── __init__.py      # Public: create_shared_camera, CameraManager
+        │   ├── _header.py       # FrameHeader, encode/decode helpers
+        │   ├── _publisher.py    # CameraPublisher (background SHM writer)
+        │   ├── _subscriber.py   # SharedCamera (zero-copy SHM reader)
+        │   ├── _manager.py      # CameraManager singleton (auto publisher lifecycle)
+        │   └── _spec.py         # CameraSpec (picklable camera config)
         └── mixins/
             ├── __init__.py
             ├── depth.py         # DepthMixin
@@ -139,13 +146,14 @@ Camera (ABC)                       # Base: connect/disconnect/read/read_latest/a
 ├── RealSenseCamera                # Intel RealSense (+ DepthMixin)
 ├── BaslerCamera                   # Basler industrial cameras (pypylon)
 ├── GenicamCamera                  # Generic GenICam devices (harvesters)
-└── IPCamera                       # RTSP/HTTP network cameras
+├── IPCamera                       # RTSP/HTTP network cameras
+└── SharedCamera                   # SHM subscriber (transport layer, reads from CameraPublisher)
 ```
 
 `Camera` is the single ABC for all live hardware.
 
 **Future extensibility:** When non-live sources (video file playback, image directories)
-are added, they should *not* inherit from `Camera`. The semantics diverge (e.g.,
+are added, they should _not_ inherit from `Camera`. The semantics diverge (e.g.,
 `read_latest()` is meaningless for recorded data). Instead, a lightweight `typing.Protocol`
 can be introduced at that point to define the shared surface (`read()`, `connect()`,
 `disconnect()`, context manager) without forcing a common base class.
@@ -180,6 +188,7 @@ pip install physicalai                    # Core + UVCCamera (UVC support)
 pip install physicalai[realsense]         # + Intel RealSense (pyrealsense2)
 pip install physicalai[basler]            # + Basler (pypylon)
 pip install physicalai[genicam]           # + GenICam (harvesters)
+pip install physicalai[transport]         # + SHM transport (iceoryx2)
 pip install physicalai[capture]           # All camera dependencies
 ```
 
@@ -201,6 +210,7 @@ omni_camera = {git = "https://github.com/ArendJanKramer/OmniCamera.git", rev = "
 | `BaslerCamera`    | `pypylon`                                  | `[basler]`     | All                        |
 | `GenicamCamera`   | `harvesters`                               | `[genicam]`    | All                        |
 | `IPCamera`        | —                                          | (base)         | All                        |
+| `SharedCamera`    | `iceoryx2`                                 | `[transport]`  | Linux (macOS falls back)   |
 
 ---
 
@@ -215,7 +225,7 @@ Every read operation returns a `Frame` — never a raw numpy array.
 class Frame:
     """A captured image with metadata."""
 
-    data: NDArray[np.uint8]    # (H, W, C) or (H, W) image array
+    data: NDArray[np.uint8] | NDArray[np.uint16]  # (H, W, C) or (H, W) image array
     timestamp: float           # time.monotonic() at capture moment
     sequence: int              # Monotonic counter per source (0, 1, 2, ...)
 ```
@@ -226,7 +236,7 @@ class Frame:
 - `sequence` answers "did I miss any frames?". Enables drop detection
 - Frozen dataclass prevents accidental mutation of metadata (the underlying `data` buffer is still mutable)
 
-**Why uint8 only?** Some industrial cameras (Basler, GenICam) natively produce 10/12/16-bit images. `physicalai.capture` normalizes all color images to `uint8` at capture time. This is a deliberate simplification: every robotics inference model in the target domain (ACT, Diffusion Policy, VLAs) expects `uint8` RGB input. Supporting mixed dtypes would complicate the `Frame` type, every consumer, and every preprocessor for a use case that doesn't exist yet. Depth data (`DepthMixin`) uses `uint16` because millimeter-precision depth inherently requires it. If full bit-depth color capture becomes necessary for industrial vision use cases, a `raw_read()` escape hatch can be added without changing the `Frame` contract.
+**Why uint8 and uint16?** Colour images are normalised to `uint8` at capture time — every robotics inference model in the target domain (ACT, Diffusion Policy, VLAs) expects `uint8` RGB input. Depth data (`DepthMixin`) and the transport layer's `Frame` type use `NDArray[np.uint16]` because millimeter-precision depth inherently requires it. The union type `NDArray[np.uint8] | NDArray[np.uint16]` keeps the `Frame` dataclass generic enough for both paths without forcing consumers to handle arbitrary dtypes. If full bit-depth colour capture becomes necessary for industrial vision use cases, a `raw_read()` escape hatch can be added without changing the `Frame` contract.
 
 ### Camera ABC
 
@@ -329,6 +339,11 @@ class Camera(ABC):
         Examples: "/dev/video0", "serial:12345678", "rtsp://192.168.1.100/stream"
         """
         ...
+
+    @property
+    def color_mode(self) -> ColorMode:
+        """The active colour mode for this camera."""
+        return self._color_mode
 
     @property
     def _executor(self) -> ThreadPoolExecutor:
@@ -979,10 +994,11 @@ def discover_all() -> dict[str, list[DeviceInfo]]:
 
 **Sharing is explicit.** There is no invisible reference counting, no global `_captures` dict, no hidden shared state.
 
-If you need the same camera in two places, you have two options:
+If you need the same camera in two places, you have three options:
 
 1. **Pass the same instance**: the simplest and most explicit approach
 2. **Application-level pool**: if your app needs managed multi-consumer access, build a `CameraPool` at the application layer
+3. **SHM transport layer** (`physicalai.capture.transport`): a single `CameraPublisher` opens the device and writes frames to iceoryx2 shared memory; any number of `SharedCamera` subscribers read from the same service without touching the hardware. This solves device exclusivity (`EBUSY`) by design — only one process holds the device
 
 ```python
 # Option 1: Pass the instance (recommended)
@@ -1006,12 +1022,12 @@ record_thread = Thread(target=record_loop, args=(cam,))
 Creating multiple `Camera` instances targeting the same physical device is **undefined
 behavior**. The outcome depends on the backend and OS:
 
-| Backend                    | Typical behavior with duplicate open                  |
-| -------------------------- |-------------------------------------------------------|
-| UVCCamera (V4L2/OmniCamera)| Second `connect()` fails or produces corrupt frames   |
-| RealSense                  | Both pipelines connect but compete for USB bandwidth  |
-| Basler / GenICam           | SDK rejects the second open with an access error      |
-| IP Camera                  | Both instances connect (read-only RTSP allows it)     |
+| Backend                     | Typical behavior with duplicate open                 |
+| --------------------------- | ---------------------------------------------------- |
+| UVCCamera (V4L2/OmniCamera) | Second `connect()` fails or produces corrupt frames  |
+| RealSense                   | Both pipelines connect but compete for USB bandwidth |
+| Basler / GenICam            | SDK rejects the second open with an access error     |
+| IP Camera                   | Both instances connect (read-only RTSP allows it)    |
 
 **Guidance:** Do not create multiple connected `Camera` instances for the same device.
 If you need multiple consumers, read from a single `Camera` and distribute frames in
@@ -1021,6 +1037,65 @@ application code.
 in `connect()`, raising `DeviceInUseError` on conflicts. Each subclass would identify
 its device via a `_device_key()` method (device index, serial number, URL, etc.), and
 weak references would auto-release forgotten instances on garbage collection.
+
+### SHM Transport Layer
+
+The `physicalai.capture.transport` subpackage provides inter-process camera sharing via
+[iceoryx2](https://github.com/eclipse-iceoryx/iceoryx2) shared memory (SHM). It
+requires the `[transport]` extra (`pip install physicalai[transport]`) and is
+Linux-only; on macOS/Windows, `create_shared_camera()` falls back to opening the
+device directly.
+
+**Architecture:**
+
+```text
+┌──────────────────┐    iceoryx2 SHM    ┌────────────────┐
+│  CameraPublisher │ ─── (service) ───► │  SharedCamera   │  (subscriber A)
+│  (owns hardware) │                    └────────────────┘
+│                  │                    ┌────────────────┐
+│  Camera.read()   │ ─── (service) ───► │  SharedCamera   │  (subscriber B)
+└──────────────────┘                    └────────────────┘
+```
+
+- **CameraPublisher**: runs in a background thread (or separate process). Opens the
+  real camera via `CameraSpec.build()`, reads frames in a loop, encodes each frame
+  with a packed binary header (`FrameHeader`), and publishes to an iceoryx2 service.
+  Supports idle shutdown (`idle_timeout`) — stops publishing when no subscribers are
+  connected for the configured duration.
+- **SharedCamera**: a `Camera`-compatible subscriber that connects to a named iceoryx2
+  service. Implements `read()`, `read_latest()`, `connect()`, and `disconnect()`.
+  Supports optional `zero_copy=True` mode where the decoded frame's numpy array
+  is a read-only view directly into the SHM buffer (no memcpy).
+- **CameraManager**: singleton that automatically spawns a `CameraPublisher` when the
+  first subscriber opens a camera, and exposes a high-level `open()` method.
+- **create_shared_camera()**: convenience function that wraps `CameraManager` for the
+  common case.
+
+**Binary Protocol** (`_header.py`):
+
+Each SHM payload is structured as `[FrameHeader (40 bytes)][RGB data][optional depth data]`.
+The header carries protocol version, dimensions, dtype, colour mode, timestamp, sequence
+number, and depth offset. Helper functions `encode_frame()`, `decode_rgb()`,
+`decode_rgb_view()`, and `decode_depth()` handle serialisation.
+
+**Usage:**
+
+```python
+from physicalai.capture.transport import create_shared_camera
+
+# High-level: manager handles publisher lifecycle
+camera = create_shared_camera("uvc", device=0, service_name="cam/wrist")
+camera.connect(timeout=5.0)
+frame = camera.read_latest()
+camera.disconnect()
+
+# Zero-copy mode: frame.data is a read-only view into SHM
+camera = create_shared_camera("uvc", device=0, zero_copy=True)
+camera.connect(timeout=5.0)
+frame = camera.read_latest()
+assert not frame.data.flags.writeable  # view into SHM
+camera.disconnect()
+```
 
 ---
 
@@ -1153,17 +1228,17 @@ The application backend currently uses FrameSource in 6 files. Migration swaps F
 
 ### Feature Parity Checklist
 
-| FrameSource API                               | physicalai.capture Equivalent                            | Status                                                |
-| --------------------------------------------- | -------------------------------------------------------- | ----------------------------------------------------- |
-| `FrameSourceFactory.create(driver, **params)` | `UVCCamera(...)` or `create_camera(driver, ...)`         | Direct replacement                                    |
-| `.connect()`                                  | `.connect()`                                             | Same                                                  |
-| `.read()` → `(success, frame)`                | `.read()` → `Frame`                                      | Returns `Frame` (raises on failure)                   |
-| `.start_async()` + `.get_latest_frame()`      | `.read_latest()`                                         | Simplified to one call                                |
-| `.stop()`                                     | (not needed)                                             | No separate start/stop; managed by connect/disconnect |
-| `.disconnect()`                               | `.disconnect()`                                          | Same                                                  |
-| `FrameSourceFactory.discover_devices(driver)` | `discover_all()` or `Camera.discover()`                  | Direct replacement                                    |
-| `.get_supported_formats()`                    | `FormatDiscoveryMixin.get_supported_formats()`           | Via mixin                                             |
-| `.attach_processor()`                         | Removed                                                  | Was broken in production (commented out)              |
+| FrameSource API                               | physicalai.capture Equivalent                    | Status                                                |
+| --------------------------------------------- | ------------------------------------------------ | ----------------------------------------------------- |
+| `FrameSourceFactory.create(driver, **params)` | `UVCCamera(...)` or `create_camera(driver, ...)` | Direct replacement                                    |
+| `.connect()`                                  | `.connect()`                                     | Same                                                  |
+| `.read()` → `(success, frame)`                | `.read()` → `Frame`                              | Returns `Frame` (raises on failure)                   |
+| `.start_async()` + `.get_latest_frame()`      | `.read_latest()`                                 | Simplified to one call                                |
+| `.stop()`                                     | (not needed)                                     | No separate start/stop; managed by connect/disconnect |
+| `.disconnect()`                               | `.disconnect()`                                  | Same                                                  |
+| `FrameSourceFactory.discover_devices(driver)` | `discover_all()` or `Camera.discover()`          | Direct replacement                                    |
+| `.get_supported_formats()`                    | `FormatDiscoveryMixin.get_supported_formats()`   | Via mixin                                             |
+| `.attach_processor()`                         | Removed                                          | Was broken in production (commented out)              |
 
 ### API Migration Map
 
@@ -1238,21 +1313,21 @@ The application's existing retry logic (`CameraConnectionManager` with `tenacity
 
 ## Comparison with LeRobot
 
-| Aspect           | physicalai.capture                                          | LeRobot cameras                                   |
-| ---------------- |-------------------------------------------------------------| ------------------------------------------------- |
-| Base class       | `Camera` ABC (flat)                                         | `Camera` ABC                                      |
-| Read model       | 3-tier: `read()`, `read_latest()`, `async_read()`           | 3-tier: `read()`, `read_latest()`, `async_read()` |
-| Frame type       | `Frame(data, timestamp, sequence)`                          | Raw `ndarray` (no metadata)                       |
-| Lifecycle        | `connect(timeout)` / `disconnect()`                         | `connect()` / `disconnect()`                      |
-| Multi-camera     | `read_cameras()` / `async_read_cameras()`                   | Manual sequential reads                           |
-| Hardware support | UVCCamera (all platforms), RealSense, Basler, GenICam, IP   | OpenCV, RealSense, (fewer industrial)             |
-| Depth            | `DepthMixin` with `read_depth()` → `Frame(uint16)`          | Not built-in                                      |
-| PTZ              | `PTZMixin`                                                  | Not built-in                                      |
-| Config           | `from_config()` + dataclass configs                         | Pydantic `CameraConfig`                           |
-| Discovery        | `Camera.discover()` + `discover_all()`                      | Not built-in                                      |
-| Factory          | Optional `create_camera()` convenience                      | Not applicable                                    |
-| Sharing          | Explicit (pass instance)                                    | Explicit                                          |
-| Iterator         | Not implemented (explicit `read()` preferred)               | `__iter__` / `__next__`                           |
+| Aspect           | physicalai.capture                                        | LeRobot cameras                                   |
+| ---------------- | --------------------------------------------------------- | ------------------------------------------------- |
+| Base class       | `Camera` ABC (flat)                                       | `Camera` ABC                                      |
+| Read model       | 3-tier: `read()`, `read_latest()`, `async_read()`         | 3-tier: `read()`, `read_latest()`, `async_read()` |
+| Frame type       | `Frame(data, timestamp, sequence)`                        | Raw `ndarray` (no metadata)                       |
+| Lifecycle        | `connect(timeout)` / `disconnect()`                       | `connect()` / `disconnect()`                      |
+| Multi-camera     | `read_cameras()` / `async_read_cameras()`                 | Manual sequential reads                           |
+| Hardware support | UVCCamera (all platforms), RealSense, Basler, GenICam, IP | OpenCV, RealSense, (fewer industrial)             |
+| Depth            | `DepthMixin` with `read_depth()` → `Frame(uint16)`        | Not built-in                                      |
+| PTZ              | `PTZMixin`                                                | Not built-in                                      |
+| Config           | `from_config()` + dataclass configs                       | Pydantic `CameraConfig`                           |
+| Discovery        | `Camera.discover()` + `discover_all()`                    | Not built-in                                      |
+| Factory          | Optional `create_camera()` convenience                    | Not applicable                                    |
+| Sharing          | Explicit (pass instance)                                  | Explicit                                          |
+| Iterator         | Not implemented (explicit `read()` preferred)             | `__iter__` / `__next__`                           |
 
 We adopted LeRobot's three-tier read model and explicit `connect/disconnect` lifecycle. We add timestamped frames, depth/PTZ mixins, industrial camera support, device discovery, and multi-camera synchronization via `read_cameras()`.
 
@@ -1320,7 +1395,7 @@ that require exact parameters should assert after `connect()`.
 ## Open Design Decisions
 
 **1. Multi-Consumer Access**
-If multiple consumers need the same camera, should the library provide a `CameraPool`? Or is passing the same instance sufficient? Current position: application layer concern. Revisit if multiple teams hit this need.
+If multiple consumers need the same camera, should the library provide a `CameraPool`? Or is passing the same instance sufficient? The `transport` subpackage now addresses the **inter-process** case: `CameraPublisher` holds the device and `SharedCamera` subscribers read from SHM, solving device exclusivity (`EBUSY`) without global state. **Intra-process** multi-consumer access (multiple threads reading the same `Camera` instance) remains an application-layer concern. A `CameraPool` may still be warranted if multiple teams need managed thread-safe access within a single process.
 
 **2. Error Recovery**
 Retry on transient failures (USB disconnect/reconnect) in the library, or leave to the application? The application backend already has `tenacity`-based retry in `CameraConnectionManager`. Current position: library raises, application retries.

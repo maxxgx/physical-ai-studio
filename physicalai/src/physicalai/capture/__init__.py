@@ -50,6 +50,8 @@ __all__ = [  # noqa: F822, RUF022
     "IPCamera",
     "RealSenseCamera",
     "UVCCamera",
+    "SharedCamera",
+    "create_shared_camera",
 ]
 
 
@@ -82,6 +84,16 @@ def __getattr__(name: CameraType) -> object:
         from physicalai.capture.cameras.realsense import RealSenseCamera  # noqa: PLC0415
 
         return RealSenseCamera
+
+    if name == "SharedCamera":
+        from physicalai.capture.transport import SharedCamera  # noqa: PLC0415
+
+        return SharedCamera
+
+    if name == "create_shared_camera":
+        from physicalai.capture.transport import create_shared_camera  # noqa: PLC0415
+
+        return create_shared_camera
 
     msg = f"module {__name__!r} has no attribute {name!r}"
     raise AttributeError(msg)

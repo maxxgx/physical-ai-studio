@@ -136,6 +136,11 @@ class Camera(ABC):
         ...
 
     @property
+    def color_mode(self) -> ColorMode:
+        """Pixel format for colour image reads."""
+        return self._color_mode
+
+    @property
     def _executor(self) -> ThreadPoolExecutor:
         """Lazy-initialised per-camera executor for async reads."""
         if self.__executor is None:
