@@ -8,22 +8,57 @@ from __future__ import annotations
 import ctypes
 import time
 from importlib import import_module
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 from loguru import logger
 
 from physicalai.capture.camera import Camera, ColorMode
-from physicalai.capture.errors import CaptureTimeoutError, NotConnectedError
+from physicalai.capture.errors import CaptureError, CaptureTimeoutError, NotConnectedError
 
 from ._header import decode_header, decode_rgb
 
 if TYPE_CHECKING:
-    from typing import Any
+    from collections.abc import Mapping
 
     from physicalai.capture.frame import Frame
+    from physicalai.capture.transport._publisher import CameraPublisher
 
 
 _SERVICE_NAME_EXPECTED_PARTS = 5
+
+
+def _probe_service(service_name: str) -> bool:
+    """Check if a publisher is serving *service_name*.
+
+    Returns:
+        ``True`` if a publisher is reachable, ``False`` otherwise.
+    """
+    try:
+        iox2 = cast("Any", import_module("iceoryx2"))
+
+        node = iox2.NodeBuilder.new().create(iox2.ServiceType.Ipc)
+        try:
+            svc = (
+                node.service_builder(
+                    iox2.ServiceName.new(service_name),
+                )
+                .publish_subscribe(iox2.Slice[ctypes.c_uint8])
+                .open()
+            )
+        except Exception:  # noqa: BLE001
+            return False
+        else:
+            del svc
+            return True
+        finally:
+            del node
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _derive_service_name(camera_type: str, camera_kwargs: Mapping[str, object]) -> str:
+    device_id = camera_kwargs.get("serial_number", camera_kwargs.get("device", 0))
+    return f"physicalai/camera/{camera_type}/{device_id}/frame"
 
 
 class SharedCamera(Camera):
@@ -34,20 +69,36 @@ class SharedCamera(Camera):
     for zero-copy fan-out.
 
     Args:
-        service_name: iceoryx2 service name to subscribe to.
+        camera_type: Logical camera type (auto-spawn mode), or ``None`` to
+            subscribe to an existing publisher only.
         color_mode: Pixel format for returned frames.
     """
 
     def __init__(
         self,
-        service_name: str,
+        camera_type: str | None,
         *,
         color_mode: ColorMode = ColorMode.RGB,
         zero_copy: bool = False,
+        service_name: str | None = None,
+        **camera_kwargs: object,
     ) -> None:
+        if camera_type is not None and "/" in camera_type:
+            msg = (
+                "camera_type looks like a service name — pass it as "
+                "service_name='...' or use SharedCamera.from_publisher(service_name='...')"
+            )
+            raise ValueError(msg)
+
+        if camera_type is not None and service_name is None:
+            service_name = _derive_service_name(camera_type, camera_kwargs)
+
         super().__init__(color_mode=color_mode)
+        self._camera_type = camera_type
+        self._camera_kwargs = camera_kwargs
         self._service_name = service_name
         self._zero_copy = zero_copy
+        self._publisher: CameraPublisher | None = None
         self._connected = False
         self._latest: Frame | None = None
         self._held_sample: Any = None
@@ -55,8 +106,44 @@ class SharedCamera(Camera):
         self._subscriber: Any | None = None
         self._listener: Any | None = None
 
+    @classmethod
+    def from_publisher(
+        cls,
+        service_name: str,
+        *,
+        color_mode: ColorMode = ColorMode.RGB,
+        zero_copy: bool = False,
+    ) -> SharedCamera:
+        return cls(None, color_mode=color_mode, zero_copy=zero_copy, service_name=service_name)
+
     def connect(self, timeout: float = 5.0) -> None:
-        iox2 = import_module("iceoryx2")
+        if self._connected:
+            return
+
+        if self._service_name is None:
+            if self._camera_type is None:
+                msg = "must provide camera_type or service_name before connect"
+                raise ValueError(msg)
+            self._service_name = _derive_service_name(self._camera_type, self._camera_kwargs)
+
+        if self._camera_type is not None and not _probe_service(self._service_name):
+            from ._publisher import CameraPublisher  # noqa: PLC0415
+            from ._spec import CameraSpec  # noqa: PLC0415
+
+            spec = CameraSpec(self._camera_type, self._camera_kwargs)
+            publisher = CameraPublisher(spec, self._service_name)
+            try:
+                publisher.start()
+            except Exception as exc:
+                if _probe_service(self._service_name):
+                    logger.debug(f"Lost publisher race for {self._service_name} — using existing")
+                else:
+                    msg = f"failed to start camera publisher for {self._service_name}"
+                    raise CaptureError(msg) from exc
+            else:
+                self._publisher = publisher
+
+        iox2 = cast("Any", import_module("iceoryx2"))
 
         self._node = iox2.NodeBuilder.new().create(iox2.ServiceType.Ipc)
 
@@ -95,7 +182,7 @@ class SharedCamera(Camera):
             msg = "shared camera is not connected"
             raise NotConnectedError(msg)
 
-        iox2 = import_module("iceoryx2")
+        iox2 = cast("Any", import_module("iceoryx2"))
 
         wait_timeout = 3600.0 if timeout is None else timeout
         event = self._listener.timed_wait_one(iox2.Duration.from_secs_f64(wait_timeout))
@@ -157,6 +244,7 @@ class SharedCamera(Camera):
 
     def _do_disconnect(self) -> None:
         self._held_sample = None
+        self._publisher = None
         self._subscriber = None
         self._listener = None
         self._node = None
@@ -169,6 +257,9 @@ class SharedCamera(Camera):
 
     @property
     def device_id(self) -> str:
+        if self._service_name is None:
+            return ""
+
         parts = self._service_name.split("/")
         if (
             len(parts) >= _SERVICE_NAME_EXPECTED_PARTS

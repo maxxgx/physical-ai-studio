@@ -110,12 +110,12 @@ physical-ai/
         │   ├── genicam.py       # GenicamCamera
         │   └── ip.py            # IPCamera
         ├── transport/
-        │   ├── __init__.py      # Public: create_shared_camera, CameraManager
+        │   ├── __init__.py      # Public: SharedCamera, create_shared_camera
         │   ├── _header.py       # FrameHeader, encode/decode helpers
-        │   ├── _publisher.py    # CameraPublisher (background SHM writer)
-        │   ├── _subscriber.py   # SharedCamera (zero-copy SHM reader)
-        │   ├── _manager.py      # CameraManager singleton (auto publisher lifecycle)
-        │   └── _spec.py         # CameraSpec (picklable camera config)
+        │   ├── _publisher.py    # CameraPublisher (internal background publisher)
+        │   ├── _publisher_worker.py  # Subprocess entry point for publisher
+        │   ├── _shared_camera.py # SharedCamera (user-facing API)
+        │   └── _spec.py         # CameraSpec (internal camera config)
         └── mixins/
             ├── __init__.py
             ├── depth.py         # DepthMixin
@@ -210,7 +210,7 @@ omni_camera = {git = "https://github.com/ArendJanKramer/OmniCamera.git", rev = "
 | `BaslerCamera`    | `pypylon`                                  | `[basler]`     | All                        |
 | `GenicamCamera`   | `harvesters`                               | `[genicam]`    | All                        |
 | `IPCamera`        | —                                          | (base)         | All                        |
-| `SharedCamera`    | `iceoryx2`                                 | `[transport]`  | Linux (macOS falls back)   |
+| `SharedCamera`    | `iceoryx2`                                 | `[transport]`  | Linux                      |
 
 ---
 
@@ -1002,13 +1002,15 @@ If you need the same camera in two places, you have three options:
 
 ```python
 # Option 1: Pass the instance (recommended)
-cam = UVCCamera(device=0)
-cam.connect()
+camera = UVCCamera(device=0)
+camera.connect()
 
 # Pass to multiple consumers explicitly
-display_thread = Thread(target=display_loop, args=(cam,))
-record_thread = Thread(target=record_loop, args=(cam,))
+display_thread = Thread(target=display_loop, args=(camera,))
+record_thread = Thread(target=record_loop, args=(camera,))
 ```
+
+**Publisher Lifecycle Note**: In auto-spawn mode, `SharedCamera.connect()` will start the background publisher if needed. However, `SharedCamera.disconnect()` intentionally does NOT stop the publisher. The publisher is designed to self-terminate after 5 seconds of having zero active subscribers. This ensures that rapid disconnect/reconnect cycles do not cause unnecessary hardware flapping.
 
 **Why not invisible sharing?**
 
@@ -1043,8 +1045,7 @@ weak references would auto-release forgotten instances on garbage collection.
 The `physicalai.capture.transport` subpackage provides inter-process camera sharing via
 [iceoryx2](https://github.com/eclipse-iceoryx/iceoryx2) shared memory (SHM). It
 requires the `[transport]` extra (`pip install physicalai[transport]`) and is
-Linux-only; on macOS/Windows, `create_shared_camera()` falls back to opening the
-device directly.
+Linux-only.
 
 **Architecture:**
 
@@ -1057,19 +1058,21 @@ device directly.
 └──────────────────┘                    └────────────────┘
 ```
 
-- **CameraPublisher**: runs in a background thread (or separate process). Opens the
-  real camera via `CameraSpec.build()`, reads frames in a loop, encodes each frame
-  with a packed binary header (`FrameHeader`), and publishes to an iceoryx2 service.
-  Supports idle shutdown (`idle_timeout`) — stops publishing when no subscribers are
-  connected for the configured duration.
-- **SharedCamera**: a `Camera`-compatible subscriber that connects to a named iceoryx2
-  service. Implements `read()`, `read_latest()`, `connect()`, and `disconnect()`.
-  Supports optional `zero_copy=True` mode where the decoded frame's numpy array
-  is a read-only view directly into the SHM buffer (no memcpy).
-- **CameraManager**: singleton that automatically spawns a `CameraPublisher` when the
-  first subscriber opens a camera, and exposes a high-level `open()` method.
-- **create_shared_camera()**: convenience function that wraps `CameraManager` for the
-  common case.
+- **SharedCamera**: The primary user-facing API for the transport layer. It acts as a
+  `Camera`-compatible subscriber that connects to a named iceoryx2 service.
+  It supports two modes:
+  - **Auto-spawn mode**: `SharedCamera("realsense", ...)` — automatically spawns a
+    background `CameraPublisher` process if one is not already running for the device.
+    The publisher remains running as long as it has active subscribers and
+    self-terminates after a 5-second idle period (no subscribers) to conserve resources.
+  - **Subscribe-only mode**: `SharedCamera.from_publisher(service_name="...")` — connects to an existing publisher
+    without attempting to spawn one.
+- **CameraPublisher** (internal): Runs in a background process. Opens the real camera
+  via `CameraSpec.build()`, reads frames in a loop, encodes each frame with a packed
+  binary header (`FrameHeader`), and publishes to an iceoryx2 service. It monitors
+  subscriber counts and exits if idle for more than 5 seconds.
+- **create_shared_camera()**: Convenience factory function that creates a
+  `SharedCamera` instance.
 
 **Binary Protocol** (`_header.py`):
 
@@ -1081,16 +1084,22 @@ number, and depth offset. Helper functions `encode_frame()`, `decode_rgb()`,
 **Usage:**
 
 ```python
-from physicalai.capture.transport import create_shared_camera
+from physicalai.capture.transport import SharedCamera, create_shared_camera
 
-# High-level: manager handles publisher lifecycle
-camera = create_shared_camera("uvc", device=0, service_name="cam/wrist")
+# Auto-spawn mode: Spawns publisher for "realsense" if needed
+camera = SharedCamera("realsense", serial_number="12345678")
+camera.connect(timeout=5.0)
+frame = camera.read_latest()
+camera.disconnect()
+
+# Subscribe-only mode: Connects to an existing publisher
+camera = SharedCamera.from_publisher(service_name="cam/wrist")
 camera.connect(timeout=5.0)
 frame = camera.read_latest()
 camera.disconnect()
 
 # Zero-copy mode: frame.data is a read-only view into SHM
-camera = create_shared_camera("uvc", device=0, zero_copy=True)
+camera = SharedCamera("uvc", device=0, zero_copy=True)
 camera.connect(timeout=5.0)
 frame = camera.read_latest()
 assert not frame.data.flags.writeable  # view into SHM
@@ -1395,7 +1404,7 @@ that require exact parameters should assert after `connect()`.
 ## Open Design Decisions
 
 **1. Multi-Consumer Access**
-If multiple consumers need the same camera, should the library provide a `CameraPool`? Or is passing the same instance sufficient? The `transport` subpackage now addresses the **inter-process** case: `CameraPublisher` holds the device and `SharedCamera` subscribers read from SHM, solving device exclusivity (`EBUSY`) without global state. **Intra-process** multi-consumer access (multiple threads reading the same `Camera` instance) remains an application-layer concern. A `CameraPool` may still be warranted if multiple teams need managed thread-safe access within a single process.
+If multiple consumers need the same camera, should the library provide a `CameraPool`? Or is passing the same instance sufficient? The `transport` subpackage addresses the **inter-process** case: `SharedCamera` acts as the primary API, automatically managing background `CameraPublisher` processes. This solves device exclusivity (`EBUSY`) by design. **Intra-process** multi-consumer access (multiple threads reading the same `Camera` instance) remains an application-layer concern. A `CameraPool` may still be warranted if multiple teams need managed thread-safe access within a single process.
 
 **2. Error Recovery**
 Retry on transient failures (USB disconnect/reconnect) in the library, or leave to the application? The application backend already has `tenacity`-based retry in `CameraConnectionManager`. Current position: library raises, application retries.

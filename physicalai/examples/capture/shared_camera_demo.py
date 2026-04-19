@@ -23,12 +23,13 @@ from __future__ import annotations
 
 import argparse
 import multiprocessing as mp
+from typing import Any
 
 from physicalai.capture.discovery import DeviceInfo, discover_all
-from physicalai.capture.transport import CameraPublisher, CameraSpec, SharedCamera
+from physicalai.capture.transport import SharedCamera
 
 
-def _select_camera() -> tuple[str, dict]:
+def _select_camera() -> tuple[str, dict[str, Any]]:
     """Discover cameras and let the user pick one interactively.
 
     Returns:
@@ -66,7 +67,7 @@ def _select_camera() -> tuple[str, dict]:
     return _device_info_to_kwargs(driver, dev)
 
 
-def _device_info_to_kwargs(driver: str, dev: DeviceInfo) -> tuple[str, dict]:
+def _device_info_to_kwargs(driver: str, dev: DeviceInfo) -> tuple[str, dict[str, Any]]:
     """Convert a discovered DeviceInfo into (camera_type, camera_kwargs)."""
     if driver == "realsense":
         if not dev.hardware_id:
@@ -75,15 +76,9 @@ def _device_info_to_kwargs(driver: str, dev: DeviceInfo) -> tuple[str, dict]:
     return driver, {"device": dev.index}
 
 
-def _service_name(camera_type: str, camera_kwargs: dict) -> str:
-    """Derive a service name from camera type and identifier."""
-    device_id = camera_kwargs.get("serial_number", camera_kwargs.get("device", 0))
-    return f"physicalai/camera/{camera_type}/{device_id}/frame"
-
-
 def subscriber_main(service_name: str) -> None:
     """Subscriber entry point for child processes."""
-    camera = SharedCamera(service_name)
+    camera = SharedCamera.from_publisher(service_name=service_name)
     camera.connect()
     try:
         for _ in range(10):
@@ -110,20 +105,28 @@ def main() -> None:
         if camera_type == "realsense":
             if not args.serial_number:
                 raise SystemExit("--serial-number is required when using --camera-type realsense")
-            camera_kwargs = {"serial_number": args.serial_number}
+            camera_kwargs: dict[str, Any] = {"serial_number": args.serial_number}
         else:
             camera_kwargs = {"device": args.device if args.device is not None else 0}
     else:
         camera_type, camera_kwargs = _select_camera()
 
-    service = args.service_name or _service_name(camera_type, camera_kwargs)
+    if camera_type == "realsense":
+        cam = SharedCamera(
+            camera_type,
+            serial_number=camera_kwargs["serial_number"],
+            service_name=args.service_name,
+        )
+    else:
+        cam = SharedCamera(
+            camera_type,
+            device=camera_kwargs["device"],
+            service_name=args.service_name,
+        )
+    cam.connect()
+    print(f"Publisher started on {cam._service_name}")
 
-    spec = CameraSpec(camera_type=camera_type, camera_kwargs=camera_kwargs)
-    publisher = CameraPublisher(spec, service)
-    publisher.start()
-    print(f"Publisher started on {service}")
-
-    subscribers = [mp.Process(target=subscriber_main, args=(service,)) for _ in range(args.subscribers)]
+    subscribers = [mp.Process(target=subscriber_main, args=(cam._service_name,)) for _ in range(args.subscribers)]
 
     try:
         for process in subscribers:
@@ -132,7 +135,7 @@ def main() -> None:
         for process in subscribers:
             process.join()
     finally:
-        publisher.stop()
+        cam.disconnect()
 
     print("Done")
 

@@ -27,6 +27,7 @@ from physicalai.capture.transport._header import (
     encode_frame,
 )
 from physicalai.capture.transport._spec import CameraSpec
+from physicalai.capture.transport._shared_camera import SharedCamera
 
 HAS_ICEORYX2 = importlib.util.find_spec("iceoryx2") is not None
 
@@ -163,18 +164,167 @@ class TestImportGuard:
         assert exc_info.value.package == "iceoryx2"
         assert exc_info.value.extra == "transport"
 
-    def test_macos_fallback_returns_direct_camera(self) -> None:
-        from physicalai.capture.transport import create_shared_camera
 
-        mock_camera = MagicMock()
-        with (
-            patch("physicalai.capture.transport.sys.platform", "darwin"),
-            patch("physicalai.capture.factory.create_camera", return_value=mock_camera) as mock_create,
-        ):
-            result = create_shared_camera("uvc", device=0)
+class TestSharedCameraConstruction:
+    """Unit tests for SharedCamera constructor and from_publisher."""
 
-        assert result is mock_camera
-        mock_create.assert_called_once_with("uvc", device=0)
+    def test_constructor_with_camera_type(self) -> None:
+        cam = SharedCamera("uvc", device=0)
+        assert cam._camera_type == "uvc"
+        assert cam._service_name == "physicalai/camera/uvc/0/frame"
+        assert cam.device_id == "uvc/0"
+
+    def test_constructor_with_explicit_service_name(self) -> None:
+        cam = SharedCamera("uvc", service_name="custom/name", device=0)
+        assert cam._service_name == "custom/name"
+
+    def test_from_publisher(self) -> None:
+        cam = SharedCamera.from_publisher("physicalai/camera/uvc/0/frame")
+        assert cam._camera_type is None
+        assert cam._service_name == "physicalai/camera/uvc/0/frame"
+
+    def test_constructor_rejects_no_args(self) -> None:
+        with pytest.raises(ValueError, match="must provide"):
+            SharedCamera(None)
+
+    def test_constructor_rejects_service_name_as_type(self) -> None:
+        with pytest.raises(ValueError, match="from_publisher"):
+            SharedCamera("physicalai/camera/uvc/0/frame")
+
+    def test_default_device_zero(self) -> None:
+        cam = SharedCamera("uvc")
+        assert cam._service_name is not None
+        assert cam._service_name.endswith("/0/frame")
+
+    def test_serial_number_in_service_name(self) -> None:
+        cam = SharedCamera("realsense", serial_number="12345")
+        assert cam._service_name is not None
+        assert "12345" in cam._service_name
+
+
+class TestSharedCameraSpawnFlow:
+    """Unit tests for SharedCamera auto-spawn and race recovery flow."""
+
+    @staticmethod
+    def _mock_iox2_stack(sample: object | None = None) -> tuple[MagicMock, MagicMock, MagicMock]:
+        iox2 = MagicMock()
+
+        node = MagicMock()
+        data_builder = MagicMock()
+        event_builder = MagicMock()
+        pub_sub = MagicMock()
+        event_svc = MagicMock()
+        subscriber = MagicMock()
+        listener = MagicMock()
+
+        iox2.NodeBuilder.new.return_value.create.return_value = node
+        iox2.ServiceName.new.side_effect = lambda value: value
+        iox2.Duration.from_secs_f64.return_value = MagicMock()
+
+        node.service_builder.side_effect = [data_builder, event_builder]
+
+        data_builder.publish_subscribe.return_value.open.return_value = pub_sub
+        pub_sub.subscriber_builder.return_value.create.return_value = subscriber
+
+        event_builder.event.return_value.open.return_value = event_svc
+        event_svc.listener_builder.return_value.create.return_value = listener
+
+        if sample is None:
+            subscriber.receive.return_value = None
+        else:
+            subscriber.receive.return_value = sample
+
+        return iox2, subscriber, listener
+
+    @patch("physicalai.capture.transport._shared_camera.import_module")
+    @patch("physicalai.capture.transport._publisher.CameraPublisher")
+    @patch("physicalai.capture.transport._shared_camera._probe_service")
+    def test_connect_spawns_publisher_when_none_found(
+        self,
+        mock_probe: MagicMock,
+        mock_publisher_cls: MagicMock,
+        mock_import_module: MagicMock,
+    ) -> None:
+        sample = MagicMock()
+        iox2, _, _ = self._mock_iox2_stack(sample=sample)
+        mock_import_module.return_value = iox2
+
+        mock_probe.side_effect = [False, True]
+        mock_publisher = MagicMock()
+        mock_publisher_cls.return_value = mock_publisher
+
+        camera = SharedCamera("uvc", device=0)
+        with patch.object(camera, "_decode_sample", return_value=MagicMock()):
+            camera.connect(timeout=0.1)
+
+        assert camera.is_connected
+        mock_publisher_cls.assert_called_once()
+        mock_publisher.start.assert_called_once_with()
+
+    @patch("physicalai.capture.transport._shared_camera.import_module")
+    @patch("physicalai.capture.transport._publisher.CameraPublisher")
+    @patch("physicalai.capture.transport._shared_camera._probe_service")
+    def test_connect_skips_spawn_when_publisher_found(
+        self,
+        mock_probe: MagicMock,
+        mock_publisher_cls: MagicMock,
+        mock_import_module: MagicMock,
+    ) -> None:
+        sample = MagicMock()
+        iox2, _, _ = self._mock_iox2_stack(sample=sample)
+        mock_import_module.return_value = iox2
+        mock_probe.return_value = True
+
+        camera = SharedCamera("uvc", device=0)
+        with patch.object(camera, "_decode_sample", return_value=MagicMock()):
+            camera.connect(timeout=0.1)
+
+        assert camera.is_connected
+        mock_publisher_cls.assert_not_called()
+
+    @patch("physicalai.capture.transport._shared_camera.import_module")
+    @patch("physicalai.capture.transport._publisher.CameraPublisher")
+    @patch("physicalai.capture.transport._shared_camera._probe_service")
+    def test_connect_race_recovery(
+        self,
+        mock_probe: MagicMock,
+        mock_publisher_cls: MagicMock,
+        mock_import_module: MagicMock,
+    ) -> None:
+        sample = MagicMock()
+        iox2, _, _ = self._mock_iox2_stack(sample=sample)
+        mock_import_module.return_value = iox2
+
+        mock_probe.side_effect = [False, True]
+        mock_publisher = MagicMock()
+        mock_publisher.start.side_effect = RuntimeError("publisher already running")
+        mock_publisher_cls.return_value = mock_publisher
+
+        camera = SharedCamera("uvc", device=0)
+        with patch.object(camera, "_decode_sample", return_value=MagicMock()):
+            camera.connect(timeout=0.1)
+
+        assert camera.is_connected
+        assert camera._publisher is None
+        mock_probe.assert_called_with(camera._service_name)
+        assert mock_probe.call_count == 2
+        mock_publisher.start.assert_called_once_with()
+
+    def test_disconnect_stops_spawned_publisher(self) -> None:
+        camera = SharedCamera("uvc", device=0)
+        spawned_publisher = MagicMock()
+        camera._publisher = spawned_publisher
+        camera._connected = True
+        camera._subscriber = MagicMock()
+        camera._listener = MagicMock()
+        camera._node = MagicMock()
+
+        camera.disconnect()
+
+        assert not camera.is_connected
+        assert camera._subscriber is None
+        assert camera._listener is None
+        assert camera._node is None
 
 
 @requires_iceoryx2
@@ -218,18 +368,14 @@ class TestCameraPublisher:
 @requires_linux
 class TestSharedCamera:
     def test_connect_disconnect(self, publisher_service: str) -> None:
-        from physicalai.capture.transport._subscriber import SharedCamera
-
-        camera = SharedCamera(publisher_service)
+        camera = SharedCamera.from_publisher(publisher_service)
         camera.connect(timeout=5.0)
         assert camera.is_connected
         camera.disconnect()
         assert not camera.is_connected
 
     def test_read_latest_returns_frame(self, publisher_service: str) -> None:
-        from physicalai.capture.transport._subscriber import SharedCamera
-
-        camera = SharedCamera(publisher_service)
+        camera = SharedCamera.from_publisher(publisher_service)
         camera.connect(timeout=5.0)
         frame = camera.read_latest()
         camera.disconnect()
@@ -237,9 +383,7 @@ class TestSharedCamera:
         assert isinstance(frame, Frame)
 
     def test_read_blocks_until_frame(self, publisher_service: str) -> None:
-        from physicalai.capture.transport._subscriber import SharedCamera
-
-        camera = SharedCamera(publisher_service)
+        camera = SharedCamera.from_publisher(publisher_service)
         camera.connect(timeout=5.0)
         frame = camera.read(timeout=2.0)
         camera.disconnect()
@@ -247,23 +391,17 @@ class TestSharedCamera:
         assert isinstance(frame, Frame)
 
     def test_read_not_connected(self) -> None:
-        from physicalai.capture.transport._subscriber import SharedCamera
-
-        camera = SharedCamera(_service_name())
+        camera = SharedCamera.from_publisher(_service_name())
         with pytest.raises(NotConnectedError):
             camera.read()
 
     def test_read_latest_not_connected(self) -> None:
-        from physicalai.capture.transport._subscriber import SharedCamera
-
-        camera = SharedCamera(_service_name())
+        camera = SharedCamera.from_publisher(_service_name())
         with pytest.raises(NotConnectedError):
             camera.read_latest()
 
     def test_zero_copy_read_only(self, publisher_service: str) -> None:
-        from physicalai.capture.transport._subscriber import SharedCamera
-
-        camera = SharedCamera(publisher_service, zero_copy=True)
+        camera = SharedCamera.from_publisher(publisher_service, zero_copy=True)
         camera.connect(timeout=5.0)
         frame = camera.read_latest()
         camera.disconnect()
@@ -271,15 +409,26 @@ class TestSharedCamera:
         assert isinstance(frame, Frame)
         assert not frame.data.flags.writeable
 
+    def test_connect_idempotent(self, publisher_service: str) -> None:
+        camera = SharedCamera.from_publisher(publisher_service)
+        camera.connect(timeout=5.0)
+        camera.connect(timeout=5.0)  # second call should be no-op
+        assert camera.is_connected
+        camera.disconnect()
+
+    def test_from_publisher_connect_no_spawn(self, publisher_service: str) -> None:
+        camera = SharedCamera.from_publisher(publisher_service)
+        camera.connect(timeout=5.0)
+        assert camera.is_connected
+        camera.disconnect()
+
 
 @requires_iceoryx2
 @requires_linux
 class TestMultiSubscriber:
     def test_two_subscribers_receive_frames(self, publisher_service: str) -> None:
-        from physicalai.capture.transport._subscriber import SharedCamera
-
-        cam_a = SharedCamera(publisher_service)
-        cam_b = SharedCamera(publisher_service)
+        cam_a = SharedCamera.from_publisher(publisher_service)
+        cam_b = SharedCamera.from_publisher(publisher_service)
         cam_a.connect(timeout=5.0)
         cam_b.connect(timeout=5.0)
 
