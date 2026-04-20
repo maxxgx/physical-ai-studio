@@ -32,8 +32,6 @@ from physicalai.robot import Robot
 from physicalai.robot.trossen.constants import HOME_POSITION, VALID_ROLES, WIDOWXAI_JOINT_ORDER
 
 if TYPE_CHECKING:
-    from types import ModuleType
-
     from trossen_arm import TrossenArmDriver  # type: ignore[import-not-found]
 
     from physicalai.capture.frame import Frame
@@ -81,7 +79,6 @@ class WidowXAI(Robot):
         self._ip = ip
         self._role = role
         self._driver: TrossenArmDriver | None = None
-        self._trossen_arm: ModuleType | None = None
 
     @property
     def joint_names(self) -> list[str]:
@@ -159,7 +156,6 @@ class WidowXAI(Robot):
             except Exception:  # noqa: BLE001
                 logger.warning("Error during WidowXAI cleanup; continuing.")
             self._driver = None
-            self._trossen_arm = None
 
     def get_observation(self) -> WidowXAIObservation:
         """Read current joint state and auxiliary sensor data.
@@ -230,7 +226,6 @@ class WidowXAI(Robot):
         Raises:
             RuntimeError: If called on a follower arm.
             ValueError: If efforts shape is not ``(7,)``.
-            ConnectionError: If robot is not connected.
         """
         if self._role != "leader":
             msg = "set_external_efforts is only available for leader arms."
@@ -242,10 +237,6 @@ class WidowXAI(Robot):
             raise ValueError(msg)
 
         driver = self._require_driver()
-        module = self._trossen_arm
-        if module is None:
-            msg = "Robot is not connected. Call connect() first."
-            raise ConnectionError(msg)
 
-        driver.set_all_modes(module.Mode.external_effort)
+        driver.set_all_modes(trossen_arm.Mode.external_effort)
         driver.set_all_external_efforts([-gain * e for e in efforts.tolist()], 0.0, False)  # noqa: FBT003
