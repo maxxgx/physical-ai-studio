@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-import importlib
+from pypylon import pylon
 
 from physicalai.capture.discovery import DeviceInfo
 
@@ -11,31 +11,20 @@ __all__ = ["discover_basler"]
 
 
 def discover_basler() -> list[DeviceInfo]:
-    try:
-        pylon = importlib.import_module("pypylon").pylon
-    except ImportError:
-        return []
-
     factory = pylon.TlFactory.GetInstance()
     results: list[DeviceInfo] = []
 
     for i, dev in enumerate(factory.EnumerateDevices()):
-        try:
-            serial = dev.GetSerialNumber()
-            model = dev.GetModelName()
-            vendor = dev.GetVendorName()
-        except (AttributeError, RuntimeError, ValueError):
-            continue
-
         results.append(
             DeviceInfo(
-                device_id=f"basler:{serial}",
+                device_id=dev.GetSerialNumber(),
                 index=i,
-                name=model,
+                name=dev.GetUserDefinedName(),
                 driver="basler",
-                hardware_id=serial,
-                manufacturer=vendor,
-                model=model,
+                hardware_id=dev.GetSerialNumber(),
+                manufacturer=dev.GetVendorName(),
+                model=dev.GetModelName(),
+                metadata={"address": dev.GetAddress()},
             )
         )
 

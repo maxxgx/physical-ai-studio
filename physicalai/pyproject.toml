@@ -25,7 +25,7 @@ dependencies = [
 
 [project.optional-dependencies]
 tests = ["pytest", "mypy"]
-notebooks = ["matplotlib", "matplotlib-inline"]
+notebooks = ["matplotlib", "matplotlib-inline", "ipykernel"]
 realsense = [
     "pyrealsense2; sys_platform != 'darwin'",
     "pyrealsense2-macosx; sys_platform == 'darwin'",
