@@ -3,10 +3,10 @@
 
 from __future__ import annotations
 
-import contextlib
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
+import numpy as np
 from loguru import logger
 from pypylon import genicam, pylon
 
@@ -15,8 +15,6 @@ from physicalai.capture.errors import CaptureError, CaptureTimeoutError, NotConn
 from physicalai.capture.frame import Frame
 
 if TYPE_CHECKING:
-    import numpy as np
-
     from physicalai.capture.discovery import DeviceInfo
 
 
@@ -28,42 +26,73 @@ class BaslerCamera(Camera):
         *,
         serial_number: str,
         fps: int = 30,
-        width: int = 640,
-        height: int = 480,
+        width: int | None = None,
+        height: int | None = None,
         color_mode: ColorMode = ColorMode.RGB,
     ) -> None:
         super().__init__(color_mode=color_mode)
         self._serial_number = serial_number
         self._fps = fps
-        self._width = width
-        self._height = height
+        self._requested_width = width
+        self._requested_height = height
+        self._width: int = 0
+        self._height: int = 0
         self._connected = False
         self._sequence = 0
         self._last_timestamp: float = 0.0
-        self._camera: Any | None = None
-        self._converter: Any | None = None
+        self._camera: pylon.InstantCamera | None = None
+        self._converter: pylon.ImageFormatConverter | None = None
         self._last_frame_data: np.ndarray | None = None
+        self._needs_resize = False
+        self._row_indices: np.ndarray | None = None
+        self._col_indices: np.ndarray | None = None
 
-    def connect(self, timeout: float = 5.0) -> None:  # noqa: PLR0915 (fix pls)
+    def connect(self, timeout: float = 5.0) -> None:
+        dev_info = self._find_device()
+        camera, converter = self._configure_camera(dev_info)
+        self._wait_first_frame(timeout, camera, converter)
+
+    def _find_device(self) -> pylon.DeviceInfo:
         factory = pylon.TlFactory.GetInstance()
-
-        # Find the device by serial number using full enumeration.  For GigE
-        # cameras this ensures CreateDevice receives the complete transport-
-        # layer context (IP, MAC, etc.) which is required for streaming.
-        dev_info = None
         for di in factory.EnumerateDevices():
             if di.GetSerialNumber() == self._serial_number:
-                dev_info = di
-                break
+                return di
+        msg = f"Basler camera with serial {self._serial_number} not found"
+        raise CaptureError(msg)
 
-        if dev_info is None:
-            msg = f"Basler camera with serial {self._serial_number} not found"
-            raise CaptureError(msg)
-
+    def _configure_camera(self, dev_info: pylon.DeviceInfo) -> tuple[pylon.InstantCamera, pylon.ImageFormatConverter]:
+        factory = pylon.TlFactory.GetInstance()
         self._camera = pylon.InstantCamera(factory.CreateDevice(dev_info))
         self._camera.Open()
-        self._camera.Width.Value = self._width
-        self._camera.Height.Value = self._height
+
+        # Grab at full sensor resolution; resize to requested dimensions in software.
+        # On color GigE models (e.g. a2A1920-51gcBAS) binning is not available,
+        # and setting Width/Height directly would crop the sensor ROI.
+        self._camera.Width.Value = self._camera.Width.Max
+        self._camera.Height.Value = self._camera.Height.Max
+        sensor_w = self._camera.Width.Value
+        sensor_h = self._camera.Height.Value
+
+        # Resolve requested dimensions: None → full sensor, clamp to sensor max.
+        req_w = self._requested_width
+        req_h = self._requested_height
+        self._width = sensor_w if req_w is None else min(req_w, sensor_w)
+        self._height = sensor_h if req_h is None else min(req_h, sensor_h)
+        if (req_w is not None and req_w > sensor_w) or (req_h is not None and req_h > sensor_h):
+            logger.warning(
+                f"Basler {self._serial_number}: requested {req_w}x{req_h} exceeds sensor "
+                f"{sensor_w}x{sensor_h}. Upscaling is not supported; using {self._width}x{self._height}."
+            )
+
+        self._needs_resize = sensor_w != self._width or sensor_h != self._height
+        if self._needs_resize:
+            self._row_indices = np.linspace(0, sensor_h - 1, self._height, dtype=np.intp)
+            self._col_indices = np.linspace(0, sensor_w - 1, self._width, dtype=np.intp)
+            logger.info(
+                f"Basler {self._serial_number}: sensor {sensor_w}x{sensor_h}, "
+                f"will resize to {self._width}x{self._height}"
+            )
+
         try:
             self._camera.AcquisitionFrameRateEnable.Value = True
             self._camera.AcquisitionFrameRate.Value = float(self._fps)
@@ -79,13 +108,18 @@ class BaslerCamera(Camera):
             self._converter.OutputPixelFormat = pylon.PixelType_Mono8
 
         self._camera.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
+        return self._camera, self._converter
 
+    def _wait_first_frame(
+        self, timeout: float, camera: pylon.InstantCamera, converter: pylon.ImageFormatConverter
+    ) -> None:
         deadline = time.monotonic() + timeout
         last_error = ""
+
         while time.monotonic() < deadline:
             remaining_ms = max(1, int((deadline - time.monotonic()) * 1000))
             try:
-                grab_result = self._camera.RetrieveResult(remaining_ms, pylon.TimeoutHandling_ThrowException)
+                grab_result = camera.RetrieveResult(remaining_ms, pylon.TimeoutHandling_ThrowException)
             except genicam.TimeoutException as err:
                 self._do_disconnect()
                 msg = f"Timed out waiting for first frame after {timeout}s"
@@ -96,11 +130,14 @@ class BaslerCamera(Camera):
                 raise CaptureError(msg) from err
 
             if grab_result.GrabSucceeded():
-                converted = self._converter.Convert(grab_result)
-                self._last_frame_data = converted.GetArray().copy()
+                converted = converter.Convert(grab_result)
+                self._last_frame_data = self._resize(converted.GetArray().copy())
                 grab_result.Release()
                 self._connected = True
                 self._sequence = 0
+                logger.info(
+                    f"Basler camera {self._serial_number} connected ({self._width}x{self._height} @ {self._fps}fps)"
+                )
                 return
 
             last_error = grab_result.GetErrorDescription()
@@ -110,46 +147,64 @@ class BaslerCamera(Camera):
         msg = f"First grab failed: {last_error}"
         raise CaptureError(msg)
 
+    def _ensure_connected(self) -> tuple[pylon.InstantCamera, pylon.ImageFormatConverter]:
+        camera = self._camera
+        converter = self._converter
+        if not self._connected or camera is None or converter is None:
+            raise NotConnectedError
+        return camera, converter
+
     def _do_disconnect(self) -> None:
         if self._camera is not None:
-            with contextlib.suppress(Exception):
+            try:
                 self._camera.StopGrabbing()
-            with contextlib.suppress(Exception):
+            except Exception:  # noqa: BLE001
+                logger.debug(f"Error stopping grab for basler camera {self._serial_number}")
+            try:
                 self._camera.Close()
+            except Exception:  # noqa: BLE001
+                logger.debug(f"Error closing basler camera {self._serial_number}")
         self._camera = None
         self._converter = None
         self._last_frame_data = None
         self._connected = False
 
+    def _resize(self, data: np.ndarray) -> np.ndarray:
+        """Downsample full-sensor frame to the requested output dimensions.
+
+        Returns:
+            Resized frame array, or the original if no resize is needed.
+        """
+        if self._needs_resize and self._row_indices is not None and self._col_indices is not None:
+            return data[np.ix_(self._row_indices, self._col_indices)]
+        return data
+
     @property
     def is_connected(self) -> bool:
-        return self._connected
+        return self._connected and self._camera is not None and self._converter is not None
 
     @property
     def device_id(self) -> str:
         return f"basler:{self._serial_number}"
 
     def read(self, timeout: float | None = None) -> Frame:
-        if not self._connected or self._camera is None or self._converter is None:
-            raise NotConnectedError
+        camera, converter = self._ensure_connected()
 
         timeout_s = timeout if timeout is not None else 5.0
         deadline = time.monotonic() + timeout_s
         last_error = ""
 
-        # GigE cameras may produce incomplete frames due to UDP packet loss.
-        # Retry until we get a complete frame or the timeout expires.
         while time.monotonic() < deadline:
             remaining_ms = max(1, int((deadline - time.monotonic()) * 1000))
             try:
-                grab_result = self._camera.RetrieveResult(remaining_ms, pylon.TimeoutHandling_ThrowException)
+                grab_result = camera.RetrieveResult(remaining_ms, pylon.TimeoutHandling_ThrowException)
             except genicam.TimeoutException as err:
                 msg = f"Timed out waiting for frame after {timeout_s}s"
                 raise CaptureTimeoutError(msg) from err
 
             if grab_result.GrabSucceeded():
-                converted = self._converter.Convert(grab_result)
-                data = converted.GetArray().copy()
+                converted = converter.Convert(grab_result)
+                data = self._resize(converted.GetArray().copy())
                 grab_result.Release()
 
                 self._last_frame_data = data
@@ -164,15 +219,14 @@ class BaslerCamera(Camera):
         raise CaptureError(msg)
 
     def read_latest(self) -> Frame:
-        if not self._connected or self._camera is None or self._converter is None:
-            raise NotConnectedError
+        camera, converter = self._ensure_connected()
 
-        grab_result = self._camera.RetrieveResult(0, pylon.TimeoutHandling_Return)
+        grab_result = camera.RetrieveResult(0, pylon.TimeoutHandling_Return)
 
         if grab_result is not None and grab_result.IsValid():
             if grab_result.GrabSucceeded():
-                converted = self._converter.Convert(grab_result)
-                data = converted.GetArray().copy()
+                converted = converter.Convert(grab_result)
+                data = self._resize(converted.GetArray().copy())
                 grab_result.Release()
                 self._last_frame_data = data
                 self._sequence += 1
