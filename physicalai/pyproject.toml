@@ -31,6 +31,7 @@ realsense = [
     "pyrealsense2-macosx; sys_platform == 'darwin'",
 ]
 basler = ["pypylon", "opencv-python-headless"]
+transport = ["iceoryx2>=0.8"]
 genicam = []
 capture = [
     "physicalai[realsense]",
@@ -119,6 +120,10 @@ ignore = [
 fixable = ["ALL"]
 unfixable = []
 
+[tool.ruff.lint.per-file-ignores]
+"src/physicalai/capture/transport/_header.py" = ["RUF012"]
+"src/physicalai/capture/transport/_publisher.py" = ["S603"]
+
 [tool.ruff.lint.mccabe]
 max-complexity = 15
 
@@ -172,6 +177,7 @@ markers = [
     "requires_download: marks tests that require downloading external datasets",
     "integration: marks tests as integration tests",
     "v4l2: marks tests requiring V4L2 mocking (Linux only)",
+    "transport: marks tests requiring iceoryx2",
 ]
 
 [tool.coverage.report]
