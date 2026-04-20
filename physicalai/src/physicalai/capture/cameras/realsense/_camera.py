@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 
 class RealSenseCamera(DepthMixin, Camera):
-    """Intel RealSense color and depth camera."""
+    """RealSense color and depth camera."""
 
     def __init__(
         self,
@@ -279,7 +279,7 @@ class RealSenseCamera(DepthMixin, Camera):
 
     @classmethod
     def discover(cls) -> list[DeviceInfo]:
-        """Discover available Intel RealSense devices.
+        """Discover available RealSense devices.
 
         Returns:
             List of discovered RealSense devices.
