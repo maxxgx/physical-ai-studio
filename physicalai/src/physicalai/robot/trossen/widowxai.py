@@ -122,13 +122,13 @@ class WidowXAI(Robot):
                 timeout=5,
             )
 
+            driver.set_all_modes(trossen_arm.Mode.position)
+            driver.set_all_positions(list(HOME_POSITION), 2.0, True)  # noqa: FBT003
+
             if self._role == "leader":
                 # Zero external efforts before homing (essential for leader)
                 driver.set_all_modes(trossen_arm.Mode.external_effort)
                 driver.set_all_external_efforts(list(HOME_POSITION), 0.0, False)  # noqa: FBT003
-
-            driver.set_all_modes(trossen_arm.Mode.position)
-            driver.set_all_positions(list(HOME_POSITION), 2.0, True)  # noqa: FBT003
 
         except Exception:
             with contextlib.suppress(Exception):
