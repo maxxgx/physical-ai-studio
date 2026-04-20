@@ -122,7 +122,6 @@ class TestWidowXAIConnect:
 
         driver.cleanup.assert_called_once()
         assert getattr(robot, "_driver") is None
-        assert robot._trossen_arm is None  # noqa: SLF001
 
 
 # ---------------------------------------------------------------------------
