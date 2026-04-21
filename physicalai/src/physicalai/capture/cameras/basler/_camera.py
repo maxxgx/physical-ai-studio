@@ -6,7 +6,7 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING
 
-import numpy as np
+import cv2
 from loguru import logger
 from pypylon import genicam, pylon
 
@@ -15,6 +15,8 @@ from physicalai.capture.errors import CaptureError, CaptureTimeoutError, NotConn
 from physicalai.capture.frame import Frame
 
 if TYPE_CHECKING:
+    import numpy as np
+
     from physicalai.capture.discovery import DeviceInfo
 
 
@@ -46,8 +48,6 @@ class BaslerCamera(Camera):
         self._converter: pylon.ImageFormatConverter | None = None
         self._last_frame_data: np.ndarray | None = None
         self._needs_resize = False
-        self._row_indices: np.ndarray | None = None
-        self._col_indices: np.ndarray | None = None
 
     def connect(self, timeout: float = 5.0) -> None:
         dev_info = self._find_device()
@@ -93,8 +93,6 @@ class BaslerCamera(Camera):
 
         self._needs_resize = sensor_w != self._width or sensor_h != self._height
         if self._needs_resize:
-            self._row_indices = np.linspace(0, sensor_h - 1, self._height, dtype=np.intp)
-            self._col_indices = np.linspace(0, sensor_w - 1, self._width, dtype=np.intp)
             logger.info(
                 f"Basler {self._serial_number}: sensor {sensor_w}x{sensor_h}, "
                 f"will resize to {self._width}x{self._height}"
@@ -174,17 +172,14 @@ class BaslerCamera(Camera):
         self._last_frame_data = None
         self._connected = False
 
-    def _subsample(self, data: np.ndarray) -> np.ndarray:
-        """Nearest-neighbor downsample via precomputed index arrays.
-
-        Picks evenly-spaced rows and columns — no interpolation.
-        Fast and avoids an OpenCV dependency.
+    def _resize(self, data: np.ndarray) -> np.ndarray:
+        """Downsample using area-based interpolation (anti-aliased).
 
         Returns:
-            Subsampled image data.
+            Resized image data.
         """
-        if self._needs_resize and self._row_indices is not None and self._col_indices is not None:
-            return data[np.ix_(self._row_indices, self._col_indices)]
+        if self._needs_resize:
+            return cv2.resize(data, (self._width, self._height), interpolation=cv2.INTER_AREA)
         return data
 
     def _convert_result(
@@ -200,7 +195,7 @@ class BaslerCamera(Camera):
         converted = converter.Convert(grab_result)
         # GetArray() returns a view into the PylonImage's C++ buffer; copy
         # so the numpy array survives after converted is garbage-collected.
-        data = self._subsample(converted.GetArray().copy())
+        data = self._resize(converted.GetArray().copy())
         grab_result.Release()
         return data
 
