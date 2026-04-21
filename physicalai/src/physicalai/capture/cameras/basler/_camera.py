@@ -49,7 +49,12 @@ class BaslerCamera(Camera):
 
     def connect(self, timeout: float = 5.0) -> None:
         dev_info = self._find_device()
-        camera, converter = self._configure_camera(dev_info)
+        try:
+            camera, converter = self._configure_camera(dev_info)
+        except Exception as err:
+            self._do_disconnect()
+            msg = f"Failed to open Basler camera {self._serial_number}"
+            raise CaptureError(msg) from err
         self._wait_first_frame(timeout, camera, converter)
 
     def _find_device(self) -> pylon.DeviceInfo:
@@ -131,6 +136,8 @@ class BaslerCamera(Camera):
 
             if grab_result.GrabSucceeded():
                 converted = converter.Convert(grab_result)
+                # GetArray() returns a view into the PylonImage's C++ buffer; copy
+                # so the numpy array survives after converted is garbage-collected.
                 self._last_frame_data = self._resize(converted.GetArray().copy())
                 grab_result.Release()
                 self._connected = True
@@ -204,6 +211,8 @@ class BaslerCamera(Camera):
 
             if grab_result.GrabSucceeded():
                 converted = converter.Convert(grab_result)
+                # GetArray() returns a view into the PylonImage's C++ buffer; copy
+                # so the numpy array survives after converted is garbage-collected.
                 data = self._resize(converted.GetArray().copy())
                 grab_result.Release()
 
@@ -226,6 +235,8 @@ class BaslerCamera(Camera):
         if grab_result is not None and grab_result.IsValid():
             if grab_result.GrabSucceeded():
                 converted = converter.Convert(grab_result)
+                # GetArray() returns a view into the PylonImage's C++ buffer; copy
+                # so the numpy array survives after converted is garbage-collected.
                 data = self._resize(converted.GetArray().copy())
                 grab_result.Release()
                 self._last_frame_data = data
