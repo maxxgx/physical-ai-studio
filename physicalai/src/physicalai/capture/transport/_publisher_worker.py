@@ -9,6 +9,7 @@ import contextlib
 import ctypes
 import importlib
 import json
+import os
 import signal
 import sys
 import threading
@@ -39,6 +40,22 @@ def signal_error(msg: str) -> None:
     sys.stdout.write(f"ERROR:{json.dumps(msg)}\n")
     sys.stdout.flush()
     sys.stdout.close()
+
+
+def suppress_stdout() -> int:
+    """Redirect fd 1 to /dev/null, returning the saved fd."""
+    saved_fd = os.dup(1)
+    devnull_fd = os.open(os.devnull, os.O_WRONLY)
+    os.dup2(devnull_fd, 1)
+    os.close(devnull_fd)
+    return saved_fd
+
+
+def restore_stdout(saved_fd: int) -> None:
+    """Restore fd 1 from *saved_fd* and rewrap ``sys.stdout``."""
+    os.dup2(saved_fd, 1)
+    os.close(saved_fd)
+    sys.stdout = os.fdopen(1, "w")
 
 
 def build_camera(config: dict) -> Camera:
@@ -74,6 +91,12 @@ def main() -> int:  # noqa: PLR0912, PLR0914, PLR0915
     service_name: str = config["service_name"]
     idle_timeout: float = config.get("idle_timeout", 5.0)
     max_subscribers: int = config.get("max_subscribers", 32)
+
+    # Redirect fd 1 (stdout) to /dev/null during setup so that native
+    # libraries (e.g. omni_camera/Nokhwa) that write directly to the C-level
+    # stdout fd don't corrupt the single-line IPC protocol used by
+    # CameraPublisher.start().
+    saved_stdout_fd = suppress_stdout()
 
     camera = None
     try:
@@ -120,6 +143,8 @@ def main() -> int:  # noqa: PLR0912, PLR0914, PLR0915
             except Exception:  # noqa: BLE001
                 logger.exception("camera disconnect failed during error cleanup")
         return 1
+    finally:
+        restore_stdout(saved_stdout_fd)
 
     signal_ready()
 

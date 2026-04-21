@@ -10,7 +10,7 @@ First instance (discovers cameras, starts publisher):
 Additional instances (skip discovery, reuse existing publisher):
 
     uv run python examples/capture/shared_camera_live_demo.py \
-        --camera-type realsense --serial-number 353322271391 --subscribers 4
+        --camera-type realsense --device-id 353322271391 --subscribers 4
 
 Or specify the iceoryx2 service name directly:
 
@@ -80,12 +80,15 @@ def _select_camera() -> tuple[str, dict]:
     return _device_info_to_kwargs(driver, dev)
 
 
+def _device_id_kwarg(camera_type: str) -> str:
+    """Return the constructor kwarg name that identifies a device for *camera_type*."""
+    if camera_type in ("realsense", "basler"):
+        return "serial_number"
+    return "device"
+
+
 def _device_info_to_kwargs(driver: str, dev: DeviceInfo) -> tuple[str, dict]:
-    if driver == "realsense":
-        if not dev.hardware_id:
-            raise SystemExit(f"RealSense device {dev.device_id} has no serial number.")
-        return "realsense", {"serial_number": dev.hardware_id}
-    return driver, {"device": dev.index}
+    return driver, {_device_id_kwarg(driver): dev.device_id}
 
 
 # ---------------------------------------------------------------------------
@@ -95,9 +98,8 @@ def _device_info_to_kwargs(driver: str, dev: DeviceInfo) -> tuple[str, dict]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Live shared-memory camera demo (NxN grid)")
-    parser.add_argument("--device", type=int, default=None, help="UVC device index")
-    parser.add_argument("--camera-type", default=None, help="Camera backend (uvc, realsense)")
-    parser.add_argument("--serial-number", help="RealSense serial number")
+    parser.add_argument("--camera-type", default=None, help="Camera backend (uvc, realsense, basler)")
+    parser.add_argument("--device-id", default=None, help="Device identifier (serial number, device path, etc.)")
     parser.add_argument("--service-name", help="Override iceoryx2 service name")
     parser.add_argument("--subscribers", type=int, default=DEFAULT_SUBSCRIBERS, help="Number of subscriber tiles")
     args = parser.parse_args()
@@ -111,12 +113,9 @@ def main() -> None:
         cameras = [shared_camera_ctor.from_publisher(args.service_name, zero_copy=True) for _ in range(num_subs)]
     elif args.camera_type is not None:
         camera_type = args.camera_type
-        if camera_type == "realsense":
-            if not args.serial_number:
-                raise SystemExit("--serial-number is required when using --camera-type realsense")
-            camera_kwargs = {"serial_number": args.serial_number}
-        else:
-            camera_kwargs = {"device": args.device if args.device is not None else 0}
+        if not args.device_id:
+            raise SystemExit("--device-id is required when using --camera-type")
+        camera_kwargs = {_device_id_kwarg(camera_type): args.device_id}
         cameras = [shared_camera_ctor(camera_type, zero_copy=True, **camera_kwargs) for _ in range(num_subs)]
     else:
         # Interactive discovery — may crash if another process holds the

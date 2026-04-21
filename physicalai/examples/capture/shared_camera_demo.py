@@ -10,10 +10,10 @@ Interactive selection (discovers cameras automatically):
 Skip selection (specify camera directly):
 
     uv run python examples/capture/shared_camera_demo.py \
-        --camera-type uvc --device 0
+        --camera-type uvc --device-id /dev/video0
 
     uv run python examples/capture/shared_camera_demo.py \
-        --camera-type realsense --serial-number 123456789
+        --camera-type realsense --device-id 123456789
 
 The demo starts a publisher process, spawns subscriber processes
 that each print 10 frames, then shuts everything down.
@@ -67,13 +67,16 @@ def _select_camera() -> tuple[str, dict[str, Any]]:
     return _device_info_to_kwargs(driver, dev)
 
 
+def _device_id_kwarg(camera_type: str) -> str:
+    """Return the constructor kwarg name that identifies a device for *camera_type*."""
+    if camera_type in ("realsense", "basler"):
+        return "serial_number"
+    return "device"
+
+
 def _device_info_to_kwargs(driver: str, dev: DeviceInfo) -> tuple[str, dict[str, Any]]:
     """Convert a discovered DeviceInfo into (camera_type, camera_kwargs)."""
-    if driver == "realsense":
-        if not dev.hardware_id:
-            raise SystemExit(f"RealSense device {dev.device_id} has no serial number.")
-        return "realsense", {"serial_number": dev.hardware_id}
-    return driver, {"device": dev.index}
+    return driver, {_device_id_kwarg(driver): dev.device_id}
 
 
 def subscriber_main(service_name: str) -> None:
@@ -93,36 +96,25 @@ def subscriber_main(service_name: str) -> None:
 def main() -> None:
     """Run the shared camera demo."""
     parser = argparse.ArgumentParser(description="Shared-memory camera demo")
-    parser.add_argument("--device", type=int, default=None, help="UVC device index")
-    parser.add_argument("--camera-type", default=None, help="Camera backend (uvc, realsense)")
-    parser.add_argument("--serial-number", help="RealSense serial number")
+    parser.add_argument("--camera-type", default=None, help="Camera backend (uvc, realsense, basler)")
+    parser.add_argument("--device-id", default=None, help="Device identifier (serial number, device path, etc.)")
     parser.add_argument("--service-name", help="Override iceoryx2 service name")
     parser.add_argument("--subscribers", type=int, default=2, help="Number of subscriber processes")
     args = parser.parse_args()
 
     if args.camera_type is not None:
         camera_type = args.camera_type
-        if camera_type == "realsense":
-            if not args.serial_number:
-                raise SystemExit("--serial-number is required when using --camera-type realsense")
-            camera_kwargs: dict[str, Any] = {"serial_number": args.serial_number}
-        else:
-            camera_kwargs = {"device": args.device if args.device is not None else 0}
+        if not args.device_id:
+            raise SystemExit("--device-id is required when using --camera-type")
+        camera_kwargs: dict[str, Any] = {_device_id_kwarg(camera_type): args.device_id}
     else:
         camera_type, camera_kwargs = _select_camera()
 
-    if camera_type == "realsense":
-        cam = SharedCamera(
-            camera_type,
-            serial_number=camera_kwargs["serial_number"],
-            service_name=args.service_name,
-        )
-    else:
-        cam = SharedCamera(
-            camera_type,
-            device=camera_kwargs["device"],
-            service_name=args.service_name,
-        )
+    cam = SharedCamera(
+        camera_type,
+        **camera_kwargs,
+        service_name=args.service_name,
+    )
     cam.connect()
     print(f"Publisher started on {cam._service_name}")
 
