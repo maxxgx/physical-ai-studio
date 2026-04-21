@@ -3060,6 +3060,7 @@ requires-dist = [
     { name = "mypy", marker = "extra == 'tests'" },
     { name = "numpy", specifier = ">=1.24" },
     { name = "omni-camera", git = "https://github.com/ArendJanKramer/OmniCamera.git?rev=master" },
+    { name = "opencv-python-headless", marker = "extra == 'basler'" },
     { name = "physicalai", extras = ["abb"], marker = "extra == 'robots'" },
     { name = "physicalai", extras = ["basler"], marker = "extra == 'capture'" },
     { name = "physicalai", extras = ["franka"], marker = "extra == 'robots'" },
