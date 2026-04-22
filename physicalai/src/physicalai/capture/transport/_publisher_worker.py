@@ -43,7 +43,17 @@ def signal_error(msg: str) -> None:
 
 
 def suppress_stdout() -> int:
-    """Redirect fd 1 to /dev/null, returning the saved fd."""
+    """Redirect fd 1 to /dev/null.
+
+    Operates at the OS file-descriptor level (not ``sys.stdout``) so that
+    native libraries writing directly to the C stdout fd (e.g.
+    ``omni_camera``/Nokhwa via ``printf``) are also silenced. This keeps
+    the single-line ``READY``/``ERROR`` IPC protocol on stdout uncorrupted
+    during camera startup.
+
+    Returns:
+        The saved original fd 1, to be passed to :func:`restore_stdout`.
+    """
     saved_fd = os.dup(1)
     devnull_fd = os.open(os.devnull, os.O_WRONLY)
     os.dup2(devnull_fd, 1)
@@ -52,7 +62,15 @@ def suppress_stdout() -> int:
 
 
 def restore_stdout(saved_fd: int) -> None:
-    """Restore fd 1 from *saved_fd* and rewrap ``sys.stdout``."""
+    """Restore fd 1 from *saved_fd* and rewrap ``sys.stdout``.
+
+    Undoes :func:`suppress_stdout` by pointing fd 1 back at the original
+    stdout and rebuilding the Python ``sys.stdout`` text wrapper so that
+    subsequent ``print`` calls reach the parent process again.
+
+    Args:
+        saved_fd: The fd returned by :func:`suppress_stdout`.
+    """
     os.dup2(saved_fd, 1)
     os.close(saved_fd)
     sys.stdout = os.fdopen(1, "w")
@@ -96,11 +114,20 @@ def main() -> int:  # noqa: PLR0912, PLR0914, PLR0915
     # libraries (e.g. omni_camera/Nokhwa) that write directly to the C-level
     # stdout fd don't corrupt the single-line IPC protocol used by
     # CameraPublisher.start().
-    saved_stdout_fd = suppress_stdout()
+    saved_stdout_fd: int | None = suppress_stdout()
 
     camera = None
     try:
         iox2 = importlib.import_module("iceoryx2")
+
+        # Silence iceoryx2's internal log warnings. The notifier logs a
+        # ``FailedToDeliverSignal`` warning at WARN level whenever a
+        # listener's unix-datagram socket is full (common under load —
+        # the pub-sub payload still delivers reliably, only the wake-up
+        # hint is dropped). These warnings can flood stderr at kHz
+        # rates. Error level keeps genuine errors visible.
+        with contextlib.suppress(Exception):
+            iox2.set_log_level(iox2.LogLevel.Error)
 
         camera = build_camera(config)
         camera.connect()
@@ -136,6 +163,9 @@ def main() -> int:  # noqa: PLR0912, PLR0914, PLR0915
         )
         notifier = event_service.notifier_builder().create()
     except Exception as exc:  # noqa: BLE001
+        if saved_stdout_fd is not None:
+            restore_stdout(saved_stdout_fd)
+            saved_stdout_fd = None
         signal_error(str(exc))
         if camera is not None:
             try:
@@ -144,7 +174,8 @@ def main() -> int:  # noqa: PLR0912, PLR0914, PLR0915
                 logger.exception("camera disconnect failed during error cleanup")
         return 1
     finally:
-        restore_stdout(saved_stdout_fd)
+        if saved_stdout_fd is not None:
+            restore_stdout(saved_stdout_fd)
 
     signal_ready()
 

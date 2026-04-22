@@ -75,6 +75,9 @@ class CameraPublisher:
             [sys.executable, "-m", "physicalai.capture.transport._publisher_worker"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
+            # Detach into a new session so the worker survives when the
+            # parent exits / Ctrl+C's. Subsequent subscribers re-attach
+            # by service name.
             start_new_session=True,
         )
         assert self._process.stdin is not None  # noqa: S101

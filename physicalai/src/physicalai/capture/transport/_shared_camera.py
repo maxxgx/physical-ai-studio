@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import time
 from importlib import import_module
@@ -144,6 +145,14 @@ class SharedCamera(Camera):
                 self._publisher = publisher
 
         iox2 = cast("Any", import_module("iceoryx2"))
+
+        # Silence iceoryx2's kHz-rate ``FailedToDeliverSignal`` warnings.
+        # They fire whenever a listener's unix-datagram wake-up socket is
+        # full — which happens for any subscriber using non-blocking reads
+        # (e.g. ``read_latest``) under camera-rate notifications. The
+        # pub-sub payload itself still delivers reliably.
+        with contextlib.suppress(Exception):
+            iox2.set_log_level(iox2.LogLevel.Error)
 
         self._node = iox2.NodeBuilder.new().create(iox2.ServiceType.Ipc)
 
