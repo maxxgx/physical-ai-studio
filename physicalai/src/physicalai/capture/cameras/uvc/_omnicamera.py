@@ -100,7 +100,15 @@ class OmniCamera(Camera):
                     raise CaptureError(msg) from err
 
     def connect(self, timeout: float = 5.0) -> None:
+        # On macOS, nokhwa_initialize() fires an async AVFoundation permission
+        # request at module import. If we query before that callback resolves,
+        # only_usable=True filters out the camera, yielding an empty list.
+        # Retry briefly to give the TCC callback time to deliver.
+        query_deadline = time.monotonic() + 2.0
         infos = omni_camera.query(only_usable=True)
+        while not infos and time.monotonic() < query_deadline:
+            time.sleep(0.1)
+            infos = omni_camera.query(only_usable=True)
         info = self._resolve_device_info(infos, self._device_id_raw)
 
         self._cam = omni_camera.Camera(info)
@@ -203,7 +211,12 @@ class OmniCamera(Camera):
     def discover(cls) -> list[DeviceInfo]:
         from physicalai.capture.discovery import DeviceInfo  # noqa: PLC0415
 
-        infos = omni_camera.query(only_usable=True)
+        # NOTE: We intentionally use ``only_usable=False`` and do NOT call
+        # ``info.can_open()`` here. On macOS those probes briefly open the
+        # camera through AVFoundation, which holds a process-wide lock that
+        # prevents any subprocess (e.g. the publisher worker) from opening
+        # the same device until the parent exits.
+        infos = omni_camera.query(only_usable=False)
         return [
             DeviceInfo(
                 device_id=str(info.index),
@@ -220,7 +233,6 @@ class OmniCamera(Camera):
                 },
             )
             for info in infos
-            if info.can_open()
         ]
 
     def get_settings(self) -> list[CameraSetting]:
