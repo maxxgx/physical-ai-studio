@@ -35,7 +35,6 @@ def omnicamera_cls():  # noqa: ANN201
     mock_camera_info.description = "Test Camera Description"
     mock_camera_info.misc = ""
     mock_camera_info.can_open.return_value = True
-    mock_camera_info.unique_id = "test-unique-id-0"
 
     mock_omni_camera.query.return_value = [mock_camera_info]
 
@@ -55,11 +54,10 @@ def omnicamera_cls():  # noqa: ANN201
     mock_fmt_opts.resolve.return_value = mock_fmt
 
     mock_cam.poll_frame_np.return_value = np.zeros((480, 640, 3), dtype=np.uint8)
-    mock_cam.poll_frame_np_with_seq.return_value = (np.zeros((480, 640, 3), dtype=np.uint8), 1)
     mock_cam.open.return_value = None
     mock_cam.close.return_value = None
 
-    sys.modules["pynokhwa"] = mock_omni_camera
+    sys.modules["omni_camera"] = mock_omni_camera
     sys.modules.pop("physicalai.capture.cameras.uvc._omnicamera", None)
 
     module = importlib.import_module("physicalai.capture.cameras.uvc._omnicamera")
@@ -67,7 +65,7 @@ def omnicamera_cls():  # noqa: ANN201
 
     yield camera_cls, mock_omni_camera
 
-    sys.modules.pop("pynokhwa", None)
+    sys.modules.pop("omni_camera", None)
     sys.modules.pop("physicalai.capture.cameras.uvc._omnicamera", None)
 
 
@@ -103,11 +101,11 @@ def test_not_connected_initially(omnicamera_cls: tuple) -> None:
 
 
 def test_connect_queries_cameras(omnicamera_cls: tuple) -> None:
-    """connect() calls query(only_usable=False) to match discover() indices."""
+    """connect() calls omni_camera.query(only_usable=True)."""
     camera_cls, mock_omni_camera = omnicamera_cls
     cam = camera_cls()
     cam.connect()
-    assert any(call.kwargs.get("only_usable") is False for call in mock_omni_camera.query.call_args_list)
+    assert any(call.kwargs.get("only_usable") is True for call in mock_omni_camera.query.call_args_list)
 
 
 def test_connect_creates_camera_without_suggested_fps(omnicamera_cls: tuple) -> None:
@@ -152,36 +150,13 @@ def test_connect_raises_capture_error_when_no_camera_found(omnicamera_cls: tuple
 
 
 def test_connect_raises_capture_error_when_camera_cant_open(omnicamera_cls: tuple) -> None:
-    """connect() raises CaptureError when Camera() fails to open an unusable device."""
+    """connect() raises CaptureError when can_open() returns False."""
     camera_cls, mock_omni_camera = omnicamera_cls
-    mock_omni_camera.Camera.side_effect = RuntimeError("cannot open")
+    mock_camera_info = mock_omni_camera.query.return_value[0]
+    mock_camera_info.can_open.return_value = False
 
     cam = camera_cls()
-    with pytest.raises(RuntimeError):
-        cam.connect()
-
-
-def test_connect_rejects_bgra_only_virtual_camera(omnicamera_cls: tuple) -> None:
-    """connect() raises CaptureError when camera reports no supported formats (e.g. BGRA-only)."""
-    camera_cls, mock_omni_camera = omnicamera_cls
-    mock_cam = mock_omni_camera.Camera.return_value
-    mock_cam.get_format_options.return_value = []  # no decodable formats
-
-    cam = camera_cls()
-    with pytest.raises(CaptureError, match="virtual camera"):
-        cam.connect()
-
-
-def test_connect_raises_capture_error_on_fourcharcode(omnicamera_cls: tuple) -> None:
-    """connect() raises CaptureError when open() fails with an unsupported FourCharCode."""
-    camera_cls, mock_omni_camera = omnicamera_cls
-    mock_cam = mock_omni_camera.Camera.return_value
-    mock_cam.open.side_effect = RuntimeError(
-        "Could not generate required structure FourCharCode: Unknown FourCharCode 1111970369"
-    )
-
-    cam = camera_cls()
-    with pytest.raises(CaptureError, match="unsupported pixel format"):
+    with pytest.raises(CaptureError):
         cam.connect()
 
 
@@ -235,7 +210,7 @@ def test_read_rgb_mode(omnicamera_cls: tuple) -> None:
 
     cam = camera_cls(color_mode=ColorMode.RGB)
     cam.connect()
-    mock_cam.poll_frame_np_with_seq.return_value = (raw, 1)
+    mock_cam.poll_frame_np.return_value = raw
     frame = cam.read()
 
     assert isinstance(frame, Frame)
@@ -252,7 +227,7 @@ def test_read_bgr_mode(omnicamera_cls: tuple) -> None:
 
     cam = camera_cls(color_mode=ColorMode.BGR)
     cam.connect()
-    mock_cam.poll_frame_np_with_seq.return_value = (raw, 1)
+    mock_cam.poll_frame_np.return_value = raw
     frame = cam.read()
 
     assert isinstance(frame, Frame)
@@ -269,7 +244,7 @@ def test_read_gray_mode(omnicamera_cls: tuple) -> None:
 
     cam = camera_cls(color_mode=ColorMode.GRAY)
     cam.connect()
-    mock_cam.poll_frame_np_with_seq.return_value = (raw, 1)
+    mock_cam.poll_frame_np.return_value = raw
     frame = cam.read()
 
     assert isinstance(frame, Frame)
@@ -292,13 +267,13 @@ def test_read_timeout_raises(omnicamera_cls: tuple) -> None:
     cam = camera_cls()
     cam.connect()
 
-    mock_cam.poll_frame_np_with_seq.return_value = (None, 0)
+    mock_cam.poll_frame_np.return_value = None
     with pytest.raises(CaptureTimeoutError):
         cam.read(timeout=0.01)
 
 
 def test_read_sequence_increments(omnicamera_cls: tuple) -> None:
-    """read() reports sequence from the hardware counter."""
+    """read() increments sequence on each call (1, 2, 3 …)."""
     camera_cls, mock_omni_camera = omnicamera_cls
     raw = np.zeros((480, 640, 3), dtype=np.uint8)
     mock_cam = mock_omni_camera.Camera.return_value
@@ -306,8 +281,6 @@ def test_read_sequence_increments(omnicamera_cls: tuple) -> None:
 
     cam = camera_cls()
     cam.connect()
-
-    mock_cam.poll_frame_np_with_seq.side_effect = [(raw, 1), (raw, 2), (raw, 3)]
 
     f1 = cam.read()
     f2 = cam.read()
@@ -318,7 +291,7 @@ def test_read_sequence_increments(omnicamera_cls: tuple) -> None:
 
 
 def test_read_latest_returns_frame(omnicamera_cls: tuple) -> None:
-    """read_latest() returns a Frame when poll_frame_np_with_seq returns a new frame."""
+    """read_latest() returns a Frame when poll_frame_np returns a frame."""
     camera_cls, mock_omni_camera = omnicamera_cls
     raw = np.zeros((480, 640, 3), dtype=np.uint8)
     mock_cam = mock_omni_camera.Camera.return_value
@@ -326,7 +299,7 @@ def test_read_latest_returns_frame(omnicamera_cls: tuple) -> None:
 
     cam = camera_cls()
     cam.connect()
-    mock_cam.poll_frame_np_with_seq.return_value = (raw, 1)
+    mock_cam.poll_frame_np.return_value = raw
 
     frame = cam.read_latest()
     assert isinstance(frame, Frame)
@@ -342,7 +315,7 @@ def test_read_latest_not_connected_raises(omnicamera_cls: tuple) -> None:
 
 
 def test_read_latest_returns_cached_frame_when_poll_none(omnicamera_cls: tuple) -> None:
-    """read_latest() returns cached frame when poll_frame_np_with_seq returns no new frame."""
+    """read_latest() returns cached frame when poll_frame_np returns None."""
     camera_cls, mock_omni_camera = omnicamera_cls
     raw = np.zeros((480, 640, 3), dtype=np.uint8)
     raw[:, :, 0] = 42
@@ -352,7 +325,7 @@ def test_read_latest_returns_cached_frame_when_poll_none(omnicamera_cls: tuple) 
     cam = camera_cls()
     cam.connect()
 
-    mock_cam.poll_frame_np_with_seq.return_value = (None, 0)
+    mock_cam.poll_frame_np.return_value = None
     seq_before = cam._sequence  # noqa: SLF001
     frame = cam.read_latest()
 
@@ -370,31 +343,10 @@ def test_read_latest_raises_when_no_cache_and_poll_none(omnicamera_cls: tuple) -
     cam.connect()
 
     cam._last_frame = None  # noqa: SLF001
-    mock_cam.poll_frame_np_with_seq.return_value = (None, 0)
+    mock_cam.poll_frame_np.return_value = None
 
     with pytest.raises(CaptureError, match="No frame available"):
         cam.read_latest()
-
-
-def test_read_latest_sequence_from_hw_counter(omnicamera_cls: tuple) -> None:
-    """read_latest() uses the hw sequence counter — repeated same seq does not inflate."""
-    camera_cls, mock_omni_camera = omnicamera_cls
-    raw = np.zeros((480, 640, 3), dtype=np.uint8)
-    mock_cam = mock_omni_camera.Camera.return_value
-    mock_cam.poll_frame_np.return_value = raw
-
-    cam = camera_cls()
-    cam.connect()
-
-    mock_cam.poll_frame_np_with_seq.return_value = (raw, 5)
-    f1 = cam.read_latest()
-    f2 = cam.read_latest()
-    assert f1.sequence == 5
-    assert f2.sequence == 5
-
-    mock_cam.poll_frame_np_with_seq.return_value = (raw, 6)
-    f3 = cam.read_latest()
-    assert f3.sequence == 6
 
 
 def test_disconnect_closes_camera(omnicamera_cls: tuple) -> None:
