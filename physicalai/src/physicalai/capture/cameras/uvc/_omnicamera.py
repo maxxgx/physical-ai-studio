@@ -48,6 +48,13 @@ class OmniCamera(Camera):
 
     @staticmethod
     def _resolve_device_info(infos: list[omni_camera.CameraInfo], device_id: int | str) -> omni_camera.CameraInfo:
+        # Try unique_id match first for string identifiers.
+        if isinstance(device_id, str) and device_id:
+            match = next((c for c in infos if c.unique_id and c.unique_id == device_id), None)
+            if match is not None:
+                return match
+
+        # Fall back to index-based resolution.
         normalized_device_id: int
         if isinstance(device_id, str):
             if device_id.isdecimal():
@@ -61,7 +68,7 @@ class OmniCamera(Camera):
             else:
                 msg = (
                     "OmniCamera backend does not support device path strings on this platform. "
-                    "Use an integer camera index instead."
+                    "Use an integer camera index or a stable unique_id instead."
                 )
                 raise ValueError(msg)
         else:
@@ -238,17 +245,20 @@ class OmniCamera(Camera):
         infos = omni_camera.query(only_usable=False)
         return [
             DeviceInfo(
-                device_id=str(info.index),
+                device_id=info.unique_id if (info.id_stable and info.unique_id) else str(info.index),
                 index=info.index,
                 name=info.name,
                 driver="uvc",
-                hardware_id="",
+                hardware_id=info.unique_id or None,
+                id_stable=bool(info.id_stable and info.unique_id),
                 manufacturer="",
                 model=info.name,
                 metadata={
                     "description": info.description,
                     "misc": info.misc,
                     "backend": "omnicamera",
+                    "id_stable": bool(info.id_stable),
+                    "unique_id": info.unique_id or "",
                 },
             )
             for info in infos

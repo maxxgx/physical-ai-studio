@@ -35,7 +35,8 @@ def omnicamera_cls():  # noqa: ANN201
     mock_camera_info.description = "Test Camera Description"
     mock_camera_info.misc = ""
     mock_camera_info.can_open.return_value = True
-    mock_camera_info.unique_id = "test-unique-id-0"
+    mock_camera_info.unique_id = ""
+    mock_camera_info.id_stable = False
 
     mock_omni_camera.query.return_value = [mock_camera_info]
 
@@ -463,6 +464,8 @@ def test_discover_keeps_unopenable(omnicamera_cls: tuple) -> None:
     cam_info_0.description = ""
     cam_info_0.misc = ""
     cam_info_0.can_open.return_value = True
+    cam_info_0.unique_id = ""
+    cam_info_0.id_stable = False
 
     cam_info_1 = mock.MagicMock()
     cam_info_1.index = 1
@@ -470,6 +473,8 @@ def test_discover_keeps_unopenable(omnicamera_cls: tuple) -> None:
     cam_info_1.description = ""
     cam_info_1.misc = ""
     cam_info_1.can_open.return_value = False
+    cam_info_1.unique_id = ""
+    cam_info_1.id_stable = False
 
     mock_omni_camera.query.return_value = [cam_info_0, cam_info_1]
 
@@ -510,6 +515,81 @@ def test_device_selector_invalid_path_raises_value_error(omnicamera_cls: tuple) 
     cam = camera_cls(device_id="/dev/sda1")
     with pytest.raises(ValueError, match="integer camera index"):
         cam.connect()
+
+
+# ------------------------------------------------------------------
+# Stable ID tests
+# ------------------------------------------------------------------
+
+
+def test_discover_uses_unique_id_when_stable(omnicamera_cls: tuple) -> None:
+    """discover() uses unique_id as device_id when id_stable and unique_id are truthy."""
+    camera_cls, mock_omni_camera = omnicamera_cls
+    mock_camera_info = mock_omni_camera.query.return_value[0]
+    mock_camera_info.index = 0
+    mock_camera_info.name = "Stable Camera"
+    mock_camera_info.description = ""
+    mock_camera_info.misc = ""
+    mock_camera_info.unique_id = "abc-123-stable"
+    mock_camera_info.id_stable = True
+
+    devices = camera_cls.discover()
+
+    assert len(devices) == 1
+    assert devices[0].device_id == "abc-123-stable"
+    assert devices[0].hardware_id == "abc-123-stable"
+    assert devices[0].id_stable is True
+    assert devices[0].metadata["unique_id"] == "abc-123-stable"
+    assert devices[0].metadata["id_stable"] is True
+
+
+def test_discover_falls_back_to_index_when_id_unstable(omnicamera_cls: tuple) -> None:
+    """discover() falls back to str(index) when id_stable is False."""
+    camera_cls, mock_omni_camera = omnicamera_cls
+    mock_camera_info = mock_omni_camera.query.return_value[0]
+    mock_camera_info.index = 3
+    mock_camera_info.name = "Unstable Camera"
+    mock_camera_info.description = ""
+    mock_camera_info.misc = ""
+    mock_camera_info.unique_id = "some-uid"
+    mock_camera_info.id_stable = False
+
+    devices = camera_cls.discover()
+
+    assert len(devices) == 1
+    assert devices[0].device_id == "3"
+    assert devices[0].hardware_id == "some-uid"
+    assert devices[0].id_stable is False
+
+
+def test_connect_resolves_by_unique_id(omnicamera_cls: tuple) -> None:
+    """connect() resolves device by unique_id string when it matches a camera."""
+    camera_cls, mock_omni_camera = omnicamera_cls
+
+    cam_info_0 = mock.MagicMock()
+    cam_info_0.index = 0
+    cam_info_0.name = "Camera Zero"
+    cam_info_0.description = ""
+    cam_info_0.misc = ""
+    cam_info_0.unique_id = "uid-zero"
+    cam_info_0.id_stable = True
+    cam_info_0.can_open.return_value = True
+
+    cam_info_1 = mock.MagicMock()
+    cam_info_1.index = 1
+    cam_info_1.name = "Camera One"
+    cam_info_1.description = ""
+    cam_info_1.misc = ""
+    cam_info_1.unique_id = "uid-one"
+    cam_info_1.id_stable = True
+    cam_info_1.can_open.return_value = True
+
+    mock_omni_camera.query.return_value = [cam_info_0, cam_info_1]
+
+    cam = camera_cls(device_id="uid-one")
+    cam.connect()
+    assert cam.is_connected
+    mock_omni_camera.Camera.assert_called_with(cam_info_1)
 
 
 # ------------------------------------------------------------------
