@@ -2,7 +2,6 @@ import asyncio
 import base64
 from typing import Any
 
-import cv2
 import numpy as np
 from lerobot.datasets.feature_utils import combine_feature_dicts
 from lerobot.datasets.pipeline_features import aggregate_pipeline_dataset_features, create_initial_features
@@ -11,12 +10,15 @@ from loguru import logger
 from physicalai.capture import SharedCamera
 from physicalai.capture.errors import CaptureError
 from physicalai.data import Observation
+from turbojpeg import TJPF_RGB, TurboJPEG
 
 from robots.robot_client import RobotClient
 from robots.robot_client_factory import RobotClientFactory
 from schemas.environment import EnvironmentWithRelations, TeleoperatorRobotWithRobot
 from schemas.project_camera import Camera
 from utils.camera_factory import build_shared_camera
+
+tj = TurboJPEG()
 
 
 class EnvironmentIntegration:
@@ -46,7 +48,7 @@ class EnvironmentIntegration:
         loop = asyncio.get_running_loop()
         for cam_cfg in self.environment.cameras:
             cam_id = str(cam_cfg.id)
-            cam = build_shared_camera(config=cam_cfg, strict=True, idle_timeout=5.0)
+            cam = build_shared_camera(config=cam_cfg, strict=False, idle_timeout=5.0)
             logger.info(f"Camera {cam_id} initialized: {cam_cfg}")
             try:
                 await loop.run_in_executor(None, cam.connect)
@@ -163,8 +165,8 @@ class EnvironmentIntegration:
     def _base_64_encode_observation(self, observation: np.ndarray | None) -> str:
         if observation is None:
             return ""
-        _, imagebytes = cv2.imencode(".jpg", observation)
-        return base64.b64encode(imagebytes).decode()
+        _imagebytes = tj.encode(observation, pixel_format=TJPF_RGB, quality=80)
+        return base64.b64encode(_imagebytes).decode()
 
     def _remap_camera_observations(self, observations: dict) -> dict:
         """Remap camera observations from camera ID keys to lowercase camera name keys."""

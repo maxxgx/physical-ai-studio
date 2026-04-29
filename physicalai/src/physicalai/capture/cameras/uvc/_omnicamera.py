@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 import pynokhwa as omni_camera  # rename omni_camera references
-from loguru import logger
 
 from physicalai.capture.camera import Camera, ColorMode
 from physicalai.capture.cameras.uvc._camera_setting import CameraSetting  # noqa: PLC2701
@@ -85,8 +84,8 @@ class OmniCamera(Camera):
             msg = "Camera cannot be opened"
             raise CaptureError(msg)
 
-        opts = self._cam.get_format_options()
-        if not opts:
+        fmts = self._cam.get_format_options()
+        if not fmts:
             msg = (
                 "Camera reports no supported formats. This typically means the device "
                 "only outputs formats unsupported by the nokhwa backend (e.g. BGRA from "
@@ -94,24 +93,16 @@ class OmniCamera(Camera):
             )
             raise CaptureError(msg)
 
-        try:
-            # noqa: TD002, TD003, FIX002 # TODO: Switch back to keyword args when omni_camera type stubs support them.
-            opts = opts.prefer_width_range(self._width, self._width)
-            opts = opts.prefer_height_range(self._height, self._height)
-            opts = opts.prefer_fps_range(self._fps, self._fps)
-            return opts.resolve(key=lambda x: x.width)
-        except (RuntimeError, ValueError, TypeError):
-            try:
-                opts2 = self._cam.get_format_options()
-                opts2 = opts2.prefer_width_range(self._width)
-                opts2 = opts2.prefer_height_range(self._height)
-                return opts2.resolve()
-            except (RuntimeError, ValueError, TypeError):
-                try:
-                    return self._cam.get_format_options().resolve_default()
-                except (RuntimeError, ValueError, TypeError) as err:
-                    msg = "No compatible camera format found"
-                    raise CaptureError(msg) from err
+        for f in fmts:
+            if f.width == self._width and f.height == self._height and round(f.frame_rate) == round(self._fps):
+                return f
+
+        available = sorted({(f.width, f.height, int(f.frame_rate)) for f in fmts})
+        available_str = ", ".join(f"{w}x{h}@{fps}" for w, h, fps in available)
+        msg = (
+            f"No camera format matching {self._width}x{self._height}@{self._fps}fps. Available formats: {available_str}"
+        )
+        raise CaptureError(msg)
 
     def connect(self, timeout: float = 5.0) -> None:
         # On macOS, nokhwa_initialize() fires an async AVFoundation permission
@@ -131,12 +122,6 @@ class OmniCamera(Camera):
         try:
             self._cam = omni_camera.Camera(info)
             fmt = self._resolve_format()
-
-            if fmt.width != self._width or fmt.height != self._height or fmt.frame_rate != self._fps:
-                logger.warning(
-                    f"Requested {self._width}x{self._height}@{self._fps}fps, "
-                    f"using {fmt.width}x{fmt.height}@{fmt.frame_rate}fps",
-                )
 
             self._cam.open(fmt)
         except RuntimeError as exc:

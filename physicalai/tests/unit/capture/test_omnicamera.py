@@ -54,6 +54,8 @@ def omnicamera_cls():  # noqa: ANN201
     mock_fmt.height = 480
     mock_fmt.frame_rate = 30
     mock_fmt_opts.resolve.return_value = mock_fmt
+    mock_fmt_opts.__iter__ = mock.Mock(return_value=iter([mock_fmt]))
+    mock_fmt_opts.__bool__ = mock.Mock(return_value=True)
 
     mock_cam.poll_frame_np.return_value = np.zeros((480, 640, 3), dtype=np.uint8)
     mock_cam.poll_frame_np_with_seq.return_value = (np.zeros((480, 640, 3), dtype=np.uint8), 1)
@@ -197,23 +199,21 @@ def test_connect_timeout_raises_when_poll_always_none(omnicamera_cls: tuple) -> 
         cam.connect(timeout=0.01)
 
 
-def test_connect_format_warning_on_mismatch(omnicamera_cls: tuple) -> None:
-    """connect() emits a loguru warning when resolved format differs from requested."""
+def test_connect_format_mismatch_raises(omnicamera_cls: tuple) -> None:
+    """connect() raises CaptureError when no exact format match exists."""
     camera_cls, mock_omni_camera = omnicamera_cls
     mock_cam = mock_omni_camera.Camera.return_value
     mock_fmt_opts = mock_cam.get_format_options.return_value
     mock_fmt = mock.MagicMock()
     mock_fmt.width = 1280
-    mock_fmt.height = 480
+    mock_fmt.height = 720
     mock_fmt.frame_rate = 30
-    mock_fmt_opts.resolve.return_value = mock_fmt
+    mock_fmt_opts.__iter__ = mock.Mock(return_value=iter([mock_fmt]))
+    mock_fmt_opts.__bool__ = mock.Mock(return_value=True)
 
     cam = camera_cls(width=640, height=480, fps=30)
-    with mock.patch("loguru.logger.warning") as mock_warning:
+    with pytest.raises(CaptureError, match="No camera format matching"):
         cam.connect()
-    mock_warning.assert_called_once()
-    warning_msg = mock_warning.call_args[0][0]
-    assert "640" in warning_msg or "1280" in warning_msg
 
 
 def test_read_returns_frame(omnicamera_cls: tuple) -> None:
