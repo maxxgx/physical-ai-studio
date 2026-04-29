@@ -33,6 +33,10 @@ class CameraWorkerRegistry:
             if worker_id in self._workers:
                 raise ValueError(f"Worker {worker_id} already exists")
 
+            for existing in self._workers.values():
+                if existing.config.fingerprint == worker.config.fingerprint:
+                    raise ValueError(f"Camera '{worker.config.name}' is already streaming")
+
             if len(self._workers) >= self._max_workers:
                 raise ValueError(f"Maximum number of workers ({self._max_workers}) reached")
 

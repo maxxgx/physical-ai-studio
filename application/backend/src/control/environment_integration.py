@@ -8,14 +8,15 @@ from lerobot.datasets.feature_utils import combine_feature_dicts
 from lerobot.datasets.pipeline_features import aggregate_pipeline_dataset_features, create_initial_features
 from lerobot.processor import make_default_processors
 from loguru import logger
+from physicalai.capture import SharedCamera
+from physicalai.capture.errors import CaptureError
 from physicalai.data import Observation
 
 from robots.robot_client import RobotClient
 from robots.robot_client_factory import RobotClientFactory
 from schemas.environment import EnvironmentWithRelations, TeleoperatorRobotWithRobot
 from schemas.project_camera import Camera
-from utils.async_camera_capture import AsyncCameraCapture
-from workers.camera_worker import create_frames_source_from_camera
+from utils.camera_factory import build_shared_camera
 
 
 class EnvironmentIntegration:
@@ -26,7 +27,7 @@ class EnvironmentIntegration:
     action_keys: list[str] = []
     follower: RobotClient | None = None
     leader: RobotClient | None = None
-    frame_captures: dict[str, AsyncCameraCapture]
+    frame_captures: dict[str, SharedCamera]
 
     def __init__(self, environment: EnvironmentWithRelations, robot_client_factory: RobotClientFactory):
         self.environment = environment
@@ -42,17 +43,20 @@ class EnvironmentIntegration:
         self.action_keys = self.follower.features()
 
         self.frame_captures = {}
+        loop = asyncio.get_running_loop()
         for cam_cfg in self.environment.cameras:
             cam_id = str(cam_cfg.id)
-            cam = create_frames_source_from_camera(cam_cfg)  # gives you the object with connect/read
-
-            cap = AsyncCameraCapture(
-                camera=cam,
-                fps=cam_cfg.payload.fps,
-                use_cached_on_failure=True,
-            )
-            await cap.start()
-            self.frame_captures[cam_id] = cap
+            cam = build_shared_camera(config=cam_cfg, strict=True, idle_timeout=5.0)
+            logger.info(f"Camera {cam_id} initialized: {cam_cfg}")
+            try:
+                await loop.run_in_executor(None, cam.connect)
+            except CaptureError:
+                logger.error(
+                    f"Camera {cam_cfg.name}: resolution mismatch with existing publisher. "
+                    f"Close other camera streams and retry.",
+                )
+                raise
+            self.frame_captures[cam_id] = cam
 
         await asyncio.sleep(1)  # sleep for camera warmup
         await self.follower.connect()
@@ -96,10 +100,9 @@ class EnvironmentIntegration:
         if self.follower and self.frame_captures:
             observation = (await self.follower.read_state())["state"]
 
-            for cam_id, cap in self.frame_captures.items():
-                frame, t_perf, ok, err, seq = await cap.get_latest()
-                if ok and frame is not None:
-                    observation[cam_id] = frame
+            for cam_id, cam in self.frame_captures.items():
+                frame = cam.read_latest()  # read_lastest is not blocking
+                observation[cam_id] = frame.data
 
             return observation
 
@@ -187,8 +190,9 @@ class EnvironmentIntegration:
         if self.leader:
             await self.leader.disconnect()
 
-        for cap in self.frame_captures.values():
+        loop = asyncio.get_running_loop()
+        for cam in self.frame_captures.values():
             try:
-                await cap.stop()
+                await loop.run_in_executor(None, cam.disconnect)
             except Exception:
                 logger.info("Failed stopping a camera thread. Ignoring")

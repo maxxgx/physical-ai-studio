@@ -1,29 +1,23 @@
-import asyncio
+from __future__ import annotations
 
-import cv2
-import numpy as np
+import asyncio
+from typing import TYPE_CHECKING
+
 from fastapi.websockets import WebSocketDisconnect
-from frame_source import FrameSourceFactory
-from frame_source.video_capture_base import VideoCaptureBase
 from loguru import logger
+from physicalai.capture.errors import CaptureError, CaptureTimeoutError
+from turbojpeg import TJPF_RGB, TurboJPEG
 
 from schemas.project_camera import Camera
-from utils.async_camera_capture import AsyncCameraCapture
+from utils.camera_factory import build_direct_camera
 from workers.transport.worker_transport import WorkerTransport
 from workers.transport_worker import TransportWorker, WorkerState, WorkerStatus
 
-
-def create_frames_source_from_camera(camera: Camera) -> VideoCaptureBase:
-    """Very FrameSource factory call from camera schema object."""
-    return FrameSourceFactory.create(
-        "webcam" if camera.driver == "usb_camera" else camera.driver,
-        camera.fingerprint,
-        **camera.payload.model_dump(),
-    )
+if TYPE_CHECKING:
+    from physicalai.capture.camera import Camera as CameraABC
 
 
-class EmptyFrameError(Exception):
-    pass
+tj = TurboJPEG()
 
 
 class CameraWorker(TransportWorker[Camera]):
@@ -33,17 +27,30 @@ class CameraWorker(TransportWorker[Camera]):
         self,
         config: Camera,
         transport: WorkerTransport,
-    ):
+    ) -> None:
         super().__init__(transport)
         self.config = config
-
-        cam = create_frames_source_from_camera(config)
-        self.connection = AsyncCameraCapture(camera=cam, fps=config.payload.fps)
+        cam: CameraABC | None = build_direct_camera(config)
+        if cam is None:
+            raise RuntimeError(f"Camera {config.id} not found.")
+        self.cam = cam
 
     async def run(self) -> None:
         """Main worker loop."""
         try:
             await self.transport.connect()
+
+            loop = asyncio.get_running_loop()
+            try:
+                await loop.run_in_executor(None, self.cam.connect)
+            except CaptureError as exc:
+                self.state = WorkerState.ERROR
+                self.error_message = str(exc)
+                logger.error(f"Failed to connect camera {self.config.name}: {exc}")
+                await self.transport.send_json(
+                    WorkerStatus(state=self.state, config=self.config, message=str(exc)).to_json()
+                )
+                return
 
             self.state = WorkerState.RUNNING
             await self.transport.send_json(
@@ -69,22 +76,17 @@ class CameraWorker(TransportWorker[Camera]):
 
     async def _capture_loop(self) -> None:
         """Continuously capture and send frames."""
-        try:
-            await self.connection.start(self._send_frame)
-            await self.connection.wait()
-        except asyncio.CancelledError:
-            pass
-        except Exception as e:
-            logger.error(f"Frame capture error: {e}")
-            self._stop_requested = True
-            raise
+        while not self._stop_requested:
+            try:
+                frame = await self.cam.async_read(timeout=1.0)
+            except CaptureTimeoutError:
+                continue
+            except CaptureError as exc:
+                logger.error(f"capture error on {self.config.fingerprint}: {exc}")
+                break
 
-    async def _send_frame(self, frame: np.ndarray) -> None:
-        """Send frame via transport."""
-        success, jpeg = cv2.imencode(".jpg", frame)
-        if not success or jpeg is None:
-            raise RuntimeError("Failed to encode frame")
-        await self.transport.send_bytes(jpeg.tobytes())
+            jpeg_bytes = tj.encode(frame.data, pixel_format=TJPF_RGB, quality=80)
+            await self.transport.send_bytes(jpeg_bytes)
 
     async def _command_loop(self) -> None:
         """Handle incoming commands from client."""
@@ -112,5 +114,9 @@ class CameraWorker(TransportWorker[Camera]):
     async def shutdown(self) -> None:
         """Graceful shutdown."""
         logger.info(f"Shutting down camera: {self.config.name}")
+        self._stop_requested = True
         await super().shutdown()
-        await self.connection.stop()
+        if self.cam is not None:
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, self.cam.disconnect)
+            self.cam = None

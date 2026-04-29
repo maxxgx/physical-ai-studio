@@ -88,6 +88,19 @@ class SharedCamera(Camera):
         camera_type: Logical camera type (auto-spawn mode), or ``None`` to
             subscribe to an existing publisher only.
         color_mode: Pixel format for returned frames.
+        zero_copy: If True, returned frames reference the iceoryx2 SHM
+            buffer directly (read-only). Otherwise, frames are copied.
+        service_name: Override the iceoryx2 service name. Defaults to one
+            derived from ``camera_type`` and identifying ``camera_kwargs``.
+        strict: If True and an existing publisher's frame dimensions do
+            not match ``width``/``height`` in ``camera_kwargs``,
+            :meth:`connect` raises :class:`CaptureError`. If False
+            (default), the mismatch is logged as a warning and the
+            existing publisher's resolution is used.
+        idle_timeout: Seconds with zero subscribers before the publisher
+            self-exits.  Lower values (e.g. 0.5) suit preview streams
+            where resolution may change frequently; higher values
+            (e.g. 5.0) suit recording sessions.
     """
 
     def __init__(
@@ -97,6 +110,8 @@ class SharedCamera(Camera):
         color_mode: ColorMode = ColorMode.RGB,
         zero_copy: bool = False,
         service_name: str | None = None,
+        strict: bool = False,
+        idle_timeout: float = 5.0,
         **camera_kwargs: object,
     ) -> None:
         try:
@@ -121,6 +136,8 @@ class SharedCamera(Camera):
         self._camera_kwargs = camera_kwargs
         self._service_name: str = service_name
         self._zero_copy = zero_copy
+        self._strict = strict
+        self._idle_timeout = idle_timeout
         self._publisher: CameraPublisher | None = None
         self._connected = False
         self._latest: Frame | None = None
@@ -136,8 +153,17 @@ class SharedCamera(Camera):
         *,
         color_mode: ColorMode = ColorMode.RGB,
         zero_copy: bool = False,
+        strict: bool = False,
+        idle_timeout: float = 5.0,
     ) -> SharedCamera:
-        return cls(None, color_mode=color_mode, zero_copy=zero_copy, service_name=service_name)
+        return cls(
+            None,
+            color_mode=color_mode,
+            zero_copy=zero_copy,
+            service_name=service_name,
+            strict=strict,
+            idle_timeout=idle_timeout,
+        )
 
     def connect(self, timeout: float = 5.0) -> None:
         if self._connected:
@@ -148,7 +174,8 @@ class SharedCamera(Camera):
             from ._spec import CameraSpec  # noqa: PLC0415
 
             spec = CameraSpec(self._camera_type, self._camera_kwargs)
-            publisher = CameraPublisher(spec, self._service_name)
+            logger.warning(f"camera spec: {spec}")
+            publisher = CameraPublisher(spec, self._service_name, idle_timeout=self._idle_timeout)
             try:
                 publisher.start()
             except Exception as exc:
@@ -188,6 +215,7 @@ class SharedCamera(Camera):
             sample = self._subscriber.receive()
             if sample is not None:
                 self._latest = self._decode_sample(sample)
+                self._check_config_match(self._latest)
                 self._connected = True
                 return
 
@@ -239,6 +267,8 @@ class SharedCamera(Camera):
 
         self._held_sample = None  # release previous borrow before draining
         newest_sample = None
+        # Bounded queue: iceoryx2's default subscriber buffer is small (typically 1-2 samples).
+        # The publisher sends one frame per camera tick, and the subscriber drains on every read_latest() call.
         while True:
             sample = self._subscriber.receive()
             if sample is None:
@@ -283,6 +313,58 @@ class SharedCamera(Camera):
         self._node = None
         self._connected = False
         self._latest = None
+
+    def _check_config_match(self, frame: Frame) -> None:
+        """Validate that an existing publisher's frame matches requested config.
+
+        Compares the first received frame's dimensions against the
+        ``width``/``height`` requested in ``camera_kwargs``. Behaviour:
+
+        - No mismatch: silent.
+        - Mismatch and ``strict=True``: disconnect and raise
+          :class:`CaptureError`.
+        - Mismatch and ``strict=False``: log a warning and continue
+          using the existing publisher's resolution.
+
+        Only fires when an external publisher already existed at connect
+        time (i.e. we attached rather than spawned). When this instance
+        spawned the publisher itself, the requested config is honoured by
+        construction and the check is a no-op.
+
+        Raises:
+            CaptureError: If ``strict`` is True and dimensions mismatch.
+        """
+        want_w = self._camera_kwargs.get("width")
+        want_h = self._camera_kwargs.get("height")
+        if want_w is None and want_h is None:
+            return
+
+        data = frame.data
+        if data.ndim < 2:  # noqa: PLR2004 guard in case of depth or other non-2D frame types
+            return
+        actual_h, actual_w = data.shape[0], data.shape[1]
+
+        w_ok = want_w is None or actual_w == want_w
+        h_ok = want_h is None or actual_h == want_h
+        if w_ok and h_ok:
+            return
+
+        want_str = f"{want_w or '?'}x{want_h or '?'}"
+        actual_str = f"{actual_w}x{actual_h}"
+
+        if self._strict:
+            self._do_disconnect()
+            msg = (
+                f"existing publisher config mismatch on {self.device_id}: "
+                f"requested {want_str}, got {actual_str}. "
+                f"Please disconnect existing camera streams and try again."
+            )
+            raise CaptureError(msg)
+
+        logger.warning(
+            f"camera {self.device_id}: requested {want_str}, "
+            f"got {actual_str} from existing publisher. Using existing config.",
+        )
 
     @property
     def is_connected(self) -> bool:

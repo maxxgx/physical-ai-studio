@@ -4,7 +4,6 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Query, WebSocket, status
 from fastapi.responses import Response
-from frame_source import FrameSourceFactory
 from loguru import logger
 
 from api.dependencies import CameraRegistryDep
@@ -16,22 +15,21 @@ from workers.transport.websocket_transport import WebSocketTransport
 
 router = APIRouter(prefix="/api/cameras", tags=["Cameras"])
 
+_DEFAULT_FORMATS: list[SupportedCameraFormat] = [
+    SupportedCameraFormat(width=640, height=480, fps=[30]),
+    SupportedCameraFormat(width=1280, height=720, fps=[30]),
+    SupportedCameraFormat(width=1920, height=1080, fps=[30]),
+]
+
 
 @router.get("/supported_formats/{driver}")
 async def get_supported_formats(
-    driver: str,
-    fingerprint: str,
+    driver: str,  # noqa: ARG001
+    fingerprint: str,  # noqa: ARG001
 ) -> list[SupportedCameraFormat]:
     """Returns the supported camera resolution and fps associated to the camera"""
-    camera = FrameSourceFactory.create(driver if driver != "usb_camera" else "webcam", source=fingerprint)
-    formats = camera.get_supported_formats()
-
-    if formats is None:
-        return []
-
-    return [
-        SupportedCameraFormat(width=format["width"], height=format["height"], fps=format["fps"]) for format in formats
-    ]
+    # TODO: Replace with proper format discovery once physicalai.capture exposes it.
+    return _DEFAULT_FORMATS
 
 
 def get_camera_from_query(websocket: WebSocket) -> ProjectCamera:
@@ -63,8 +61,7 @@ async def camera_websocket(
     registry: CameraRegistryDep,
     camera: Annotated[ProjectCamera, Depends(get_camera_from_query)],
 ) -> None:
-    """
-    WebSocket endpoint for camera streaming.
+    """WebSocket endpoint for camera streaming.
 
     Query Parameters:
         camera: JSON serialized ProjectCamera
@@ -82,7 +79,6 @@ async def camera_websocket(
     worker_id = uuid4()
     camera.id = worker_id
 
-    # Use WebSocket transport
     transport = WebSocketTransport(websocket)
     worker = CameraWorker(camera, transport)
 
