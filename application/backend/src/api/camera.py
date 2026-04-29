@@ -1,4 +1,5 @@
 import json
+from collections import defaultdict
 from typing import Annotated
 from uuid import uuid4
 
@@ -15,21 +16,41 @@ from workers.transport.websocket_transport import WebSocketTransport
 
 router = APIRouter(prefix="/api/cameras", tags=["Cameras"])
 
-_DEFAULT_FORMATS: list[SupportedCameraFormat] = [
-    SupportedCameraFormat(width=640, height=480, fps=[30]),
-    SupportedCameraFormat(width=1280, height=720, fps=[30]),
-    SupportedCameraFormat(width=1920, height=1080, fps=[30]),
-]
+
+def _formats_to_response(raw: list[tuple[int, int, int]]) -> list[SupportedCameraFormat]:
+    """Group (w, h, fps) tuples into SupportedCameraFormat responses."""
+    grouped: dict[tuple[int, int], list[int]] = defaultdict(list)
+    for w, h, fps in raw:
+        grouped[(w, h)].append(fps)
+
+    return [
+        SupportedCameraFormat(width=w, height=h, fps=sorted(fps_list)) for (w, h), fps_list in sorted(grouped.items())
+    ]
+
+
+def _query_formats(driver: str, fingerprint: str) -> list[SupportedCameraFormat]:
+    """Query real formats from a device via physicalai.capture."""
+    if driver == "usb_camera":
+        from physicalai.capture import UVCCamera
+
+        return _formats_to_response(UVCCamera.query_formats(fingerprint))
+
+    if driver == "realsense":
+        from physicalai.capture.cameras.realsense import RealSenseCamera
+
+        return _formats_to_response(RealSenseCamera.query_formats(fingerprint))
+
+    msg = f"Format discovery not supported for driver {driver!r}"
+    raise ValueError(msg)
 
 
 @router.get("/supported_formats/{driver}")
 async def get_supported_formats(
-    driver: str,  # noqa: ARG001
-    fingerprint: str,  # noqa: ARG001
+    driver: str,
+    fingerprint: str,
 ) -> list[SupportedCameraFormat]:
-    """Returns the supported camera resolution and fps associated to the camera"""
-    # TODO: Replace with proper format discovery once physicalai.capture exposes it.
-    return _DEFAULT_FORMATS
+    """Returns the supported camera resolution and fps associated to the camera."""
+    return _query_formats(driver, fingerprint)
 
 
 def get_camera_from_query(websocket: WebSocket) -> ProjectCamera:

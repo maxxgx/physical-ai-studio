@@ -226,6 +226,19 @@ class Camera(ABC):
         return []
 
     @classmethod
+    def query_formats(cls, device_id: str) -> list[tuple[int, int, int]]:  # noqa: ARG003
+        """Query supported formats for a device without opening a stream.
+
+        Args:
+            device_id: Device index, path, or serial number.
+
+        Returns:
+            Sorted list of ``(width, height, fps)`` tuples.
+            Empty list if format discovery is not supported.
+        """
+        return []
+
+    @classmethod
     def from_config(cls, config: dict) -> Self:
         """Create an instance from a configuration dictionary.
 

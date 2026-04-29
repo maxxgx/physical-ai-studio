@@ -296,3 +296,36 @@ class RealSenseCamera(DepthMixin, Camera):
         from ._discover import discover_realsense  # noqa: PLC0415
 
         return discover_realsense()
+
+    @classmethod
+    def query_formats(cls, device_id: str) -> list[tuple[int, int, int]]:
+        """Query supported color stream formats for a RealSense device.
+
+        Args:
+            device_id: Serial number of the device.
+
+        Returns:
+            Sorted list of ``(width, height, fps)`` tuples.
+        """
+        rs_any = cast("Any", rs)
+        ctx = rs_any.context()
+
+        target_dev = None
+        for dev in ctx.query_devices():
+            serial = dev.get_info(rs_any.camera_info.serial_number)
+            if serial == str(device_id):
+                target_dev = dev
+                break
+
+        if target_dev is None:
+            return []
+
+        formats: set[tuple[int, int, int]] = set()
+        for sensor in target_dev.query_sensors():
+            for profile in sensor.get_stream_profiles():
+                if profile.stream_type() != rs_any.stream.color:
+                    continue
+                vp = profile.as_video_stream_profile()
+                formats.add((vp.width(), vp.height(), vp.fps()))
+
+        return sorted(formats)

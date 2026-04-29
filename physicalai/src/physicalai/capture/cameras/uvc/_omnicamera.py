@@ -249,6 +249,23 @@ class OmniCamera(Camera):
             for info in infos
         ]
 
+    @classmethod
+    def query_formats(cls, device_id: str) -> list[tuple[int, int, int]]:
+        """Query supported formats for a device without opening a stream.
+
+        Args:
+            device_id: Device index or unique_id string.
+
+        Returns:
+            Sorted list of ``(width, height, fps)`` tuples.
+        """
+        infos = omni_camera.query(only_usable=False)
+        resolved_id: int | str = int(device_id) if device_id.isdecimal() else device_id
+        info = cls._resolve_device_info(infos, resolved_id)
+        cam = omni_camera.Camera(info)
+        fmts = cam.get_format_options()
+        return sorted({(f.width, f.height, int(f.frame_rate)) for f in fmts})
+
     def get_settings(self) -> list[CameraSetting]:
         if not self._connected or self._cam is None:
             raise NotConnectedError
