@@ -6,15 +6,14 @@ from __future__ import annotations
 import ctypes
 import importlib.util
 import pickle
-import sys
-from uuid import uuid4
 from unittest.mock import MagicMock, patch
+from uuid import uuid4
 
 import numpy as np
 import pytest
 
 from physicalai.capture.camera import ColorMode
-from physicalai.capture.errors import CaptureError, MissingDependencyError, NotConnectedError
+from physicalai.capture.errors import CaptureError, NotConnectedError
 from physicalai.capture.frame import Frame
 from physicalai.capture.transport._header import (
     HEADER_SIZE,
@@ -26,8 +25,8 @@ from physicalai.capture.transport._header import (
     decode_rgb_view,
     encode_frame,
 )
-from physicalai.capture.transport._spec import CameraSpec
 from physicalai.capture.transport._shared_camera import SharedCamera
+from physicalai.capture.transport._spec import CameraSpec
 
 HAS_ICEORYX2 = importlib.util.find_spec("iceoryx2") is not None
 
@@ -547,7 +546,6 @@ class TestOverwriteSettings:
             camera.connect(timeout=0.1)
 
         assert camera.is_connected
-        assert camera._reconfigure_attempted is True
 
     @patch("physicalai.capture.transport._shared_camera.import_module")
     @patch("physicalai.capture.transport._shared_camera._probe_service")
@@ -613,7 +611,6 @@ class TestOverwriteSettings:
             camera.connect(timeout=0.1)
 
         assert camera.is_connected
-        assert camera._reconfigure_attempted is True
 
     @patch("physicalai.capture.transport._shared_camera.import_module")
     @patch("physicalai.capture.transport._shared_camera._probe_service")
@@ -679,7 +676,6 @@ class TestOverwriteSettings:
             camera.connect(timeout=0.1)
 
         assert camera.is_connected
-        assert camera._reconfigure_attempted is True
 
     @patch("physicalai.capture.transport._shared_camera.import_module")
     @patch("physicalai.capture.transport._shared_camera._probe_service")
@@ -710,7 +706,6 @@ class TestOverwriteSettings:
             camera.connect(timeout=0.1)
 
         assert camera.is_connected
-        assert camera._reconfigure_attempted is True
 
         camera._check_config_match(hf[0])
 

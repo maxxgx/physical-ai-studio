@@ -148,7 +148,6 @@ class SharedCamera(Camera):
         self._latest: Frame | None = None
         self._last_header: FrameHeader | None = None
         self._config_warned = False
-        self._reconfigure_attempted = False
         self._held_sample: Any = None
         self._node: Any | None = None
         self._subscriber: Any | None = None
@@ -227,7 +226,7 @@ class SharedCamera(Camera):
                 header, frame = self._decode_sample(sample)
                 self._last_header = header
                 self._latest = frame
-                self._check_config_match(header)
+                self._negotiate_config(header, timeout=deadline - time.monotonic())
                 self._connected = True
                 return
 
@@ -397,53 +396,29 @@ class SharedCamera(Camera):
         msg = f"reconfigure request to {control_name} timed out after {timeout}s"
         raise CaptureError(msg)
 
-    def _check_config_match(self, header: FrameHeader) -> None:
-        """Validate publisher's frame config against requested parameters.
+    def _negotiate_config(self, header: FrameHeader, timeout: float = 5.0) -> None:
+        """Connect-time config negotiation (called once, not per-frame).
 
-        Compares the received header's width/height/fps against values
-        requested in ``camera_kwargs``. Skips any field not present in
-        the kwargs (None = don't care). Behaviour depends on
-        (strict, overwrite_settings):
+        If config matches or no constraints specified, returns silently.
+        If mismatch and ``overwrite_settings=True``, attempts reconfigure
+        via the control channel. Otherwise defers to strict/warn logic.
 
-        - (T, F): raise on mismatch.
-        - (F, F): warn once + attach.
-        - (T, T): try reconfigure; failure → raise.
-        - (F, T): try reconfigure; failure → warn + attach.
+        Args:
+            header: First received frame header.
+            timeout: Remaining connect timeout for reconfigure response.
 
         Raises:
             CaptureError: When strict=True and mismatch cannot be resolved.
         """
-        want_w = self._camera_kwargs.get("width")
-        want_h = self._camera_kwargs.get("height")
-        want_fps = self._camera_kwargs.get("fps")
-        if want_w is None and want_h is None and want_fps is None:
+        mismatch = self._detect_mismatch(header)
+        if mismatch is None:
             return
 
-        actual_w = header.width
-        actual_h = header.height
-        actual_fps = header.fps
+        want_str, actual_str = mismatch
 
-        w_ok = want_w is None or actual_w == want_w
-        h_ok = want_h is None or actual_h == want_h
-        fps_ok = want_fps is None or actual_fps in {0, want_fps}
-        if w_ok and h_ok and fps_ok:
-            self._reconfigure_attempted = False
-            return
-
-        want_parts = []
-        if want_w is not None:
-            want_parts.append(f"w={want_w}")
-        if want_h is not None:
-            want_parts.append(f"h={want_h}")
-        if want_fps is not None:
-            want_parts.append(f"fps={want_fps}")
-        want_str = ", ".join(want_parts)
-        actual_str = f"{actual_w}x{actual_h}@{actual_fps}"
-
-        if self._overwrite_settings and not self._reconfigure_attempted:
-            self._reconfigure_attempted = True
+        if self._overwrite_settings:
             try:
-                result = self._request_reconfigure()
+                result = self._request_reconfigure(timeout=timeout)
             except CaptureError as exc:
                 if self._strict:
                     self._do_disconnect()
@@ -478,12 +453,76 @@ class SharedCamera(Camera):
             )
             raise CaptureError(msg)
 
+        self._config_warned = True
+        logger.warning(
+            f"camera {self.device_id}: requested ({want_str}), "
+            f"got {actual_str} from existing publisher. Using existing config.",
+        )
+
+    def _check_config_match(self, header: FrameHeader) -> None:
+        """Per-frame config validation (hot path, no reconfigure).
+
+        Called on every received frame. If publisher was reconfigured by
+        another subscriber, detects the change. Strict subs raise
+        immediately; non-strict subs warn once and continue.
+
+        Raises:
+            CaptureError: When strict=True and config mismatches.
+        """
+        mismatch = self._detect_mismatch(header)
+        if mismatch is None:
+            return
+
+        want_str, actual_str = mismatch
+
+        if self._strict:
+            self._do_disconnect()
+            msg = (
+                f"Cannot use SharedCamera for {self.device_id}: "
+                f"existing publisher config {actual_str} does not match "
+                f"requested ({want_str}). "
+                f"Set strict=False to attach to existing feed, "
+                f"or overwrite_settings=True to reconfigure publisher."
+            )
+            raise CaptureError(msg)
+
         if not self._config_warned:
             self._config_warned = True
             logger.warning(
                 f"camera {self.device_id}: requested ({want_str}), "
                 f"got {actual_str} from existing publisher. Using existing config.",
             )
+
+    def _detect_mismatch(self, header: FrameHeader) -> tuple[str, str] | None:
+        """Compare header against requested kwargs.
+
+        Returns:
+            ``(want_str, actual_str)`` if mismatch found, ``None`` otherwise.
+        """
+        want_w = self._camera_kwargs.get("width")
+        want_h = self._camera_kwargs.get("height")
+        want_fps = self._camera_kwargs.get("fps")
+        if want_w is None and want_h is None and want_fps is None:
+            return None
+
+        actual_w = header.width
+        actual_h = header.height
+        actual_fps = header.fps
+
+        w_ok = want_w is None or actual_w == want_w
+        h_ok = want_h is None or actual_h == want_h
+        fps_ok = want_fps is None or actual_fps in {0, want_fps}
+        if w_ok and h_ok and fps_ok:
+            return None
+
+        want_parts = []
+        if want_w is not None:
+            want_parts.append(f"w={want_w}")
+        if want_h is not None:
+            want_parts.append(f"h={want_h}")
+        if want_fps is not None:
+            want_parts.append(f"fps={want_fps}")
+        return ", ".join(want_parts), f"{actual_w}x{actual_h}@{actual_fps}"
 
     @property
     def is_connected(self) -> bool:

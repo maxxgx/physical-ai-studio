@@ -366,6 +366,10 @@ def main() -> int:  # noqa: C901, PLR0912, PLR0914, PLR0915
             try:
                 frame = current_camera.read(timeout=1.0)
             except CaptureError:
+                with state.lock:
+                    if state.camera is not current_camera:
+                        consecutive_failures = 0
+                        continue
                 consecutive_failures += 1
                 if consecutive_failures >= _MAX_CONSECUTIVE_FAILURES:
                     logger.error(
