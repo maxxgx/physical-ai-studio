@@ -896,3 +896,40 @@ class TestReconfigureIntegration:
 
         with pytest.raises(CaptureError, match="does not support reconfigure"):
             camera._request_reconfigure(timeout=1.0)
+
+    def test_end_to_end_overwrite_on_connect(self) -> None:
+        """Full flow: overwrite_settings triggers auto-reconfigure during connect."""
+        import time
+
+        from physicalai.capture.transport._publisher import CameraPublisher
+
+        service_name = f"physicalai/test/{uuid4().hex[:8]}/frame"
+        # Publisher starts serving 320×240
+        spec = CameraSpec(camera_type="fake", camera_kwargs={"width": 320, "height": 240})
+        publisher = CameraPublisher(
+            spec,
+            service_name,
+            _factory_override="tests.unit.capture.fake:FakeCamera",
+        )
+        publisher.start(timeout=10.0)
+
+        try:
+            # Subscriber requests 640×480 — connect should auto-reconfigure publisher
+            camera = SharedCamera(
+                None,
+                service_name=service_name,
+                width=640,
+                height=480,
+                overwrite_settings=True,
+            )
+            camera.connect(timeout=10.0)
+            assert camera.is_connected
+
+            # Publisher has been reconfigured — next frame should be 640×480
+            time.sleep(0.3)
+            frame = camera.read(timeout=5.0)
+            assert frame.data.shape == (480, 640, 3)
+
+            camera.disconnect()
+        finally:
+            publisher.stop()
