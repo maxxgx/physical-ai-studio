@@ -61,12 +61,12 @@ class TestCameraSpec:
 
 
 class TestFrameHeader:
-    def test_sizeof_is_40(self) -> None:
-        assert ctypes.sizeof(FrameHeader) == 40
+    def test_sizeof_is_44(self) -> None:
+        assert ctypes.sizeof(FrameHeader) == 44
         assert HEADER_SIZE == ctypes.sizeof(FrameHeader)
 
     def test_protocol_version(self) -> None:
-        assert PROTOCOL_VERSION == 1
+        assert PROTOCOL_VERSION == 2
 
 
 class TestEncodeDecodeRoundtrip:
@@ -148,6 +148,26 @@ class TestEncodeDecodeRoundtrip:
 
         with pytest.raises(NotImplementedError, match="no depth data"):
             decode_depth(header, full_payload)
+
+    def test_fps_roundtrip(self) -> None:
+        data = np.zeros((240, 320, 3), dtype=np.uint8)
+        frame = Frame(data=data, timestamp=1.0, sequence=1)
+
+        header, payload = encode_frame(frame, ColorMode.RGB, fps=30)
+        full_payload = bytes(header) + payload
+
+        decoded_header = decode_header(full_payload)
+        assert decoded_header.fps == 30
+
+    def test_fps_defaults_to_zero(self) -> None:
+        data = np.zeros((240, 320, 3), dtype=np.uint8)
+        frame = Frame(data=data, timestamp=1.0, sequence=1)
+
+        header, payload = encode_frame(frame, ColorMode.RGB)
+        full_payload = bytes(header) + payload
+
+        decoded_header = decode_header(full_payload)
+        assert decoded_header.fps == 0
 
 
 class TestSharedCameraConstruction:
@@ -239,7 +259,7 @@ class TestSharedCameraSpawnFlow:
         mock_publisher_cls.return_value = mock_publisher
 
         camera = SharedCamera("uvc", device=0)
-        with patch.object(camera, "_decode_sample", return_value=MagicMock()):
+        with patch.object(camera, "_decode_sample", return_value=(MagicMock(), MagicMock())):
             camera.connect(timeout=0.1)
 
         assert camera.is_connected
@@ -261,7 +281,7 @@ class TestSharedCameraSpawnFlow:
         mock_probe.return_value = True
 
         camera = SharedCamera("uvc", device=0)
-        with patch.object(camera, "_decode_sample", return_value=MagicMock()):
+        with patch.object(camera, "_decode_sample", return_value=(MagicMock(), MagicMock())):
             camera.connect(timeout=0.1)
 
         assert camera.is_connected
@@ -286,7 +306,7 @@ class TestSharedCameraSpawnFlow:
         mock_publisher_cls.return_value = mock_publisher
 
         camera = SharedCamera("uvc", device=0)
-        with patch.object(camera, "_decode_sample", return_value=MagicMock()):
+        with patch.object(camera, "_decode_sample", return_value=(MagicMock(), MagicMock())):
             camera.connect(timeout=0.1)
 
         assert camera.is_connected
@@ -316,9 +336,23 @@ class TestSharedCameraStrictConfig:
     """Tests for strict config-mismatch detection on attach to existing publisher."""
 
     @staticmethod
-    def _frame(width: int, height: int) -> Frame:
+    def _header_frame(width: int, height: int, fps: int = 30) -> tuple[FrameHeader, Frame]:
+        header = FrameHeader(
+            version=PROTOCOL_VERSION,
+            channels=3,
+            dtype=0,
+            color_mode=0,
+            width=width,
+            height=height,
+            sequence=0,
+            timestamp_ns=0,
+            depth_offset=0,
+            depth_width=0,
+            depth_height=0,
+            fps=fps,
+        )
         data = np.zeros((height, width, 3), dtype=np.uint8)
-        return Frame(data=data, timestamp=0.0, sequence=0)
+        return header, Frame(data=data, timestamp=0.0, sequence=0)
 
     @patch("physicalai.capture.transport._shared_camera.import_module")
     @patch("physicalai.capture.transport._shared_camera._probe_service")
@@ -333,8 +367,8 @@ class TestSharedCameraStrictConfig:
         mock_probe.return_value = True  # publisher exists, no spawn
 
         camera = SharedCamera("uvc", device=0, width=640, height=480, strict=True)
-        with patch.object(camera, "_decode_sample", return_value=self._frame(1920, 1080)):
-            with pytest.raises(CaptureError, match="config mismatch"):
+        with patch.object(camera, "_decode_sample", return_value=self._header_frame(1920, 1080)):
+            with pytest.raises(CaptureError, match="does not match"):
                 camera.connect(timeout=0.1)
 
         assert not camera.is_connected
@@ -343,7 +377,7 @@ class TestSharedCameraStrictConfig:
     @patch("physicalai.capture.transport._shared_camera.import_module")
     @patch("physicalai.capture.transport._shared_camera._probe_service")
     @patch("physicalai.capture.transport._publisher.CameraPublisher.start")
-    def test_strict_spawned_publisher_mismatch_mentions_spawned(
+    def test_strict_spawned_publisher_mismatch(
         self,
         mock_start: MagicMock,
         mock_probe: MagicMock,
@@ -355,8 +389,8 @@ class TestSharedCameraStrictConfig:
         mock_probe.return_value = False
 
         camera = SharedCamera("uvc", device=0, width=640, height=480, strict=True)
-        with patch.object(camera, "_decode_sample", return_value=self._frame(1920, 1080)):
-            with pytest.raises(CaptureError, match="spawned publisher config mismatch"):
+        with patch.object(camera, "_decode_sample", return_value=self._header_frame(1920, 1080)):
+            with pytest.raises(CaptureError, match="does not match"):
                 camera.connect(timeout=0.1)
 
         assert not camera.is_connected
@@ -375,7 +409,7 @@ class TestSharedCameraStrictConfig:
         mock_probe.return_value = True
 
         camera = SharedCamera("uvc", device=0, width=640, height=480, strict=False)
-        with patch.object(camera, "_decode_sample", return_value=self._frame(1920, 1080)):
+        with patch.object(camera, "_decode_sample", return_value=self._header_frame(1920, 1080)):
             camera.connect(timeout=0.1)
 
         assert camera.is_connected
@@ -393,7 +427,7 @@ class TestSharedCameraStrictConfig:
         mock_probe.return_value = True
 
         camera = SharedCamera("uvc", device=0, width=640, height=480, strict=True)
-        with patch.object(camera, "_decode_sample", return_value=self._frame(640, 480)):
+        with patch.object(camera, "_decode_sample", return_value=self._header_frame(640, 480)):
             camera.connect(timeout=0.1)
 
         assert camera.is_connected
@@ -411,10 +445,57 @@ class TestSharedCameraStrictConfig:
         mock_probe.return_value = True
 
         camera = SharedCamera("uvc", device=0, strict=True)
-        with patch.object(camera, "_decode_sample", return_value=self._frame(1920, 1080)):
+        with patch.object(camera, "_decode_sample", return_value=self._header_frame(1920, 1080)):
             camera.connect(timeout=0.1)
 
         assert camera.is_connected
+
+    @patch("physicalai.capture.transport._shared_camera.import_module")
+    @patch("physicalai.capture.transport._shared_camera._probe_service")
+    def test_fps_mismatch_strict_raises(
+        self,
+        mock_probe: MagicMock,
+        mock_import_module: MagicMock,
+    ) -> None:
+        sample = MagicMock()
+        iox2, _, _ = TestSharedCameraSpawnFlow._mock_iox2_stack(sample=sample)
+        mock_import_module.return_value = iox2
+        mock_probe.return_value = True
+
+        camera = SharedCamera("uvc", device=0, width=640, height=480, fps=30, strict=True)
+        with patch.object(camera, "_decode_sample", return_value=self._header_frame(640, 480, fps=60)):
+            with pytest.raises(CaptureError, match="does not match"):
+                camera.connect(timeout=0.1)
+
+        assert not camera.is_connected
+
+    @patch("physicalai.capture.transport._shared_camera.import_module")
+    @patch("physicalai.capture.transport._shared_camera._probe_service")
+    def test_non_strict_warns_once_not_repeatedly(
+        self,
+        mock_probe: MagicMock,
+        mock_import_module: MagicMock,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        sample = MagicMock()
+        iox2, subscriber, listener = TestSharedCameraSpawnFlow._mock_iox2_stack(sample=sample)
+        mock_import_module.return_value = iox2
+        mock_probe.return_value = True
+
+        camera = SharedCamera("uvc", device=0, width=640, height=480, strict=False)
+        hf = self._header_frame(1920, 1080)
+        with patch.object(camera, "_decode_sample", return_value=hf):
+            camera.connect(timeout=0.1)
+
+        assert camera.is_connected
+        assert camera._config_warned is True
+
+        # Simulate a second frame read — should NOT warn again
+        with caplog.at_level("WARNING"):
+            camera._check_config_match(hf[0])
+        # Only one warning total (from connect)
+        warn_count = sum(1 for r in caplog.records if "existing publisher" in r.message)
+        assert warn_count <= 1
 
 
 @requires_iceoryx2

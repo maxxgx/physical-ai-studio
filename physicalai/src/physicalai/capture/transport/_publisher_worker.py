@@ -92,7 +92,7 @@ def build_camera(config: dict) -> Camera:
     return spec.build()
 
 
-def main() -> int:  # noqa: PLR0912, PLR0914, PLR0915
+def main() -> int:  # noqa: C901, PLR0912, PLR0914, PLR0915
     """Entry point for the publisher worker process.
 
     Returns:
@@ -111,6 +111,7 @@ def main() -> int:  # noqa: PLR0912, PLR0914, PLR0915
     service_name: str = config["service_name"]
     idle_timeout: float = config.get("idle_timeout", 5.0)
     max_subscribers: int = config.get("max_subscribers", 32)
+    camera_fps: int = int(config.get("camera_kwargs", {}).get("fps", 0))
 
     # Redirect fd 1 (stdout) to /dev/null during setup so that native
     # libraries (e.g. omni_camera/Nokhwa) that write directly to the C-level
@@ -203,7 +204,7 @@ def main() -> int:  # noqa: PLR0912, PLR0914, PLR0915
                 continue
             consecutive_failures = 0
 
-            header, payload_bytes = encode_frame(frame, camera.color_mode)
+            header, payload_bytes = encode_frame(frame, camera.color_mode, fps=camera_fps)
             header_bytes = bytes(header)
             total_size = HEADER_SIZE + len(payload_bytes)
 

@@ -16,7 +16,7 @@ from loguru import logger
 from physicalai.capture.camera import Camera, CameraType, ColorMode
 from physicalai.capture.errors import CaptureError, CaptureTimeoutError, NotConnectedError
 
-from ._header import decode_header, decode_rgb
+from ._header import FrameHeader, decode_header, decode_rgb
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -141,6 +141,8 @@ class SharedCamera(Camera):
         self._publisher: CameraPublisher | None = None
         self._connected = False
         self._latest: Frame | None = None
+        self._last_header: FrameHeader | None = None
+        self._config_warned = False
         self._held_sample: Any = None
         self._node: Any | None = None
         self._subscriber: Any | None = None
@@ -214,8 +216,10 @@ class SharedCamera(Camera):
         while time.monotonic() < deadline:
             sample = self._subscriber.receive()
             if sample is not None:
-                self._latest = self._decode_sample(sample)
-                self._check_config_match(self._latest)
+                header, frame = self._decode_sample(sample)
+                self._last_header = header
+                self._latest = frame
+                self._check_config_match(header)
                 self._connected = True
                 return
 
@@ -252,7 +256,10 @@ class SharedCamera(Camera):
             newest_sample = sample
 
         if newest_sample is not None:
-            self._latest = self._decode_sample(newest_sample)
+            header, frame = self._decode_sample(newest_sample)
+            self._last_header = header
+            self._latest = frame
+            self._check_config_match(header)
 
         if self._latest is None:
             msg = "no frame available"
@@ -276,7 +283,10 @@ class SharedCamera(Camera):
             newest_sample = sample
 
         if newest_sample is not None:
-            self._latest = self._decode_sample(newest_sample)
+            header, frame = self._decode_sample(newest_sample)
+            self._last_header = header
+            self._latest = frame
+            self._check_config_match(header)
 
         if self._latest is None:
             msg = "no frame available"
@@ -284,7 +294,7 @@ class SharedCamera(Camera):
 
         return self._latest
 
-    def _decode_sample(self, sample: Any) -> Frame:  # noqa: ANN401
+    def _decode_sample(self, sample: Any) -> tuple[FrameHeader, Frame]:  # noqa: ANN401
         import ctypes as _ct  # noqa: PLC0415
 
         slc = sample.payload()
@@ -302,8 +312,8 @@ class SharedCamera(Camera):
             # (which would be seen by every other subscriber). Bounds metadata on
             # the memoryview also prevents out-of-bounds indexing past the
             # payload. Consumers that need to modify the frame must ``.copy()``.
-            return decode_rgb_view(header, memoryview(buf).toreadonly())
-        return decode_rgb(header, bytes(buf))
+            return header, decode_rgb_view(header, memoryview(buf).toreadonly())
+        return header, decode_rgb(header, bytes(buf))
 
     def _do_disconnect(self) -> None:
         self._held_sample = None
@@ -313,59 +323,70 @@ class SharedCamera(Camera):
         self._node = None
         self._connected = False
         self._latest = None
+        self._last_header = None
 
-    def _check_config_match(self, frame: Frame) -> None:
-        """Validate that an existing publisher's frame matches requested config.
+    def _check_config_match(self, header: FrameHeader) -> None:
+        """Validate publisher's frame config against requested parameters.
 
-        Compares the first received frame's dimensions against the
-        ``width``/``height`` requested in ``camera_kwargs``. Behaviour:
+        Compares the received header's width/height/fps against values
+        requested in ``camera_kwargs``. Skips any field not present in
+        the kwargs (None = don't care). Behaviour:
 
         - No mismatch: silent.
         - Mismatch and ``strict=True``: disconnect and raise
           :class:`CaptureError`.
-        - Mismatch and ``strict=False``: log a warning and continue
-          using the existing publisher's resolution.
+        - Mismatch and ``strict=False``: log a warning **once** and
+          continue using the existing publisher's config.
 
-        Only fires when an external publisher already existed at connect
-        time (i.e. we attached rather than spawned). When this instance
-        spawned the publisher itself, the requested config is honoured by
-        construction and the check is a no-op.
+        Runs on every received frame so that phase-2 reconfiguration is
+        detected automatically.
 
         Raises:
-            CaptureError: If ``strict`` is True and dimensions mismatch.
+            CaptureError: If ``strict`` is True and config mismatches.
         """
         want_w = self._camera_kwargs.get("width")
         want_h = self._camera_kwargs.get("height")
-        if want_w is None and want_h is None:
+        want_fps = self._camera_kwargs.get("fps")
+        if want_w is None and want_h is None and want_fps is None:
             return
 
-        data = frame.data
-        if data.ndim < 2:  # noqa: PLR2004 guard in case of depth or other non-2D frame types
-            return
-        actual_h, actual_w = data.shape[0], data.shape[1]
+        actual_w = header.width
+        actual_h = header.height
+        actual_fps = header.fps
 
         w_ok = want_w is None or actual_w == want_w
         h_ok = want_h is None or actual_h == want_h
-        if w_ok and h_ok:
+        fps_ok = want_fps is None or actual_fps in {0, want_fps}
+        if w_ok and h_ok and fps_ok:
             return
 
-        want_str = f"{want_w or '?'}x{want_h or '?'}"
-        actual_str = f"{actual_w}x{actual_h}"
+        want_parts = []
+        if want_w is not None:
+            want_parts.append(f"w={want_w}")
+        if want_h is not None:
+            want_parts.append(f"h={want_h}")
+        if want_fps is not None:
+            want_parts.append(f"fps={want_fps}")
+        want_str = ", ".join(want_parts)
+        actual_str = f"{actual_w}x{actual_h}@{actual_fps}"
 
         if self._strict:
-            source = "spawned publisher" if self._publisher is not None else "existing publisher"
             self._do_disconnect()
             msg = (
-                f"{source} config mismatch on {self.device_id}: "
-                f"requested {want_str}, got {actual_str}. "
-                f"Please disconnect existing camera streams and try again."
+                f"Cannot use SharedCamera for {self.device_id}: "
+                f"existing publisher config {actual_str} does not match "
+                f"requested ({want_str}). "
+                f"Set strict=False to attach to existing feed, "
+                f"or overwrite_settings=True (phase 2) to reconfigure publisher."
             )
             raise CaptureError(msg)
 
-        logger.warning(
-            f"camera {self.device_id}: requested {want_str}, "
-            f"got {actual_str} from existing publisher. Using existing config.",
-        )
+        if not self._config_warned:
+            self._config_warned = True
+            logger.warning(
+                f"camera {self.device_id}: requested ({want_str}), "
+                f"got {actual_str} from existing publisher. Using existing config.",
+            )
 
     @property
     def is_connected(self) -> bool:

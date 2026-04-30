@@ -30,11 +30,12 @@ class FrameHeader(ctypes.Structure):
         ("depth_offset", ctypes.c_uint32),
         ("depth_width", ctypes.c_uint32),
         ("depth_height", ctypes.c_uint32),
+        ("fps", ctypes.c_uint32),
     ]
 
 
 HEADER_SIZE: int = ctypes.sizeof(FrameHeader)
-PROTOCOL_VERSION: int = 1
+PROTOCOL_VERSION: int = 2
 
 _NDIM_2D = 2
 _NDIM_3D = 3
@@ -58,6 +59,8 @@ def encode_frame(
     frame: Frame,
     color_mode: ColorMode,
     depth_frame: Frame | None = None,
+    *,
+    fps: int = 0,
 ) -> tuple[FrameHeader, bytes]:
     """Encode colour (and optional depth) frames into transport payload bytes.
 
@@ -65,6 +68,7 @@ def encode_frame(
         frame: Colour frame to encode.
         color_mode: Colour mode describing channel ordering in ``frame``.
         depth_frame: Optional depth frame appended to payload.
+        fps: Frame rate to embed in the header (0 if unknown).
 
     Returns:
         Tuple of the populated header and payload bytes (without header bytes).
@@ -102,6 +106,7 @@ def encode_frame(
         depth_offset=0,
         depth_width=0,
         depth_height=0,
+        fps=fps,
     )
 
     rgb_bytes = frame.data.tobytes()
