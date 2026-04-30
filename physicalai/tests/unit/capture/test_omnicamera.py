@@ -541,7 +541,41 @@ def test_discover_uses_unique_id_when_stable(omnicamera_cls: tuple) -> None:
     assert devices[0].hardware_id == "abc-123-stable"
     assert devices[0].id_stable is True
     assert devices[0].metadata["unique_id"] == "abc-123-stable"
-    assert devices[0].metadata["id_stable"] is True
+    assert devices[0].metadata["id_stable_reported"] is True
+    assert devices[0].metadata["serial_collision"] is False
+
+
+def test_discover_demotes_colliding_unique_ids(omnicamera_cls: tuple) -> None:
+    """discover() falls back to index when multiple devices share unique_id (e.g. InnoMaker)."""
+    camera_cls, mock_omni_camera = omnicamera_cls
+
+    cam_info_0 = mock.MagicMock()
+    cam_info_0.index = 0
+    cam_info_0.name = "InnoMaker UVC"
+    cam_info_0.description = ""
+    cam_info_0.misc = ""
+    cam_info_0.unique_id = "shared-serial"
+    cam_info_0.id_stable = True
+
+    cam_info_1 = mock.MagicMock()
+    cam_info_1.index = 1
+    cam_info_1.name = "InnoMaker UVC"
+    cam_info_1.description = ""
+    cam_info_1.misc = ""
+    cam_info_1.unique_id = "shared-serial"
+    cam_info_1.id_stable = True
+
+    mock_omni_camera.query.return_value = [cam_info_0, cam_info_1]
+
+    devices = camera_cls.discover()
+
+    assert len(devices) == 2
+    assert devices[0].device_id == "0"
+    assert devices[1].device_id == "1"
+    assert devices[0].id_stable is False
+    assert devices[1].id_stable is False
+    assert devices[0].metadata["serial_collision"] is True
+    assert devices[1].metadata["serial_collision"] is True
 
 
 def test_discover_falls_back_to_index_when_id_unstable(omnicamera_cls: tuple) -> None:

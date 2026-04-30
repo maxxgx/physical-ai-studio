@@ -229,26 +229,41 @@ class OmniCamera(Camera):
         from physicalai.capture.discovery import DeviceInfo  # noqa: PLC0415
 
         infos = omni_camera.query(only_usable=_FILTER_USABLE)
-        return [
-            DeviceInfo(
-                device_id=info.unique_id if (info.id_stable and info.unique_id) else str(info.index),
-                index=info.index,
-                name=info.name,
-                driver="uvc",
-                hardware_id=info.unique_id or None,
-                id_stable=bool(info.id_stable and info.unique_id),
-                manufacturer="",
-                model=info.name,
-                metadata={
-                    "description": info.description,
-                    "misc": info.misc,
-                    "backend": "omnicamera",
-                    "id_stable": bool(info.id_stable),
-                    "unique_id": info.unique_id or "",
-                },
+
+        # Some vendors (e.g. InnoMaker) bake the same USB iSerial into every
+        # unit of a model. When a unique_id appears more than once it cannot
+        # identify a specific device, so demote those entries to index-based
+        # fingerprints and let the user manage cable-to-config mapping.
+        unique_id_counts: dict[str, int] = {}
+        for info in infos:
+            if info.unique_id:
+                unique_id_counts[info.unique_id] = unique_id_counts.get(info.unique_id, 0) + 1
+        colliding_ids = {uid for uid, count in unique_id_counts.items() if count > 1}
+
+        devices: list[DeviceInfo] = []
+        for info in infos:
+            has_collision = bool(info.unique_id) and info.unique_id in colliding_ids
+            stable = bool(info.id_stable and info.unique_id and not has_collision)
+            devices.append(
+                DeviceInfo(
+                    device_id=info.unique_id if stable else str(info.index),
+                    index=info.index,
+                    name=info.name,
+                    driver="uvc",
+                    hardware_id=info.unique_id or None,
+                    id_stable=stable,
+                    manufacturer="",
+                    model=info.name,
+                    metadata={
+                        "description": info.description,
+                        "misc": info.misc,
+                        "backend": "omnicamera",
+                        "unique_id": info.unique_id or "",
+                        "serial_collision": has_collision,
+                    },
+                )
             )
-            for info in infos
-        ]
+        return devices
 
     @classmethod
     def query_formats(cls, device_id: str) -> list[tuple[int, int, int]]:
