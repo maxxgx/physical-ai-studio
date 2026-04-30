@@ -30,10 +30,9 @@ class CameraWorker(TransportWorker[Camera]):
     ) -> None:
         super().__init__(transport)
         self.config = config
-        cam: CameraABC | None = build_shared_camera(config=config, strict=False, idle_timeout=0.0)
-        if cam is None:
-            raise RuntimeError(f"Camera {config.id} not found.")
-        self.cam = cam
+        # use idle_timeout=0.0 since it's for preview only
+        self.cam: CameraABC = build_shared_camera(config=config, strict=False, idle_timeout=0.0)
+        self._stop_requested: bool = False
 
     async def run(self) -> None:
         """Main worker loop."""
@@ -141,7 +140,5 @@ class CameraWorker(TransportWorker[Camera]):
         logger.info(f"Shutting down camera: {self.config.name}")
         self._stop_requested = True
         await super().shutdown()
-        if self.cam is not None:
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, self.cam.disconnect)
-            self.cam = None
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self.cam.disconnect)
