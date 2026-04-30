@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import sys
 import time
 from typing import TYPE_CHECKING, Any, cast
 
@@ -20,6 +21,11 @@ if TYPE_CHECKING:
 
 _MISSING_DEP_PKG = "omni_camera"
 _MISSING_DEP_EXTRA = "capture"
+
+# On macOS, ``info.can_open()`` opens the camera via AVFoundation which holds
+# a process-wide lock blocking subsequent subprocess opens (publisher worker).
+# On Linux v4l2 has no such lock, so filtering unopenable devices is safe.
+_FILTER_USABLE = sys.platform.startswith("linux")
 
 
 class OmniCamera(Camera):
@@ -222,12 +228,7 @@ class OmniCamera(Camera):
     def discover(cls) -> list[DeviceInfo]:
         from physicalai.capture.discovery import DeviceInfo  # noqa: PLC0415
 
-        # NOTE: We intentionally use ``only_usable=False`` and do NOT call
-        # ``info.can_open()`` here. On macOS those probes briefly open the
-        # camera through AVFoundation, which holds a process-wide lock that
-        # prevents any subprocess (e.g. the publisher worker) from opening
-        # the same device until the parent exits.
-        infos = omni_camera.query(only_usable=False)
+        infos = omni_camera.query(only_usable=_FILTER_USABLE)
         return [
             DeviceInfo(
                 device_id=info.unique_id if (info.id_stable and info.unique_id) else str(info.index),

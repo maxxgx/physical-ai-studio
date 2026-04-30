@@ -455,7 +455,7 @@ def test_discover_returns_device_info(omnicamera_cls: tuple) -> None:
 
 
 def test_discover_keeps_unopenable(omnicamera_cls: tuple) -> None:
-    """discover() returns all cameras and does not call can_open()."""
+    """discover() returns all cameras without probing on macOS (no _FILTER_USABLE)."""
     camera_cls, mock_omni_camera = omnicamera_cls
 
     cam_info_0 = mock.MagicMock()
@@ -478,7 +478,8 @@ def test_discover_keeps_unopenable(omnicamera_cls: tuple) -> None:
 
     mock_omni_camera.query.return_value = [cam_info_0, cam_info_1]
 
-    devices = camera_cls.discover()
+    with mock.patch("physicalai.capture.cameras.uvc._omnicamera._FILTER_USABLE", new=False):
+        devices = camera_cls.discover()
 
     assert len(devices) == 2
     assert [d.device_id for d in devices] == ["0", "1"]
