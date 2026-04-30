@@ -23,6 +23,8 @@ if TYPE_CHECKING:
 
     from physicalai.capture.camera import Camera
 
+_MAX_CONSECUTIVE_FAILURES = 5
+
 shutdown = threading.Event()
 
 
@@ -181,16 +183,25 @@ def main() -> int:  # noqa: PLR0912, PLR0914, PLR0915
 
     from physicalai.capture.errors import CaptureError  # noqa: PLC0415
 
-    node_check_interval = 1.0
+    node_check_interval = max(0.1, idle_timeout / 5)
 
     try:
         idle_since: float | None = None
         last_node_check = 0.0
+        consecutive_failures = 0
         while not shutdown.is_set():
             try:
                 frame = camera.read(timeout=1.0)
             except CaptureError:
+                consecutive_failures += 1
+                if consecutive_failures >= _MAX_CONSECUTIVE_FAILURES:
+                    logger.error(
+                        f"{consecutive_failures} consecutive read failures -- "
+                        f"shutting down publisher for {service_name}",
+                    )
+                    break
                 continue
+            consecutive_failures = 0
 
             header, payload_bytes = encode_frame(frame, camera.color_mode)
             header_bytes = bytes(header)

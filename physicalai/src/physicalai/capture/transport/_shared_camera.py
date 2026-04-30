@@ -353,9 +353,10 @@ class SharedCamera(Camera):
         actual_str = f"{actual_w}x{actual_h}"
 
         if self._strict:
+            source = "spawned publisher" if self._publisher is not None else "existing publisher"
             self._do_disconnect()
             msg = (
-                f"existing publisher config mismatch on {self.device_id}: "
+                f"{source} config mismatch on {self.device_id}: "
                 f"requested {want_str}, got {actual_str}. "
                 f"Please disconnect existing camera streams and try again."
             )

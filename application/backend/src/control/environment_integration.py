@@ -48,7 +48,7 @@ class EnvironmentIntegration:
         loop = asyncio.get_running_loop()
         for cam_cfg in self.environment.cameras:
             cam_id = str(cam_cfg.id)
-            cam = build_shared_camera(config=cam_cfg, strict=False, idle_timeout=5.0)
+            cam = build_shared_camera(config=cam_cfg, strict=True, idle_timeout=5.0)
             logger.info(f"Camera {cam_id} initialized: {cam_cfg}")
             try:
                 await loop.run_in_executor(None, cam.connect)

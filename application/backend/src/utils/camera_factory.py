@@ -6,13 +6,17 @@ per-driver kwargs so that only constructor-safe parameters reach the camera.
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING
 
+from loguru import logger
 from physicalai.capture import CameraType, ColorMode, SharedCamera
-from physicalai.capture.camera import Camera as CameraABC
 from physicalai.capture.factory import create_camera
+from physicalai.capture.transport._shared_camera import _derive_service_name, _probe_service
 
 if TYPE_CHECKING:
+    from physicalai.capture.camera import Camera as CameraABC
+
     from schemas.project_camera import Camera
 
 MIGRATED_DRIVERS: frozenset[str] = frozenset({"usb_camera", "realsense", "basler"})
@@ -35,6 +39,21 @@ _ALLOWED_KWARGS: dict[str, frozenset[str]] = {
     "realsense": frozenset({"width", "height", "fps"}),
     "basler": frozenset({"width", "height", "fps"}),
 }
+
+
+def _camera_type_and_kwargs(config: Camera) -> tuple[CameraType, dict[str, object]]:
+    camera_type = driver_to_camera_type(config.driver)
+    allowed = _ALLOWED_KWARGS.get(config.driver, frozenset())
+
+    payload = config.payload.model_dump()
+    camera_kwargs: dict[str, object] = {k: v for k, v in payload.items() if k in allowed and v is not None}
+
+    if camera_type == CameraType.UVC:
+        camera_kwargs["device"] = config.fingerprint
+    else:
+        camera_kwargs["serial_number"] = config.fingerprint
+
+    return camera_type, camera_kwargs
 
 
 def is_migrated(driver: str) -> bool:
@@ -75,21 +94,8 @@ def build_shared_camera(
     Returns:
         A configured (but not yet connected) SharedCamera instance.
     """
-    camera_type = driver_to_camera_type(config.driver)
-    allowed = _ALLOWED_KWARGS.get(config.driver, frozenset())
-
-    payload = config.payload.model_dump()
-    camera_kwargs: dict[str, object] = {k: v for k, v in payload.items() if k in allowed and v is not None}
-
-    from loguru import logger
-
-    logger.warning(f"camera kwargs for {config.name}: {camera_kwargs}")
-
-    # Identification kwarg: UVC uses 'device', RealSense/Basler use 'serial_number'.
-    if camera_type == CameraType.UVC:
-        camera_kwargs["device"] = config.fingerprint
-    else:
-        camera_kwargs["serial_number"] = config.fingerprint
+    camera_type, camera_kwargs = _camera_type_and_kwargs(config)
+    logger.debug(f"camera kwargs for {config.name}: {camera_kwargs}")
 
     return SharedCamera(
         camera_type,
@@ -98,6 +104,34 @@ def build_shared_camera(
         idle_timeout=idle_timeout,
         **camera_kwargs,
     )
+
+
+def shared_camera_service_name(config: Camera) -> str:
+    """Return the SharedCamera service name for a backend Camera schema."""
+    camera_type, camera_kwargs = _camera_type_and_kwargs(config)
+    return _derive_service_name(camera_type.value, camera_kwargs)
+
+
+async def wait_for_shared_camera_publisher_exit(
+    service_name: str,
+    *,
+    timeout_s: float = 1.0,
+    interval_s: float = 0.05,
+) -> bool:
+    """Wait until a SharedCamera publisher service disappears."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_s
+
+    while True:
+        is_alive = await loop.run_in_executor(None, _probe_service, service_name)
+        if not is_alive:
+            return True
+
+        if loop.time() >= deadline:
+            logger.warning(f"Timed out waiting for camera publisher to exit: {service_name}")
+            return False
+
+        await asyncio.sleep(interval_s)
 
 
 def build_direct_camera(config: Camera) -> CameraABC:
@@ -113,15 +147,6 @@ def build_direct_camera(config: Camera) -> CameraABC:
     Returns:
         A configured (but not yet connected) Camera instance.
     """
-    camera_type = driver_to_camera_type(config.driver)
-    allowed = _ALLOWED_KWARGS.get(config.driver, frozenset())
-
-    payload = config.payload.model_dump()
-    camera_kwargs: dict[str, object] = {k: v for k, v in payload.items() if k in allowed and v is not None}
-
-    if camera_type == CameraType.UVC:
-        camera_kwargs["device"] = config.fingerprint
-    else:
-        camera_kwargs["serial_number"] = config.fingerprint
+    camera_type, camera_kwargs = _camera_type_and_kwargs(config)
 
     return create_camera(camera_type.value, color_mode=ColorMode.RGB, **camera_kwargs)

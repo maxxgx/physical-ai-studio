@@ -9,7 +9,7 @@ from physicalai.capture.errors import CaptureError, CaptureTimeoutError
 from turbojpeg import TJPF_RGB, TurboJPEG
 
 from schemas.project_camera import Camera
-from utils.camera_factory import build_direct_camera
+from utils.camera_factory import build_shared_camera
 from workers.transport.worker_transport import WorkerTransport
 from workers.transport_worker import TransportWorker, WorkerState, WorkerStatus
 
@@ -30,7 +30,7 @@ class CameraWorker(TransportWorker[Camera]):
     ) -> None:
         super().__init__(transport)
         self.config = config
-        cam: CameraABC | None = build_direct_camera(config)
+        cam: CameraABC | None = build_shared_camera(config=config, strict=False, idle_timeout=0.0)
         if cam is None:
             raise RuntimeError(f"Camera {config.id} not found.")
         self.cam = cam

@@ -342,6 +342,27 @@ class TestSharedCameraStrictConfig:
 
     @patch("physicalai.capture.transport._shared_camera.import_module")
     @patch("physicalai.capture.transport._shared_camera._probe_service")
+    @patch("physicalai.capture.transport._publisher.CameraPublisher.start")
+    def test_strict_spawned_publisher_mismatch_mentions_spawned(
+        self,
+        mock_start: MagicMock,
+        mock_probe: MagicMock,
+        mock_import_module: MagicMock,
+    ) -> None:
+        sample = MagicMock()
+        iox2, _, _ = TestSharedCameraSpawnFlow._mock_iox2_stack(sample=sample)
+        mock_import_module.return_value = iox2
+        mock_probe.return_value = False
+
+        camera = SharedCamera("uvc", device=0, width=640, height=480, strict=True)
+        with patch.object(camera, "_decode_sample", return_value=self._frame(1920, 1080)):
+            with pytest.raises(CaptureError, match="spawned publisher config mismatch"):
+                camera.connect(timeout=0.1)
+
+        assert not camera.is_connected
+
+    @patch("physicalai.capture.transport._shared_camera.import_module")
+    @patch("physicalai.capture.transport._shared_camera._probe_service")
     def test_non_strict_warns_on_mismatch_and_attaches(
         self,
         mock_probe: MagicMock,

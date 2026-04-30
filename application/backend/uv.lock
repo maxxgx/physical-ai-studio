@@ -3007,7 +3007,7 @@ requires-dist = [
     { name = "physicalai", extras = ["trossen"], marker = "extra == 'robots'" },
     { name = "physicalai", extras = ["ur"], marker = "extra == 'robots'" },
     { name = "pydantic", specifier = ">=2.5" },
-    { name = "pynokhwa", specifier = "==0.1.1" },
+    { name = "pynokhwa", specifier = "==0.1.2" },
     { name = "pypylon", marker = "extra == 'basler'" },
     { name = "pyrealsense2", marker = "sys_platform != 'darwin' and extra == 'realsense'" },
     { name = "pyrealsense2-macosx", marker = "sys_platform == 'darwin' and extra == 'realsense'" },
@@ -3614,20 +3614,20 @@ wheels = [
 
 [[package]]
 name = "pynokhwa"
-version = "0.1.1"
+version = "0.1.2"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/f2/fc/decddf41a71a9b404a2bc96892bc3b3ffce359111fe9e144cc7541487f74/pynokhwa-0.1.1.tar.gz", hash = "sha256:a67952e2530ea23d4b0854f86cbdc99c0b5e2aa28f7051062b5b6527ff5bb42f", size = 26388, upload-time = "2026-04-29T17:09:04.251Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/77/ea/0867e2865edfcfb853e719cc295169164e7bf38e42cde4b81dc4c07e9eb7/pynokhwa-0.1.2.tar.gz", hash = "sha256:37199a2bc3fa8f55439c4d812e8e81a135e8f2ea329aa332380dffda48ec4578", size = 27818, upload-time = "2026-04-30T12:07:45.79Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/54/c0/8ece3e586f0d670bb4e29262c459416962ce91d7635339227e19231711cd/pynokhwa-0.1.1-cp313-cp313t-macosx_10_12_x86_64.whl", hash = "sha256:04777b0f764c41224a8ddb608049343a6f9be8fbee4ff153d45e6f2c65215c52", size = 548175, upload-time = "2026-04-29T17:08:48.812Z" },
-    { url = "https://files.pythonhosted.org/packages/1d/b3/0d571d0043dd1a623be4a565efdbcc17b368d990cf23fccbd291697ab545/pynokhwa-0.1.1-cp313-cp313t-macosx_11_0_arm64.whl", hash = "sha256:181f76ec1b8ca4e8456d2ee0e2aa862bbb45d72e8705eaff0c10efbc42aa82a4", size = 538462, upload-time = "2026-04-29T17:08:50.323Z" },
-    { url = "https://files.pythonhosted.org/packages/17/43/ed646ee64ca811de566e705e38278b7e4319bf95d315efbbba737eafd834/pynokhwa-0.1.1-cp313-cp313t-manylinux_2_34_x86_64.whl", hash = "sha256:c76cbb777367521ffb054277d572dbf6d94d87440e9b55b59d1f1beaa17a27d0", size = 560392, upload-time = "2026-04-29T17:08:51.982Z" },
-    { url = "https://files.pythonhosted.org/packages/2a/01/0395a93df057aadae154fda1e29e6b8aea5b129755651a3bff644e245f67/pynokhwa-0.1.1-cp313-cp313t-win32.whl", hash = "sha256:f4abf672eaf6ee113413ecc8c39e3f5c2daf31821d4bba455d4b1fd40f3719f2", size = 345465, upload-time = "2026-04-29T17:08:53.519Z" },
-    { url = "https://files.pythonhosted.org/packages/2c/87/a50b6bcade8674c863e08d6fda79b3d839e126e69007297d6008c9717af8/pynokhwa-0.1.1-cp313-cp313t-win_amd64.whl", hash = "sha256:5c6c399c342c5f7479bd1ab9e10945968232191e4162ba790bd6ecfa17b25b37", size = 366281, upload-time = "2026-04-29T17:08:55.072Z" },
-    { url = "https://files.pythonhosted.org/packages/95/ce/f279d958a9a95aff9441f7cff4edfe5ef37a0bdd9d444df2fc0ae85eca43/pynokhwa-0.1.1-cp39-abi3-macosx_10_12_x86_64.whl", hash = "sha256:1d5b84fe644f2f56c69e0fd0c2ab5fb1098cbbdf2d5744e6e8bd2b02267787be", size = 556168, upload-time = "2026-04-29T17:08:56.538Z" },
-    { url = "https://files.pythonhosted.org/packages/24/11/0bb8012ab8bd53de39fde31badcaebc6e59bfdf4e7998fd0d80f7b0df25e/pynokhwa-0.1.1-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:c0cc7fe216c0856c1d45a1c5ee4308f84c398cc13c020c8a230b87d6f747b44c", size = 548272, upload-time = "2026-04-29T17:08:57.872Z" },
-    { url = "https://files.pythonhosted.org/packages/cb/30/32f13418dbc09a313633a689837ff3361fa4887f0b98f9de1c5df9b5b60d/pynokhwa-0.1.1-cp39-abi3-manylinux_2_34_x86_64.whl", hash = "sha256:f1af92e3d9da86d8d6098a7fede4a026965b76a03663d5b3b115f676ce602e85", size = 564265, upload-time = "2026-04-29T17:09:00.039Z" },
-    { url = "https://files.pythonhosted.org/packages/25/3c/fcb01066cc0402fd81a46c45b9e32c219332c8c968d68dadabe414dc05c7/pynokhwa-0.1.1-cp39-abi3-win32.whl", hash = "sha256:c978ad18514185273bd196ed4ebcf98f6da9e242e31bce13660eed8d5ded949e", size = 349997, upload-time = "2026-04-29T17:09:01.545Z" },
-    { url = "https://files.pythonhosted.org/packages/76/56/e2671b85ab959ab13aaa77560a290b206b00552a4fcc13039212adeace66/pynokhwa-0.1.1-cp39-abi3-win_amd64.whl", hash = "sha256:65187af5a6a69cfd830da5abbb1ac175d44c5852a787b65155521be2f6114d2b", size = 371353, upload-time = "2026-04-29T17:09:03.063Z" },
+    { url = "https://files.pythonhosted.org/packages/b8/1d/0331f266bcb1e8c4a3b2d83c241dbf700e86ba222618709a0e8bf3f4d444/pynokhwa-0.1.2-cp313-cp313t-macosx_10_12_x86_64.whl", hash = "sha256:182535f97d5a3d4a8b3651d7a82bb7764efb7b0858270964b442ce0ba60b848b", size = 550520, upload-time = "2026-04-30T12:07:30.809Z" },
+    { url = "https://files.pythonhosted.org/packages/af/ea/f7710d52c62605066c022551ac9925f054c68964fde1c5986885d54c7310/pynokhwa-0.1.2-cp313-cp313t-macosx_11_0_arm64.whl", hash = "sha256:735d9e06d2144c12b0558bd18ce7f50a154507d2418d0406529a3be7247b7bf2", size = 539635, upload-time = "2026-04-30T12:07:32.42Z" },
+    { url = "https://files.pythonhosted.org/packages/84/69/a47bd9d8b9203f1dde19c70b0c62535ba619f93925f5d4a3fe048d7a765c/pynokhwa-0.1.2-cp313-cp313t-manylinux_2_34_x86_64.whl", hash = "sha256:0929b3fcc033ee425038f69959c0954ccbadadfb36c14b6d4522254ea5343bd0", size = 560427, upload-time = "2026-04-30T12:07:34.24Z" },
+    { url = "https://files.pythonhosted.org/packages/ec/d9/b64f46e4d06dc384162bdce0256c6d36c6b31e5fbc84efcfb52bff2724dc/pynokhwa-0.1.2-cp313-cp313t-win32.whl", hash = "sha256:10cae3d2ada8921435dbb3cd9e40578044c33f067294b004cb228681f5adc8d7", size = 345641, upload-time = "2026-04-30T12:07:35.503Z" },
+    { url = "https://files.pythonhosted.org/packages/e3/ce/f353145bc0bda4935a7f4beaeb986f541d806d1337febcefde30fa26d397/pynokhwa-0.1.2-cp313-cp313t-win_amd64.whl", hash = "sha256:c238e3f3062a36fb44b94c2684b0dcd71f7ab8a5c5708c49c41e8fca9cd1fcb5", size = 366395, upload-time = "2026-04-30T12:07:36.963Z" },
+    { url = "https://files.pythonhosted.org/packages/c9/45/48e976301d4297e26e877068db473bb8cdce1c24e9875941cc6a767874d2/pynokhwa-0.1.2-cp39-abi3-macosx_10_12_x86_64.whl", hash = "sha256:fc00a5988b9f09e39a5ae759ac4af50e5aedeb70c2b0aea193fe95479904b9c6", size = 558548, upload-time = "2026-04-30T12:07:38.5Z" },
+    { url = "https://files.pythonhosted.org/packages/08/aa/aa01376c8367cb5da0e9736fe54dea1407b1a2b51194d2662187861695fc/pynokhwa-0.1.2-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:bdeb200a4dd5aca87510a3ff7600a298c98f86557ea6525093e0ae2576ea81e4", size = 551674, upload-time = "2026-04-30T12:07:40.16Z" },
+    { url = "https://files.pythonhosted.org/packages/ca/83/d896ee47a4f7c368e8125e1b1c68e7708f438e5b41bcb2ff8379b252305f/pynokhwa-0.1.2-cp39-abi3-manylinux_2_34_x86_64.whl", hash = "sha256:751452ab0c9cbb4bec0435d2f19b07c4a0f2cbc86729064ca61b8082482dce1b", size = 564507, upload-time = "2026-04-30T12:07:41.409Z" },
+    { url = "https://files.pythonhosted.org/packages/c8/ea/c05eadb04dad027d5395f4b281a2dbf7b697313630852c0f8e76c70fd863/pynokhwa-0.1.2-cp39-abi3-win32.whl", hash = "sha256:35b12ea111ef66b2f5c0f4bb79ff985d97e3caa93374732547571dbb09d7358e", size = 350172, upload-time = "2026-04-30T12:07:42.884Z" },
+    { url = "https://files.pythonhosted.org/packages/9e/d8/e8a0740aa357ac67af1696006185dc113f2276dc3cccf8ff87abe195957b/pynokhwa-0.1.2-cp39-abi3-win_amd64.whl", hash = "sha256:cbb1c909d0f840f4201755f726861a835f50a3bf5f114bcb534f61239a01e5df", size = 371499, upload-time = "2026-04-30T12:07:44.135Z" },
 ]
 
 [[package]]
