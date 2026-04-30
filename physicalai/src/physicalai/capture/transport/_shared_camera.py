@@ -529,6 +529,18 @@ class SharedCamera(Camera):
         return self._connected
 
     @property
+    def actual_width(self) -> int | None:
+        return self._last_header.width if self._last_header is not None else None
+
+    @property
+    def actual_height(self) -> int | None:
+        return self._last_header.height if self._last_header is not None else None
+
+    @property
+    def actual_fps(self) -> int | None:
+        return self._last_header.fps if self._last_header is not None else None
+
+    @property
     def service_name(self) -> str:
         return self._service_name
 

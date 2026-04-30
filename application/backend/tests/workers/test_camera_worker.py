@@ -39,20 +39,20 @@ def event_loop():
 
 
 class TestCameraWorker:
-    def test_build_direct_camera_called(self):
+    def test_build_shared_camera_called(self):
         config = _make_config()
         transport = MagicMock()
-        with patch("workers.camera_worker.build_direct_camera") as mock_build:
+        with patch("workers.camera_worker.build_shared_camera") as mock_build:
             mock_build.return_value = MagicMock()
             worker = CameraWorker(config, transport)
-            mock_build.assert_called_once_with(config)
+            mock_build.assert_called_once_with(config=config, strict=False, idle_timeout=0.0)
             assert worker.cam is not None
 
     def test_shutdown_disconnects_camera(self, event_loop):
         config = _make_config()
         transport = MagicMock()
         transport.close = AsyncMock()
-        with patch("workers.camera_worker.build_direct_camera") as mock_build:
+        with patch("workers.camera_worker.build_shared_camera") as mock_build:
             mock_cam = MagicMock()
             mock_build.return_value = mock_cam
             worker = CameraWorker(config, transport)
@@ -64,7 +64,7 @@ class TestCameraWorker:
         config = _make_config()
         transport = MagicMock()
         transport.close = AsyncMock()
-        with patch("workers.camera_worker.build_direct_camera") as mock_build:
+        with patch("workers.camera_worker.build_shared_camera") as mock_build:
             mock_cam = MagicMock()
             mock_build.return_value = mock_cam
             worker = CameraWorker(config, transport)
@@ -83,7 +83,7 @@ class TestCameraWorker:
         transport.send_bytes = AsyncMock()
 
         with (
-            patch("workers.camera_worker.build_direct_camera") as mock_build,
+            patch("workers.camera_worker.build_shared_camera") as mock_build,
             patch("workers.camera_worker.tj") as mock_tj,
         ):
             mock_tj.encode.return_value = b"\xff\xd8fake-jpeg"
@@ -124,7 +124,7 @@ class TestCameraWorker:
         transport.close = AsyncMock()
         transport.send_bytes = AsyncMock()
 
-        with patch("workers.camera_worker.build_direct_camera") as mock_build:
+        with patch("workers.camera_worker.build_shared_camera") as mock_build:
             mock_cam = MagicMock()
             mock_cam.async_read = AsyncMock(side_effect=CaptureError("hardware failure"))
             mock_build.return_value = mock_cam
@@ -140,7 +140,7 @@ class TestCameraWorker:
         transport.close = AsyncMock()
         transport.send_json = AsyncMock()
 
-        with patch("workers.camera_worker.build_direct_camera") as mock_build:
+        with patch("workers.camera_worker.build_shared_camera") as mock_build:
             mock_cam = MagicMock()
             mock_cam.connect.side_effect = CaptureError("device is busy")
             mock_build.return_value = mock_cam
@@ -161,7 +161,7 @@ class TestCameraWorkerRegistry:
         config2 = _make_config()
         transport = MagicMock()
 
-        with patch("workers.camera_worker.build_direct_camera") as mock_build:
+        with patch("workers.camera_worker.build_shared_camera") as mock_build:
             mock_build.return_value = MagicMock()
             worker1 = CameraWorker(config1, transport)
             worker2 = CameraWorker(config2, transport)

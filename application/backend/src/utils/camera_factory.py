@@ -6,13 +6,11 @@ per-driver kwargs so that only constructor-safe parameters reach the camera.
 
 from __future__ import annotations
 
-import asyncio
 from typing import TYPE_CHECKING
 
 from loguru import logger
 from physicalai.capture import CameraType, ColorMode, SharedCamera
 from physicalai.capture.factory import create_camera
-from physicalai.capture.transport._shared_camera import _derive_service_name, _probe_service
 
 if TYPE_CHECKING:
     from physicalai.capture.camera import Camera as CameraABC
@@ -74,6 +72,7 @@ def build_shared_camera(
     config: Camera,
     *,
     strict: bool = False,
+    overwrite_settings: bool = False,
     idle_timeout: float = 5.0,
 ) -> SharedCamera:
     """Build a SharedCamera from a backend Camera schema.
@@ -86,6 +85,9 @@ def build_shared_camera(
             ``width``/``height``.  Use ``False`` for preview streams
             (tolerates mismatch) and ``True`` for recording / inference
             (rejects wrong-resolution frames).
+        overwrite_settings: If ``True``, attempt to reconfigure the publisher
+            to match requested settings when a config mismatch is detected.
+            Requires a publisher that supports the control channel (v2+).
         idle_timeout: Seconds with zero subscribers before the publisher
             self-exits.  Preview-class callers should use a short value
             (e.g. 0.5) for fast turnover on resolution changes;
@@ -101,37 +103,10 @@ def build_shared_camera(
         camera_type,
         color_mode=ColorMode.RGB,
         strict=strict,
+        overwrite_settings=overwrite_settings,
         idle_timeout=idle_timeout,
         **camera_kwargs,
     )
-
-
-def shared_camera_service_name(config: Camera) -> str:
-    """Return the SharedCamera service name for a backend Camera schema."""
-    camera_type, camera_kwargs = _camera_type_and_kwargs(config)
-    return _derive_service_name(camera_type.value, camera_kwargs)
-
-
-async def wait_for_shared_camera_publisher_exit(
-    service_name: str,
-    *,
-    timeout_s: float = 1.0,
-    interval_s: float = 0.05,
-) -> bool:
-    """Wait until a SharedCamera publisher service disappears."""
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + timeout_s
-
-    while True:
-        is_alive = await loop.run_in_executor(None, _probe_service, service_name)
-        if not is_alive:
-            return True
-
-        if loop.time() >= deadline:
-            logger.warning(f"Timed out waiting for camera publisher to exit: {service_name}")
-            return False
-
-        await asyncio.sleep(interval_s)
 
 
 def build_direct_camera(config: Camera) -> CameraABC:

@@ -53,11 +53,12 @@ class CameraWorker(TransportWorker[Camera]):
                 return
 
             self.state = WorkerState.RUNNING
+            status_msg = self._build_connect_message()
             await self.transport.send_json(
                 WorkerStatus(
                     state=self.state,
                     config=self.config,
-                    message="Camera connected",
+                    message=status_msg,
                 ).to_json()
             )
 
@@ -110,6 +111,30 @@ class CameraWorker(TransportWorker[Camera]):
             case "disconnect":
                 logger.info("Client requested disconnect")
                 self._stop_requested = True
+
+    def _build_connect_message(self) -> str:
+        actual_w = getattr(self.cam, "actual_width", None)
+        actual_h = getattr(self.cam, "actual_height", None)
+        actual_fps = getattr(self.cam, "actual_fps", None)
+        if actual_w is None or actual_h is None:
+            return "Camera connected"
+
+        payload = self.config.payload
+        req_w = getattr(payload, "width", None)
+        req_h = getattr(payload, "height", None)
+        req_fps = getattr(payload, "fps", None)
+
+        w_mismatch = req_w is not None and actual_w != req_w
+        h_mismatch = req_h is not None and actual_h != req_h
+        fps_mismatch = req_fps is not None and actual_fps not in (None, 0, req_fps)
+
+        if not (w_mismatch or h_mismatch or fps_mismatch):
+            return "Camera connected"
+
+        return (
+            f"showing {actual_w}x{actual_h}@{actual_fps}fps"
+            f" (requested {req_w}x{req_h}@{req_fps}fps, another stream owns this camera)"
+        )
 
     async def shutdown(self) -> None:
         """Graceful shutdown."""

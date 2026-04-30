@@ -1,7 +1,7 @@
 import asyncio
 import multiprocessing as mp
 from queue import Empty
-from typing import Annotated
+from typing import Annotated, Protocol
 
 from fastapi import APIRouter, Depends, WebSocket
 from fastapi.responses import Response
@@ -12,9 +12,40 @@ from core.scheduler import Scheduler
 from robots.robot_client_factory import RobotClientFactory
 from schemas import Dataset, Model
 from schemas.environment import EnvironmentWithRelations
+from workers.camera_worker_registry import CameraWorkerRegistry
 from workers.robot_control_worker import RobotControlWorker
 
+
+class EnvironmentProcess(Protocol):
+    def unload_environment(self) -> None: ...
+    async def wait_environment_teardown(self) -> None: ...
+    def load_environment(self, environment: EnvironmentWithRelations) -> None: ...
+    async def wait_environment_setup(self) -> None: ...
+
+
 router = APIRouter(prefix="/api/record")
+
+
+async def load_environment_with_camera_reservation(
+    process: EnvironmentProcess,
+    camera_registry: CameraWorkerRegistry,
+    environment: EnvironmentWithRelations,
+) -> None:
+    """Reserve cameras, transition environment, then release.
+
+    Reservation serializes env transitions so that preview workers are
+    stopped before the new environment's cameras connect with
+    ``overwrite_settings=True`` (which live-reconfigures the publisher).
+    """
+    fingerprints = [camera.fingerprint for camera in environment.cameras]
+    reservation = await camera_registry.reserve_cameras(fingerprints)
+    try:
+        process.unload_environment()
+        await process.wait_environment_teardown()
+        process.load_environment(environment)
+        await process.wait_environment_setup()
+    finally:
+        await reservation.release()
 
 
 @router.get("/robot_control/ws", tags=["WebSocket"], summary="Robot Control (WebSocket)", status_code=426)

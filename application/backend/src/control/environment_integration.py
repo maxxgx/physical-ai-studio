@@ -48,15 +48,12 @@ class EnvironmentIntegration:
         loop = asyncio.get_running_loop()
         for cam_cfg in self.environment.cameras:
             cam_id = str(cam_cfg.id)
-            cam = build_shared_camera(config=cam_cfg, strict=True, idle_timeout=5.0)
+            cam = build_shared_camera(config=cam_cfg, strict=True, overwrite_settings=True, idle_timeout=5.0)
             logger.info(f"Camera {cam_id} initialized: {cam_cfg}")
             try:
                 await loop.run_in_executor(None, cam.connect)
-            except CaptureError:
-                logger.error(
-                    f"Camera {cam_cfg.name}: resolution mismatch with existing publisher. "
-                    f"Close other camera streams and retry.",
-                )
+            except CaptureError as exc:
+                logger.error(f"Camera {cam_cfg.name}: failed to acquire with requested config: {exc}")
                 raise
             self.frame_captures[cam_id] = cam
 
