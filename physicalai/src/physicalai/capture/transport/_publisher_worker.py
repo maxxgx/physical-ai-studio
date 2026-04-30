@@ -14,7 +14,7 @@ import signal
 import sys
 import threading
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from physicalai.capture.camera import Camera
 
 _MAX_CONSECUTIVE_FAILURES = 5
+_CONTROL_MAX_SLICE_LEN = 4096
 
 shutdown = threading.Event()
 
@@ -79,6 +80,15 @@ def restore_stdout(saved_fd: int) -> None:
 
 
 def build_camera(config: dict) -> Camera:
+    """Instantiate a camera from a JSON config dict.
+
+    Args:
+        config: Configuration dict with camera_type, camera_kwargs, and
+            optional _factory_override.
+
+    Returns:
+        Connected camera instance.
+    """
     factory_override = config.get("_factory_override")
     if factory_override:
         module_path, _, attr = factory_override.rpartition(":")
@@ -90,6 +100,164 @@ def build_camera(config: dict) -> Camera:
 
     spec = CameraSpec.from_json_dict(config)
     return spec.build()
+
+
+def _camera_fps_from_config(config: dict[str, object]) -> int:
+    """Extract fps from camera config when camera_kwargs is mapping-like.
+
+    Returns:
+        Requested fps value, or 0 when camera_kwargs is absent or invalid.
+    """
+    camera_kwargs = config.get("camera_kwargs")
+    if not isinstance(camera_kwargs, dict):
+        return 0
+
+    fps = camera_kwargs.get("fps", 0)
+    return int(fps)
+
+
+class _PublisherState:
+    """Mutable holder for camera/publisher resources shared between threads.
+
+    Protected by ``lock`` — both the main publish loop and the control
+    listener thread must acquire it before touching camera/publisher.
+    """
+
+    def __init__(self, camera: Camera, publisher: Any, camera_fps: int, config: dict) -> None:  # noqa: ANN401
+        self.lock = threading.Lock()
+        self.camera = camera
+        self.publisher = publisher
+        self.camera_fps = camera_fps
+        self.config = config
+
+
+def _control_listener(
+    state: _PublisherState,
+    service_name: str,
+    iox2: Any,  # noqa: ANN401
+    node: Any,  # noqa: ANN401
+) -> None:
+    """Control channel thread — serves reconfigure requests via request_response.
+
+    Runs until ``shutdown`` is set. Opens ``{service_name}/control`` as a
+    request_response server and polls for requests.
+
+    Args:
+        state: Shared mutable publisher state (guarded by state.lock).
+        service_name: Base service name (control channel is ``/control`` suffix).
+        iox2: The iceoryx2 module.
+        node: The iceoryx2 node for this worker process.
+    """
+    control_name = f"{service_name}/control"
+    try:
+        control_service = (
+            node.service_builder(iox2.ServiceName.new(control_name))
+            .request_response(iox2.Slice[ctypes.c_uint8], iox2.Slice[ctypes.c_uint8])
+            .max_servers(1)
+            .max_clients(4)
+            .open_or_create()
+        )
+        server = control_service.server_builder().initial_max_slice_len(_CONTROL_MAX_SLICE_LEN).create()
+    except Exception:  # noqa: BLE001
+        logger.exception(f"Failed to create control channel {control_name}")
+        return
+
+    logger.debug(f"Control channel listening on {control_name}")
+
+    while not shutdown.is_set():
+        active_request = server.receive()
+        if active_request is None:
+            time.sleep(0.05)
+            continue
+
+        try:
+            req_slc = active_request.payload()
+            req_buf = (ctypes.c_uint8 * req_slc.number_of_elements).from_address(req_slc.data_ptr)
+            request = json.loads(bytes(req_buf))
+        except Exception as exc:  # noqa: BLE001
+            _respond_json(active_request, {"ok": False, "error": f"malformed request: {exc}"})
+            continue
+
+        kind = request.get("kind")
+        if kind == "RECONFIGURE":
+            response = _handle_reconfigure(state, request, service_name)
+        else:
+            response = {"ok": False, "error": f"unknown request kind: {kind!r}"}
+
+        _respond_json(active_request, response)
+
+    with contextlib.suppress(Exception):
+        del server, control_service
+
+
+def _respond_json(active_request: Any, payload: dict) -> None:  # noqa: ANN401
+    """Send a JSON response via the active request handle."""
+    response_bytes = json.dumps(payload).encode()
+    sample = active_request.loan_slice_uninit(len(response_bytes))
+    resp_ptr = sample.payload().data_ptr
+    ctypes.memmove(resp_ptr, response_bytes, len(response_bytes))
+    sample.assume_init().send()
+
+
+def _handle_reconfigure(state: _PublisherState, request: dict, service_name: str) -> dict:
+    """Process a RECONFIGURE request under the state lock.
+
+    Args:
+        state: Shared publisher state.
+        request: Parsed JSON request with ``spec`` key.
+        service_name: For logging.
+
+    Returns:
+        Response dict with ``ok`` and optional ``error``.
+    """
+    spec_data = request.get("spec")
+    if not spec_data or not isinstance(spec_data, dict):
+        return {"ok": False, "error": "missing or invalid 'spec' in request"}
+
+    with state.lock:
+        old_config = state.config.copy()
+        old_camera = state.camera
+        old_fps = state.camera_fps
+
+        new_config = {
+            "camera_type": spec_data.get("camera_type", old_config.get("camera_type")),
+            "camera_kwargs": spec_data.get("camera_kwargs", {}),
+            "service_name": service_name,
+        }
+        # Preserve factory override if present in original config
+        if "_factory_override" in old_config:
+            new_config["_factory_override"] = old_config["_factory_override"]
+
+        try:
+            old_camera.disconnect()
+        except Exception:  # noqa: BLE001
+            logger.warning(f"Old camera disconnect failed during reconfigure for {service_name}")
+
+        try:
+            new_camera = build_camera(new_config)
+            new_camera.connect()
+        except Exception as exc:  # noqa: BLE001
+            logger.error(f"Reconfigure failed for {service_name}: {exc}. Attempting restore.")
+            try:
+                restored_camera = build_camera(old_config)
+                restored_camera.connect()
+                state.camera = restored_camera
+                state.config = old_config
+                state.camera_fps = old_fps
+            except Exception:  # noqa: BLE001
+                logger.critical(
+                    f"Cannot restore old config for {service_name} — shutting down.",
+                )
+                shutdown.set()
+                return {"ok": False, "error": f"reconfigure failed and restore failed: {exc}"}
+            return {"ok": False, "error": str(exc)}
+
+        new_fps = _camera_fps_from_config(new_config)
+        state.camera = new_camera
+        state.config = new_config
+        state.camera_fps = new_fps
+        logger.info(f"Reconfigured publisher for {service_name} with {spec_data}")
+        return {"ok": True}
 
 
 def main() -> int:  # noqa: C901, PLR0912, PLR0914, PLR0915
@@ -111,24 +279,14 @@ def main() -> int:  # noqa: C901, PLR0912, PLR0914, PLR0915
     service_name: str = config["service_name"]
     idle_timeout: float = config.get("idle_timeout", 5.0)
     max_subscribers: int = config.get("max_subscribers", 32)
-    camera_fps: int = int(config.get("camera_kwargs", {}).get("fps", 0))
+    camera_fps = _camera_fps_from_config(config)
 
-    # Redirect fd 1 (stdout) to /dev/null during setup so that native
-    # libraries (e.g. omni_camera/Nokhwa) that write directly to the C-level
-    # stdout fd don't corrupt the single-line IPC protocol used by
-    # CameraPublisher.start().
     saved_stdout_fd: int | None = suppress_stdout()
 
     camera = None
     try:
         iox2 = importlib.import_module("iceoryx2")
 
-        # Silence iceoryx2's internal log warnings. The notifier logs a
-        # ``FailedToDeliverSignal`` warning at WARN level whenever a
-        # listener's unix-datagram socket is full (common under load —
-        # the pub-sub payload still delivers reliably, only the wake-up
-        # hint is dropped). These warnings can flood stderr at kHz
-        # rates. Error level keeps genuine errors visible.
         with contextlib.suppress(Exception):
             iox2.set_log_level(iox2.LogLevel.Error)
 
@@ -182,6 +340,16 @@ def main() -> int:  # noqa: C901, PLR0912, PLR0914, PLR0915
 
     signal_ready()
 
+    state = _PublisherState(camera=camera, publisher=publisher, camera_fps=camera_fps, config=config)
+
+    control_thread = threading.Thread(
+        target=_control_listener,
+        args=(state, service_name, iox2, node),
+        daemon=True,
+        name="control-listener",
+    )
+    control_thread.start()
+
     from physicalai.capture.errors import CaptureError  # noqa: PLC0415
 
     node_check_interval = max(0.1, idle_timeout / 5)
@@ -191,8 +359,12 @@ def main() -> int:  # noqa: C901, PLR0912, PLR0914, PLR0915
         last_node_check = 0.0
         consecutive_failures = 0
         while not shutdown.is_set():
+            with state.lock:
+                current_camera = state.camera
+                current_fps = state.camera_fps
+
             try:
-                frame = camera.read(timeout=1.0)
+                frame = current_camera.read(timeout=1.0)
             except CaptureError:
                 consecutive_failures += 1
                 if consecutive_failures >= _MAX_CONSECUTIVE_FAILURES:
@@ -204,15 +376,16 @@ def main() -> int:  # noqa: C901, PLR0912, PLR0914, PLR0915
                 continue
             consecutive_failures = 0
 
-            header, payload_bytes = encode_frame(frame, camera.color_mode, fps=camera_fps)
+            header, payload_bytes = encode_frame(frame, current_camera.color_mode, fps=current_fps)
             header_bytes = bytes(header)
             total_size = HEADER_SIZE + len(payload_bytes)
 
-            sample = publisher.loan_slice_uninit(total_size)
-            shm_ptr = sample.payload().data_ptr
-            ctypes.memmove(shm_ptr, header_bytes, HEADER_SIZE)
-            ctypes.memmove(shm_ptr + HEADER_SIZE, payload_bytes, len(payload_bytes))
-            sample.assume_init().send()
+            with state.lock:
+                sample = state.publisher.loan_slice_uninit(total_size)
+                shm_ptr = sample.payload().data_ptr
+                ctypes.memmove(shm_ptr, header_bytes, HEADER_SIZE)
+                ctypes.memmove(shm_ptr + HEADER_SIZE, payload_bytes, len(payload_bytes))
+                sample.assume_init().send()
 
             with contextlib.suppress(Exception):
                 notifier.notify_with_custom_event_id(iox2.EventId.new(0))
@@ -220,7 +393,6 @@ def main() -> int:  # noqa: C901, PLR0912, PLR0914, PLR0915
             now = time.monotonic()
             if now - last_node_check >= node_check_interval:
                 last_node_check = now
-                # service.nodes includes the publisher's own node — subtract 1.
                 sub_count = max(0, len(service.nodes) - 1)
 
                 if sub_count == 0:
@@ -236,11 +408,12 @@ def main() -> int:  # noqa: C901, PLR0912, PLR0914, PLR0915
     except Exception:  # noqa: BLE001
         logger.exception(f"publisher loop failed for service {service_name}")
     finally:
+        shutdown.set()
+        control_thread.join(timeout=2.0)
         try:
-            camera.disconnect()
+            state.camera.disconnect()
         except Exception:  # noqa: BLE001
             logger.exception(f"camera disconnect failed for service {service_name}")
-        # Release iceoryx2 FFI resources deterministically (not via GC).
         with contextlib.suppress(NameError):
             del publisher, service, event_service, notifier, node
 

@@ -97,6 +97,9 @@ class SharedCamera(Camera):
             :meth:`connect` raises :class:`CaptureError`. If False
             (default), the mismatch is logged as a warning and the
             existing publisher's resolution is used.
+        overwrite_settings: If True, attempt to reconfigure the publisher
+            to match requested settings on config mismatch. Requires
+            the publisher to support the control channel (phase 2+).
         idle_timeout: Seconds with zero subscribers before the publisher
             self-exits.  Lower values (e.g. 0.5) suit preview streams
             where resolution may change frequently; higher values
@@ -111,6 +114,7 @@ class SharedCamera(Camera):
         zero_copy: bool = False,
         service_name: str | None = None,
         strict: bool = False,
+        overwrite_settings: bool = False,
         idle_timeout: float = 5.0,
         **camera_kwargs: object,
     ) -> None:
@@ -137,12 +141,14 @@ class SharedCamera(Camera):
         self._service_name: str = service_name
         self._zero_copy = zero_copy
         self._strict = strict
+        self._overwrite_settings = overwrite_settings
         self._idle_timeout = idle_timeout
         self._publisher: CameraPublisher | None = None
         self._connected = False
         self._latest: Frame | None = None
         self._last_header: FrameHeader | None = None
         self._config_warned = False
+        self._reconfigure_attempted = False
         self._held_sample: Any = None
         self._node: Any | None = None
         self._subscriber: Any | None = None
@@ -156,6 +162,7 @@ class SharedCamera(Camera):
         color_mode: ColorMode = ColorMode.RGB,
         zero_copy: bool = False,
         strict: bool = False,
+        overwrite_settings: bool = False,
         idle_timeout: float = 5.0,
     ) -> SharedCamera:
         return cls(
@@ -164,6 +171,7 @@ class SharedCamera(Camera):
             zero_copy=zero_copy,
             service_name=service_name,
             strict=strict,
+            overwrite_settings=overwrite_settings,
             idle_timeout=idle_timeout,
         )
 
@@ -325,24 +333,85 @@ class SharedCamera(Camera):
         self._latest = None
         self._last_header = None
 
+    def _request_reconfigure(self, timeout: float = 5.0) -> dict:
+        """Send a RECONFIGURE request to the publisher's control channel.
+
+        Opens a one-shot request_response client on
+        ``{service_name}/control``, sends a JSON reconfigure payload,
+        and polls for the response within *timeout*.
+
+        Args:
+            timeout: Max seconds to wait for the response.
+
+        Returns:
+            Response dict (``{"ok": True}`` or ``{"ok": False, "error": ...}``).
+
+        Raises:
+            CaptureError: If the control service does not exist (v1 publisher)
+                or the response times out.
+        """
+        import json  # noqa: PLC0415
+
+        iox2 = cast("Any", import_module("iceoryx2"))
+        control_name = f"{self._service_name}/control"
+
+        try:
+            node = iox2.NodeBuilder.new().create(iox2.ServiceType.Ipc)
+            control_svc = (
+                node.service_builder(iox2.ServiceName.new(control_name))
+                .request_response(iox2.Slice[ctypes.c_uint8], iox2.Slice[ctypes.c_uint8])
+                .open()
+            )
+            client = control_svc.client_builder().initial_max_slice_len(4096).create()
+        except Exception as exc:
+            msg = f"publisher does not support reconfigure (no control service at {control_name})"
+            raise CaptureError(msg) from exc
+
+        camera_type = self._camera_type.value if self._camera_type is not None else None
+        request_payload = json.dumps({
+            "kind": "RECONFIGURE",
+            "spec": {
+                "camera_type": camera_type,
+                "camera_kwargs": dict(self._camera_kwargs),
+            },
+        }).encode()
+
+        try:
+            sample = client.loan_slice_uninit(len(request_payload))
+            req_ptr = sample.payload().data_ptr
+            ctypes.memmove(req_ptr, request_payload, len(request_payload))
+            pending = sample.assume_init().send()
+        except Exception as exc:
+            msg = f"failed to send reconfigure request to {control_name}"
+            raise CaptureError(msg) from exc
+
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            response = pending.receive()
+            if response is not None:
+                resp_slc = response.payload()
+                resp_buf = (ctypes.c_uint8 * resp_slc.number_of_elements).from_address(resp_slc.data_ptr)
+                return json.loads(bytes(resp_buf))
+            time.sleep(0.05)
+
+        msg = f"reconfigure request to {control_name} timed out after {timeout}s"
+        raise CaptureError(msg)
+
     def _check_config_match(self, header: FrameHeader) -> None:
         """Validate publisher's frame config against requested parameters.
 
         Compares the received header's width/height/fps against values
         requested in ``camera_kwargs``. Skips any field not present in
-        the kwargs (None = don't care). Behaviour:
+        the kwargs (None = don't care). Behaviour depends on
+        (strict, overwrite_settings):
 
-        - No mismatch: silent.
-        - Mismatch and ``strict=True``: disconnect and raise
-          :class:`CaptureError`.
-        - Mismatch and ``strict=False``: log a warning **once** and
-          continue using the existing publisher's config.
-
-        Runs on every received frame so that phase-2 reconfiguration is
-        detected automatically.
+        - (T, F): raise on mismatch.
+        - (F, F): warn once + attach.
+        - (T, T): try reconfigure; failure → raise.
+        - (F, T): try reconfigure; failure → warn + attach.
 
         Raises:
-            CaptureError: If ``strict`` is True and config mismatches.
+            CaptureError: When strict=True and mismatch cannot be resolved.
         """
         want_w = self._camera_kwargs.get("width")
         want_h = self._camera_kwargs.get("height")
@@ -358,6 +427,7 @@ class SharedCamera(Camera):
         h_ok = want_h is None or actual_h == want_h
         fps_ok = want_fps is None or actual_fps in {0, want_fps}
         if w_ok and h_ok and fps_ok:
+            self._reconfigure_attempted = False
             return
 
         want_parts = []
@@ -370,6 +440,33 @@ class SharedCamera(Camera):
         want_str = ", ".join(want_parts)
         actual_str = f"{actual_w}x{actual_h}@{actual_fps}"
 
+        if self._overwrite_settings and not self._reconfigure_attempted:
+            self._reconfigure_attempted = True
+            try:
+                result = self._request_reconfigure()
+            except CaptureError as exc:
+                if self._strict:
+                    self._do_disconnect()
+                    raise
+                logger.warning(
+                    f"camera {self.device_id}: reconfigure failed ({exc}). Using existing config {actual_str}.",
+                )
+                return
+
+            if result.get("ok"):
+                logger.info(f"camera {self.device_id}: publisher reconfigured to ({want_str}).")
+                return
+
+            error_msg = result.get("error", "unknown error")
+            if self._strict:
+                self._do_disconnect()
+                msg = f"Cannot use SharedCamera for {self.device_id}: reconfigure failed: {error_msg}"
+                raise CaptureError(msg)
+            logger.warning(
+                f"camera {self.device_id}: reconfigure failed ({error_msg}). Using existing config {actual_str}.",
+            )
+            return
+
         if self._strict:
             self._do_disconnect()
             msg = (
@@ -377,7 +474,7 @@ class SharedCamera(Camera):
                 f"existing publisher config {actual_str} does not match "
                 f"requested ({want_str}). "
                 f"Set strict=False to attach to existing feed, "
-                f"or overwrite_settings=True (phase 2) to reconfigure publisher."
+                f"or overwrite_settings=True to reconfigure publisher."
             )
             raise CaptureError(msg)
 

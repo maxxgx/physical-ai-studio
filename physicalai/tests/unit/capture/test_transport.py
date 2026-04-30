@@ -498,6 +498,225 @@ class TestSharedCameraStrictConfig:
         assert warn_count <= 1
 
 
+class TestOverwriteSettings:
+    """Tests for overwrite_settings reconfigure flow in _check_config_match."""
+
+    @staticmethod
+    def _header_frame(width: int, height: int, fps: int = 30) -> tuple[FrameHeader, Frame]:
+        header = FrameHeader(
+            version=PROTOCOL_VERSION,
+            channels=3,
+            dtype=0,
+            color_mode=0,
+            width=width,
+            height=height,
+            sequence=0,
+            timestamp_ns=0,
+            depth_offset=0,
+            depth_width=0,
+            depth_height=0,
+            fps=fps,
+        )
+        data = np.zeros((height, width, 3), dtype=np.uint8)
+        return header, Frame(data=data, timestamp=0.0, sequence=0)
+
+    @patch("physicalai.capture.transport._shared_camera.import_module")
+    @patch("physicalai.capture.transport._shared_camera._probe_service")
+    def test_overwrite_reconfigure_success(
+        self,
+        mock_probe: MagicMock,
+        mock_import_module: MagicMock,
+    ) -> None:
+        sample = MagicMock()
+        iox2, _, _ = TestSharedCameraSpawnFlow._mock_iox2_stack(sample=sample)
+        mock_import_module.return_value = iox2
+        mock_probe.return_value = True
+
+        camera = SharedCamera(
+            "uvc",
+            device=0,
+            width=640,
+            height=480,
+            strict=True,
+            overwrite_settings=True,
+        )
+        with (
+            patch.object(camera, "_decode_sample", return_value=self._header_frame(1920, 1080)),
+            patch.object(camera, "_request_reconfigure", return_value={"ok": True}),
+        ):
+            camera.connect(timeout=0.1)
+
+        assert camera.is_connected
+        assert camera._reconfigure_attempted is True
+
+    @patch("physicalai.capture.transport._shared_camera.import_module")
+    @patch("physicalai.capture.transport._shared_camera._probe_service")
+    def test_overwrite_strict_reconfigure_failure_raises(
+        self,
+        mock_probe: MagicMock,
+        mock_import_module: MagicMock,
+    ) -> None:
+        sample = MagicMock()
+        iox2, _, _ = TestSharedCameraSpawnFlow._mock_iox2_stack(sample=sample)
+        mock_import_module.return_value = iox2
+        mock_probe.return_value = True
+
+        camera = SharedCamera(
+            "uvc",
+            device=0,
+            width=640,
+            height=480,
+            strict=True,
+            overwrite_settings=True,
+        )
+        with (
+            patch.object(camera, "_decode_sample", return_value=self._header_frame(1920, 1080)),
+            patch.object(
+                camera,
+                "_request_reconfigure",
+                return_value={"ok": False, "error": "camera busy"},
+            ),
+            pytest.raises(CaptureError, match="reconfigure failed"),
+        ):
+            camera.connect(timeout=0.1)
+
+        assert not camera.is_connected
+
+    @patch("physicalai.capture.transport._shared_camera.import_module")
+    @patch("physicalai.capture.transport._shared_camera._probe_service")
+    def test_overwrite_non_strict_reconfigure_failure_warns(
+        self,
+        mock_probe: MagicMock,
+        mock_import_module: MagicMock,
+    ) -> None:
+        sample = MagicMock()
+        iox2, _, _ = TestSharedCameraSpawnFlow._mock_iox2_stack(sample=sample)
+        mock_import_module.return_value = iox2
+        mock_probe.return_value = True
+
+        camera = SharedCamera(
+            "uvc",
+            device=0,
+            width=640,
+            height=480,
+            strict=False,
+            overwrite_settings=True,
+        )
+        with (
+            patch.object(camera, "_decode_sample", return_value=self._header_frame(1920, 1080)),
+            patch.object(
+                camera,
+                "_request_reconfigure",
+                return_value={"ok": False, "error": "camera busy"},
+            ),
+        ):
+            camera.connect(timeout=0.1)
+
+        assert camera.is_connected
+        assert camera._reconfigure_attempted is True
+
+    @patch("physicalai.capture.transport._shared_camera.import_module")
+    @patch("physicalai.capture.transport._shared_camera._probe_service")
+    def test_no_control_service_strict_raises(
+        self,
+        mock_probe: MagicMock,
+        mock_import_module: MagicMock,
+    ) -> None:
+        sample = MagicMock()
+        iox2, _, _ = TestSharedCameraSpawnFlow._mock_iox2_stack(sample=sample)
+        mock_import_module.return_value = iox2
+        mock_probe.return_value = True
+
+        camera = SharedCamera(
+            "uvc",
+            device=0,
+            width=640,
+            height=480,
+            strict=True,
+            overwrite_settings=True,
+        )
+        with (
+            patch.object(camera, "_decode_sample", return_value=self._header_frame(1920, 1080)),
+            patch.object(
+                camera,
+                "_request_reconfigure",
+                side_effect=CaptureError("publisher does not support reconfigure"),
+            ),
+            pytest.raises(CaptureError, match="does not support reconfigure"),
+        ):
+            camera.connect(timeout=0.1)
+
+        assert not camera.is_connected
+
+    @patch("physicalai.capture.transport._shared_camera.import_module")
+    @patch("physicalai.capture.transport._shared_camera._probe_service")
+    def test_no_control_service_non_strict_warns(
+        self,
+        mock_probe: MagicMock,
+        mock_import_module: MagicMock,
+    ) -> None:
+        sample = MagicMock()
+        iox2, _, _ = TestSharedCameraSpawnFlow._mock_iox2_stack(sample=sample)
+        mock_import_module.return_value = iox2
+        mock_probe.return_value = True
+
+        camera = SharedCamera(
+            "uvc",
+            device=0,
+            width=640,
+            height=480,
+            strict=False,
+            overwrite_settings=True,
+        )
+        with (
+            patch.object(camera, "_decode_sample", return_value=self._header_frame(1920, 1080)),
+            patch.object(
+                camera,
+                "_request_reconfigure",
+                side_effect=CaptureError("publisher does not support reconfigure"),
+            ),
+        ):
+            camera.connect(timeout=0.1)
+
+        assert camera.is_connected
+        assert camera._reconfigure_attempted is True
+
+    @patch("physicalai.capture.transport._shared_camera.import_module")
+    @patch("physicalai.capture.transport._shared_camera._probe_service")
+    def test_reconfigure_only_attempted_once(
+        self,
+        mock_probe: MagicMock,
+        mock_import_module: MagicMock,
+    ) -> None:
+        sample = MagicMock()
+        iox2, subscriber, listener = TestSharedCameraSpawnFlow._mock_iox2_stack(sample=sample)
+        mock_import_module.return_value = iox2
+        mock_probe.return_value = True
+
+        camera = SharedCamera(
+            "uvc",
+            device=0,
+            width=640,
+            height=480,
+            strict=False,
+            overwrite_settings=True,
+        )
+        mock_reconfig = MagicMock(return_value={"ok": False, "error": "busy"})
+        hf = self._header_frame(1920, 1080)
+        with (
+            patch.object(camera, "_decode_sample", return_value=hf),
+            patch.object(camera, "_request_reconfigure", mock_reconfig),
+        ):
+            camera.connect(timeout=0.1)
+
+        assert camera.is_connected
+        assert camera._reconfigure_attempted is True
+
+        camera._check_config_match(hf[0])
+
+        mock_reconfig.assert_called_once()
+
+
 @requires_iceoryx2
 class TestCameraPublisher:
     def test_start_stop_lifecycle(self, fake_camera_spec: CameraSpec) -> None:
@@ -608,3 +827,77 @@ class TestMultiSubscriber:
 
         assert isinstance(frame_a, Frame)
         assert isinstance(frame_b, Frame)
+
+
+@requires_iceoryx2
+class TestReconfigureIntegration:
+    """End-to-end tests for the control channel reconfigure flow."""
+
+    def test_reconfigure_resolution_change(self) -> None:
+        from physicalai.capture.transport._publisher import CameraPublisher
+
+        service_name = f"physicalai/test/{uuid4().hex[:8]}/frame"
+        spec = CameraSpec(camera_type="fake", camera_kwargs={"width": 320, "height": 240})
+        publisher = CameraPublisher(
+            spec,
+            service_name,
+            _factory_override="tests.unit.capture.fake:FakeCamera",
+        )
+        publisher.start(timeout=10.0)
+
+        try:
+            camera = SharedCamera.from_publisher(service_name)
+            camera.connect(timeout=5.0)
+            frame = camera.read_latest()
+            assert frame.data.shape == (240, 320, 3)
+
+            camera._overwrite_settings = True
+            camera._camera_type = None
+            camera._camera_kwargs = {"width": 640, "height": 480}
+
+            result = camera._request_reconfigure(timeout=5.0)
+            assert result["ok"] is True
+
+            import time
+
+            time.sleep(0.3)
+
+            frame2 = camera.read(timeout=5.0)
+            assert frame2.data.shape == (480, 640, 3)
+
+            camera.disconnect()
+        finally:
+            publisher.stop()
+
+    def test_reconfigure_failure_restores_old(self) -> None:
+        from physicalai.capture.transport._publisher import CameraPublisher
+
+        service_name = f"physicalai/test/{uuid4().hex[:8]}/frame"
+        spec = CameraSpec(camera_type="fake", camera_kwargs={"width": 320, "height": 240})
+        publisher = CameraPublisher(
+            spec,
+            service_name,
+            _factory_override="tests.unit.capture.fake:FakeCamera",
+        )
+        publisher.start(timeout=10.0)
+
+        try:
+            camera = SharedCamera.from_publisher(service_name)
+            camera.connect(timeout=5.0)
+
+            result = camera._request_reconfigure(timeout=5.0)
+            assert result["ok"] is False or result["ok"] is True
+
+            frame = camera.read(timeout=5.0)
+            assert frame.data.shape[0] > 0
+            camera.disconnect()
+        finally:
+            publisher.stop()
+
+    def test_no_control_service_on_v1_publisher(self) -> None:
+        camera = SharedCamera.from_publisher(f"physicalai/test/{uuid4().hex[:8]}/frame")
+        camera._overwrite_settings = True
+        camera._camera_kwargs = {"width": 640}
+
+        with pytest.raises(CaptureError, match="does not support reconfigure"):
+            camera._request_reconfigure(timeout=1.0)
