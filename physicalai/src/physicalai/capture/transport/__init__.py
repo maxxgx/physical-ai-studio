@@ -3,8 +3,10 @@
 
 """Shared-memory camera transport via iceoryx2.
 
-Provides :func:`create_shared_camera` and :class:`SharedCamera`
-as the public entry points for multi-process camera sharing.
+Provides :class:`SharedCamera` as the public entry point for
+multi-process camera sharing. Use the constructor for auto-spawn mode
+(``SharedCamera(camera_type, ...)``) or
+:meth:`SharedCamera.from_publisher` for subscribe-only mode.
 
 Requires the ``transport`` extra::
 

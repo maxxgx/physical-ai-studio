@@ -45,7 +45,7 @@ class TestCameraWorker:
         with patch("workers.camera_worker.build_shared_camera") as mock_build:
             mock_build.return_value = MagicMock()
             worker = CameraWorker(config, transport)
-            mock_build.assert_called_once_with(config=config, validate_on_connect=False, idle_timeout=0.0)
+            mock_build.assert_called_once_with(config=config, validate_on_connect=False, overwrite_settings=True)
             assert worker.cam is not None
 
     def test_shutdown_disconnects_camera(self, event_loop):

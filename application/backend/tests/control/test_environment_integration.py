@@ -43,7 +43,7 @@ def inference_environment_integration(event_loop, mock_robot_client_factory, moc
         event_loop.run_until_complete(subject.setup())
         for call_args in mock_build.call_args_list:
             assert call_args.kwargs.get("validate_on_connect") is True
-            assert call_args.kwargs.get("idle_timeout") == 5.0
+            assert call_args.kwargs.get("overwrite_settings") is True
         yield subject
         event_loop.run_until_complete(subject.teardown())
 

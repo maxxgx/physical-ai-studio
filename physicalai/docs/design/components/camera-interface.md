@@ -1058,26 +1058,64 @@ Linux-only.
 └──────────────────┘                    └────────────────┘
 ```
 
-- **SharedCamera**: The primary user-facing API for the transport layer. It acts as a
-  `Camera`-compatible subscriber that connects to a named iceoryx2 service.
+- **SharedCamera** (`_shared_camera.py`): The primary user-facing API for the transport
+  layer. A `Camera`-compatible subscriber that connects to a named iceoryx2 service.
   It supports two modes:
+
   - **Auto-spawn mode**: `SharedCamera("realsense", ...)` — automatically spawns a
     background `CameraPublisher` process if one is not already running for the device.
     The publisher remains running as long as it has active subscribers and
-    self-terminates after a 5-second idle period (no subscribers) to conserve resources.
-  - **Subscribe-only mode**: `SharedCamera.from_publisher(service_name="...")` — connects to an existing publisher
-    without attempting to spawn one.
-- **CameraPublisher** (internal): Runs in a background process. Opens the real camera
-  via `CameraSpec.build()`, reads frames in a loop, encodes each frame with a packed
-  binary header (`FrameHeader`), and publishes to an iceoryx2 service. It monitors
-  subscriber counts and exits if idle for more than 5 seconds.
+    self-terminates after `idle_timeout` seconds with zero subscribers (default 5s).
+  - **Subscribe-only mode**: `SharedCamera.from_publisher(service_name="...")` —
+    connects to an existing publisher without attempting to spawn one.
+
+  Connect-time configuration handling is controlled by two flags:
+
+  - `validate_on_connect=False` (default): if the existing publisher's resolution/fps
+    differs from the requested `width`/`height`/`fps`, the mismatch is logged once and
+    the existing config is used.
+  - `validate_on_connect=True`: a mismatch raises `CaptureError`.
+  - `overwrite_settings=True`: on mismatch, send a `RECONFIGURE` request on the
+    publisher's control channel and wait for a response before deciding.
+
+  Observed publisher state is exposed via the `actual_width`, `actual_height`, and
+  `actual_fps` properties (populated from the most recent frame header).
+
+- **CameraPublisher** (`_publisher.py`, internal): Spawns a detached subprocess via
+  `python -m physicalai.capture.transport._publisher_worker`. The worker opens the
+  real camera via `CameraSpec.build()` (using `create_camera()`), reads frames in a
+  loop, encodes each one with a packed binary header (`FrameHeader`), and publishes to
+  the iceoryx2 service. It monitors subscriber counts and exits after `idle_timeout`
+  seconds of zero subscribers. The parent-to-child handshake uses a single
+  `READY`/`ERROR:<json>` line on the worker's stdout.
+- **CameraSpec** (`_spec.py`, internal): JSON-serialisable dataclass describing how
+  to construct the camera (`camera_type` + `camera_kwargs`). The publisher worker
+  receives this on stdin and reconstructs the camera via `CameraSpec.build()`.
+
+**iceoryx2 services:**
+
+For a service base name `S = physicalai/camera/<type>/<device_id>/frame`, the
+publisher exposes three iceoryx2 services:
+
+| Service     | Type              | Purpose                                                                  |
+| ----------- | ----------------- | ------------------------------------------------------------------------ |
+| `S`         | publish-subscribe | Frame payloads (header + image bytes)                                    |
+| `S/notify`  | event             | Per-frame wakeups so subscribers can `timed_wait_one` instead of polling |
+| `S/control` | request-response  | Out-of-band `RECONFIGURE` requests from subscribers                      |
+
+The default `service_name` is derived as
+`physicalai/camera/{camera_type}/{serial_number or device}/frame`. Pass an explicit
+`service_name=` to override this (e.g., for naming streams in a UI).
 
 **Binary Protocol** (`_header.py`):
 
-Each SHM payload is structured as `[FrameHeader (40 bytes)][RGB data][optional depth data]`.
-The header carries protocol version, dimensions, dtype, colour mode, timestamp, sequence
-number, and depth offset. Helper functions `encode_frame()`, `decode_rgb()`,
-`decode_rgb_view()`, and `decode_depth()` handle serialisation.
+Each SHM payload is structured as `[FrameHeader (44 bytes)][RGB data][optional depth data]`.
+The header is a packed `ctypes.Structure` carrying protocol version (currently `2`),
+channel count, dtype code, colour mode, RGB width/height, sequence, monotonic timestamp
+in nanoseconds, depth offset/width/height, and the publisher's nominal `fps`. Helper
+functions `encode_frame()`, `decode_header()`, `decode_rgb()`, `decode_rgb_view()`, and
+`decode_depth()` handle serialisation. Only `uint8` and `uint16` payload dtypes are
+supported.
 
 **Usage:**
 
@@ -1091,7 +1129,7 @@ frame = camera.read_latest()
 camera.disconnect()
 
 # Subscribe-only mode: Connects to an existing publisher
-camera = SharedCamera.from_publisher(service_name="cam/wrist")
+camera = SharedCamera.from_publisher(service_name="physicalai/camera/uvc/0/frame")
 camera.connect(timeout=5.0)
 frame = camera.read_latest()
 camera.disconnect()
@@ -1102,7 +1140,21 @@ camera.connect(timeout=5.0)
 frame = camera.read_latest()
 assert not frame.data.flags.writeable  # view into SHM
 camera.disconnect()
+
+# Strict validation against an existing publisher's resolution
+camera = SharedCamera(
+    "uvc",
+    device=0,
+    width=1280,
+    height=720,
+    validate_on_connect=True,  # raise on mismatch
+)
 ```
+
+**Disconnect semantics**: `SharedCamera.disconnect()` releases only the subscriber's
+iceoryx2 handles. The auto-spawned publisher is intentionally not stopped — it
+self-terminates after the idle window, which avoids hardware flap during rapid
+disconnect/reconnect cycles (e.g., page reloads, brief teleop pauses).
 
 ---
 
