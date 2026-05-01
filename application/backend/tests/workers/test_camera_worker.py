@@ -163,7 +163,7 @@ class TestCameraWorker:
 
 
 class TestCameraWorkerRegistry:
-    def test_rejects_duplicate_fingerprint(self, event_loop):
+    def test_evicts_stale_worker_with_same_fingerprint(self, event_loop):
         registry = CameraWorkerRegistry()
 
         config1 = _make_config()
@@ -176,8 +176,11 @@ class TestCameraWorkerRegistry:
             worker2 = CameraWorker(config2, transport)
 
         async def _register_both():
-            await registry.create_and_register(uuid4(), worker1)
-            with pytest.raises(ValueError, match="already streaming"):
-                await registry.create_and_register(uuid4(), worker2)
+            id1 = uuid4()
+            await registry.create_and_register(id1, worker1)
+            await registry.create_and_register(uuid4(), worker2)
+            # Old worker was removed from registry (not shut down — that's
+            # left to the old websocket handler's finally block).
+            assert await registry.get(id1) is None
 
         event_loop.run_until_complete(_register_both())

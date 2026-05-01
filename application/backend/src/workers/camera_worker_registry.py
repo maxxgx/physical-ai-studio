@@ -33,9 +33,22 @@ class CameraWorkerRegistry:
             if worker_id in self._workers:
                 raise ValueError(f"Worker {worker_id} already exists")
 
-            for existing in self._workers.values():
-                if existing.config.fingerprint == worker.config.fingerprint:
-                    raise ValueError(f"Camera '{worker.config.name}' is already streaming")
+            # Evict stale workers that share the same camera fingerprint.
+            # We only remove them from the registry — the old websocket
+            # handler's finally block will shut them down when their
+            # run() loop exits, avoiding interference with the camera
+            # hardware the new worker is about to use.
+            stale_ids = [
+                wid
+                for wid, existing in self._workers.items()
+                if existing.config.fingerprint == worker.config.fingerprint
+            ]
+            for stale_id in stale_ids:
+                stale = self._workers.pop(stale_id)
+                logger.warning(
+                    f"Evicting stale worker {stale_id} ({stale.config.name}, "
+                    f"state={stale.state.value}) for incoming reconnection"
+                )
 
             if len(self._workers) >= self._max_workers:
                 raise ValueError(f"Maximum number of workers ({self._max_workers}) reached")
