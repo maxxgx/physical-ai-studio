@@ -68,7 +68,7 @@ def driver_to_camera_type(driver: str) -> CameraType:
 def build_shared_camera(
     config: Camera,
     *,
-    strict: bool = False,
+    validate_on_connect: bool = False,
     overwrite_settings: bool = False,
     idle_timeout: float = 5.0,
 ) -> SharedCamera:
@@ -76,12 +76,12 @@ def build_shared_camera(
 
     Args:
         config: Backend camera configuration (discriminated union).
-        strict: If ``True``, :meth:`~SharedCamera.connect` raises
+        validate_on_connect: If ``True``, :meth:`~SharedCamera.connect` raises
             :class:`~physicalai.capture.errors.CaptureError` when an
             existing publisher's resolution does not match the requested
-            ``width``/``height``.  Use ``False`` for preview streams
+            ``width``/``height``. Use ``False`` for preview streams
             (tolerates mismatch) and ``True`` for recording / inference
-            (rejects wrong-resolution frames).
+            when the initial attachment must match the requested config.
         overwrite_settings: If ``True``, attempt to reconfigure the publisher
             to match requested settings when a config mismatch is detected.
             Requires a publisher that supports the control channel (v2+).
@@ -99,7 +99,7 @@ def build_shared_camera(
     return SharedCamera(
         camera_type,
         color_mode=ColorMode.RGB,
-        strict=strict,
+        validate_on_connect=validate_on_connect,
         overwrite_settings=overwrite_settings,
         idle_timeout=idle_timeout,
         **camera_kwargs,

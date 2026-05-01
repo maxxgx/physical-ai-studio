@@ -331,8 +331,8 @@ class TestSharedCameraSpawnFlow:
         assert camera._node is None
 
 
-class TestSharedCameraStrictConfig:
-    """Tests for strict config-mismatch detection on attach to existing publisher."""
+class TestSharedCameraValidateOnConnect:
+    """Tests for connect-time config validation on attach to existing publisher."""
 
     @staticmethod
     def _header_frame(width: int, height: int, fps: int = 30) -> tuple[FrameHeader, Frame]:
@@ -355,7 +355,7 @@ class TestSharedCameraStrictConfig:
 
     @patch("physicalai.capture.transport._shared_camera.import_module")
     @patch("physicalai.capture.transport._shared_camera._probe_service")
-    def test_strict_raises_on_resolution_mismatch(
+    def test_validate_on_connect_raises_on_resolution_mismatch(
         self,
         mock_probe: MagicMock,
         mock_import_module: MagicMock,
@@ -365,7 +365,7 @@ class TestSharedCameraStrictConfig:
         mock_import_module.return_value = iox2
         mock_probe.return_value = True  # publisher exists, no spawn
 
-        camera = SharedCamera("uvc", device=0, width=640, height=480, strict=True)
+        camera = SharedCamera("uvc", device=0, width=640, height=480, validate_on_connect=True)
         with patch.object(camera, "_decode_sample", return_value=self._header_frame(1920, 1080)):
             with pytest.raises(CaptureError, match="does not match"):
                 camera.connect(timeout=0.1)
@@ -376,7 +376,7 @@ class TestSharedCameraStrictConfig:
     @patch("physicalai.capture.transport._shared_camera.import_module")
     @patch("physicalai.capture.transport._shared_camera._probe_service")
     @patch("physicalai.capture.transport._publisher.CameraPublisher.start")
-    def test_strict_spawned_publisher_mismatch(
+    def test_validate_on_connect_spawned_publisher_mismatch(
         self,
         mock_start: MagicMock,
         mock_probe: MagicMock,
@@ -387,7 +387,7 @@ class TestSharedCameraStrictConfig:
         mock_import_module.return_value = iox2
         mock_probe.return_value = False
 
-        camera = SharedCamera("uvc", device=0, width=640, height=480, strict=True)
+        camera = SharedCamera("uvc", device=0, width=640, height=480, validate_on_connect=True)
         with patch.object(camera, "_decode_sample", return_value=self._header_frame(1920, 1080)):
             with pytest.raises(CaptureError, match="does not match"):
                 camera.connect(timeout=0.1)
@@ -396,7 +396,7 @@ class TestSharedCameraStrictConfig:
 
     @patch("physicalai.capture.transport._shared_camera.import_module")
     @patch("physicalai.capture.transport._shared_camera._probe_service")
-    def test_non_strict_warns_on_mismatch_and_attaches(
+    def test_no_validate_on_connect_warns_on_mismatch_and_attaches(
         self,
         mock_probe: MagicMock,
         mock_import_module: MagicMock,
@@ -407,7 +407,7 @@ class TestSharedCameraStrictConfig:
         mock_import_module.return_value = iox2
         mock_probe.return_value = True
 
-        camera = SharedCamera("uvc", device=0, width=640, height=480, strict=False)
+        camera = SharedCamera("uvc", device=0, width=640, height=480, validate_on_connect=False)
         with patch.object(camera, "_decode_sample", return_value=self._header_frame(1920, 1080)):
             camera.connect(timeout=0.1)
 
@@ -415,7 +415,7 @@ class TestSharedCameraStrictConfig:
 
     @patch("physicalai.capture.transport._shared_camera.import_module")
     @patch("physicalai.capture.transport._shared_camera._probe_service")
-    def test_strict_silent_on_match(
+    def test_validate_on_connect_silent_on_match(
         self,
         mock_probe: MagicMock,
         mock_import_module: MagicMock,
@@ -425,7 +425,7 @@ class TestSharedCameraStrictConfig:
         mock_import_module.return_value = iox2
         mock_probe.return_value = True
 
-        camera = SharedCamera("uvc", device=0, width=640, height=480, strict=True)
+        camera = SharedCamera("uvc", device=0, width=640, height=480, validate_on_connect=True)
         with patch.object(camera, "_decode_sample", return_value=self._header_frame(640, 480)):
             camera.connect(timeout=0.1)
 
@@ -443,7 +443,7 @@ class TestSharedCameraStrictConfig:
         mock_import_module.return_value = iox2
         mock_probe.return_value = True
 
-        camera = SharedCamera("uvc", device=0, strict=True)
+        camera = SharedCamera("uvc", device=0, validate_on_connect=True)
         with patch.object(camera, "_decode_sample", return_value=self._header_frame(1920, 1080)):
             camera.connect(timeout=0.1)
 
@@ -451,7 +451,7 @@ class TestSharedCameraStrictConfig:
 
     @patch("physicalai.capture.transport._shared_camera.import_module")
     @patch("physicalai.capture.transport._shared_camera._probe_service")
-    def test_fps_mismatch_strict_raises(
+    def test_fps_mismatch_validate_on_connect_raises(
         self,
         mock_probe: MagicMock,
         mock_import_module: MagicMock,
@@ -461,7 +461,7 @@ class TestSharedCameraStrictConfig:
         mock_import_module.return_value = iox2
         mock_probe.return_value = True
 
-        camera = SharedCamera("uvc", device=0, width=640, height=480, fps=30, strict=True)
+        camera = SharedCamera("uvc", device=0, width=640, height=480, fps=30, validate_on_connect=True)
         with patch.object(camera, "_decode_sample", return_value=self._header_frame(640, 480, fps=60)):
             with pytest.raises(CaptureError, match="does not match"):
                 camera.connect(timeout=0.1)
@@ -470,7 +470,7 @@ class TestSharedCameraStrictConfig:
 
     @patch("physicalai.capture.transport._shared_camera.import_module")
     @patch("physicalai.capture.transport._shared_camera._probe_service")
-    def test_non_strict_warns_once_not_repeatedly(
+    def test_no_validate_on_connect_warns_once_not_repeatedly(
         self,
         mock_probe: MagicMock,
         mock_import_module: MagicMock,
@@ -481,7 +481,7 @@ class TestSharedCameraStrictConfig:
         mock_import_module.return_value = iox2
         mock_probe.return_value = True
 
-        camera = SharedCamera("uvc", device=0, width=640, height=480, strict=False)
+        camera = SharedCamera("uvc", device=0, width=640, height=480, validate_on_connect=False)
         hf = self._header_frame(1920, 1080)
         with patch.object(camera, "_decode_sample", return_value=hf):
             camera.connect(timeout=0.1)
@@ -536,7 +536,7 @@ class TestOverwriteSettings:
             device=0,
             width=640,
             height=480,
-            strict=True,
+            validate_on_connect=True,
             overwrite_settings=True,
         )
         with (
@@ -549,7 +549,7 @@ class TestOverwriteSettings:
 
     @patch("physicalai.capture.transport._shared_camera.import_module")
     @patch("physicalai.capture.transport._shared_camera._probe_service")
-    def test_overwrite_strict_reconfigure_failure_raises(
+    def test_overwrite_validate_on_connect_reconfigure_failure_raises(
         self,
         mock_probe: MagicMock,
         mock_import_module: MagicMock,
@@ -564,7 +564,7 @@ class TestOverwriteSettings:
             device=0,
             width=640,
             height=480,
-            strict=True,
+            validate_on_connect=True,
             overwrite_settings=True,
         )
         with (
@@ -582,7 +582,7 @@ class TestOverwriteSettings:
 
     @patch("physicalai.capture.transport._shared_camera.import_module")
     @patch("physicalai.capture.transport._shared_camera._probe_service")
-    def test_overwrite_non_strict_reconfigure_failure_warns(
+    def test_overwrite_no_validate_on_connect_reconfigure_failure_warns(
         self,
         mock_probe: MagicMock,
         mock_import_module: MagicMock,
@@ -597,7 +597,7 @@ class TestOverwriteSettings:
             device=0,
             width=640,
             height=480,
-            strict=False,
+            validate_on_connect=False,
             overwrite_settings=True,
         )
         with (
@@ -614,7 +614,7 @@ class TestOverwriteSettings:
 
     @patch("physicalai.capture.transport._shared_camera.import_module")
     @patch("physicalai.capture.transport._shared_camera._probe_service")
-    def test_no_control_service_strict_raises(
+    def test_no_control_service_validate_on_connect_raises(
         self,
         mock_probe: MagicMock,
         mock_import_module: MagicMock,
@@ -629,7 +629,7 @@ class TestOverwriteSettings:
             device=0,
             width=640,
             height=480,
-            strict=True,
+            validate_on_connect=True,
             overwrite_settings=True,
         )
         with (
@@ -647,7 +647,7 @@ class TestOverwriteSettings:
 
     @patch("physicalai.capture.transport._shared_camera.import_module")
     @patch("physicalai.capture.transport._shared_camera._probe_service")
-    def test_no_control_service_non_strict_warns(
+    def test_no_control_service_no_validate_on_connect_warns(
         self,
         mock_probe: MagicMock,
         mock_import_module: MagicMock,
@@ -662,7 +662,7 @@ class TestOverwriteSettings:
             device=0,
             width=640,
             height=480,
-            strict=False,
+            validate_on_connect=False,
             overwrite_settings=True,
         )
         with (
@@ -694,7 +694,7 @@ class TestOverwriteSettings:
             device=0,
             width=640,
             height=480,
-            strict=False,
+            validate_on_connect=False,
             overwrite_settings=True,
         )
         mock_reconfig = MagicMock(return_value={"ok": False, "error": "busy"})

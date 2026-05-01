@@ -92,11 +92,13 @@ class SharedCamera(Camera):
             buffer directly (read-only). Otherwise, frames are copied.
         service_name: Override the iceoryx2 service name. Defaults to one
             derived from ``camera_type`` and identifying ``camera_kwargs``.
-        strict: If True and an existing publisher's frame dimensions do
-            not match ``width``/``height`` in ``camera_kwargs``,
-            :meth:`connect` raises :class:`CaptureError`. If False
-            (default), the mismatch is logged as a warning and the
-            existing publisher's resolution is used.
+        validate_on_connect: If True and an existing publisher's frame
+            dimensions do not match ``width``/``height`` in
+            ``camera_kwargs``, :meth:`connect` raises
+            :class:`CaptureError`. If False (default), the mismatch is
+            logged as a warning and the existing publisher's resolution
+            is used. This validation applies only during
+            :meth:`connect`.
         overwrite_settings: If True, attempt to reconfigure the publisher
             to match requested settings on config mismatch. Requires
             the publisher to support the control channel (phase 2+).
@@ -113,7 +115,7 @@ class SharedCamera(Camera):
         color_mode: ColorMode = ColorMode.RGB,
         zero_copy: bool = False,
         service_name: str | None = None,
-        strict: bool = False,
+        validate_on_connect: bool = False,
         overwrite_settings: bool = False,
         idle_timeout: float = 5.0,
         **camera_kwargs: object,
@@ -140,7 +142,7 @@ class SharedCamera(Camera):
         self._camera_kwargs = camera_kwargs
         self._service_name: str = service_name
         self._zero_copy = zero_copy
-        self._strict = strict
+        self._validate_on_connect = validate_on_connect
         self._overwrite_settings = overwrite_settings
         self._idle_timeout = idle_timeout
         self._publisher: CameraPublisher | None = None
@@ -160,7 +162,7 @@ class SharedCamera(Camera):
         *,
         color_mode: ColorMode = ColorMode.RGB,
         zero_copy: bool = False,
-        strict: bool = False,
+        validate_on_connect: bool = False,
         overwrite_settings: bool = False,
         idle_timeout: float = 5.0,
     ) -> SharedCamera:
@@ -169,7 +171,7 @@ class SharedCamera(Camera):
             color_mode=color_mode,
             zero_copy=zero_copy,
             service_name=service_name,
-            strict=strict,
+            validate_on_connect=validate_on_connect,
             overwrite_settings=overwrite_settings,
             idle_timeout=idle_timeout,
         )
@@ -401,14 +403,16 @@ class SharedCamera(Camera):
 
         If config matches or no constraints specified, returns silently.
         If mismatch and ``overwrite_settings=True``, attempts reconfigure
-        via the control channel. Otherwise defers to strict/warn logic.
+        via the control channel. Otherwise defers to
+        validate_on_connect/warn logic.
 
         Args:
             header: First received frame header.
             timeout: Remaining connect timeout for reconfigure response.
 
         Raises:
-            CaptureError: When strict=True and mismatch cannot be resolved.
+            CaptureError: When validate_on_connect=True and mismatch cannot
+                be resolved.
         """
         mismatch = self._detect_mismatch(header)
         if mismatch is None:
@@ -420,7 +424,7 @@ class SharedCamera(Camera):
             try:
                 result = self._request_reconfigure(timeout=timeout)
             except CaptureError as exc:
-                if self._strict:
+                if self._validate_on_connect:
                     self._do_disconnect()
                     raise
                 logger.warning(
@@ -433,7 +437,7 @@ class SharedCamera(Camera):
                 return
 
             error_msg = result.get("error", "unknown error")
-            if self._strict:
+            if self._validate_on_connect:
                 self._do_disconnect()
                 msg = f"Cannot use SharedCamera for {self.device_id}: reconfigure failed: {error_msg}"
                 raise CaptureError(msg)
@@ -442,13 +446,13 @@ class SharedCamera(Camera):
             )
             return
 
-        if self._strict:
+        if self._validate_on_connect:
             self._do_disconnect()
             msg = (
                 f"Cannot use SharedCamera for {self.device_id}: "
                 f"existing publisher config {actual_str} does not match "
                 f"requested ({want_str}). "
-                f"Set strict=False to attach to existing feed, "
+                f"Set validate_on_connect=False to attach to existing feed, "
                 f"or overwrite_settings=True to reconfigure publisher."
             )
             raise CaptureError(msg)
@@ -463,28 +467,14 @@ class SharedCamera(Camera):
         """Per-frame config validation (hot path, no reconfigure).
 
         Called on every received frame. If publisher was reconfigured by
-        another subscriber, detects the change. Strict subs raise
-        immediately; non-strict subs warn once and continue.
-
-        Raises:
-            CaptureError: When strict=True and config mismatches.
+        another subscriber, detect the change and warn once. Connect-time
+        validation has already decided whether this subscriber can attach.
         """
         mismatch = self._detect_mismatch(header)
         if mismatch is None:
             return
 
         want_str, actual_str = mismatch
-
-        if self._strict:
-            self._do_disconnect()
-            msg = (
-                f"Cannot use SharedCamera for {self.device_id}: "
-                f"existing publisher config {actual_str} does not match "
-                f"requested ({want_str}). "
-                f"Set strict=False to attach to existing feed, "
-                f"or overwrite_settings=True to reconfigure publisher."
-            )
-            raise CaptureError(msg)
 
         if not self._config_warned:
             self._config_warned = True

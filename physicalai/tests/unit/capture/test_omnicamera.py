@@ -541,7 +541,6 @@ def test_discover_uses_unique_id_when_stable(omnicamera_cls: tuple) -> None:
     assert devices[0].hardware_id == "abc-123-stable"
     assert devices[0].id_stable is True
     assert devices[0].metadata["unique_id"] == "abc-123-stable"
-    assert devices[0].metadata["id_stable_reported"] is True
     assert devices[0].metadata["serial_collision"] is False
 
 

@@ -31,7 +31,11 @@ class CameraWorker(TransportWorker[Camera]):
         super().__init__(transport)
         self.config = config
         # use idle_timeout=0.0 since it's for preview only
-        self.cam: CameraABC = build_shared_camera(config=config, strict=False, idle_timeout=0.0)
+        self.cam: CameraABC = build_shared_camera(
+            config=config,
+            validate_on_connect=False,
+            overwrite_settings=True,
+        )
         self._stop_requested: bool = False
 
     async def run(self) -> None:
