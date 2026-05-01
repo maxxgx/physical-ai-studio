@@ -90,7 +90,7 @@ class TestCameraWorker:
             mock_cam = MagicMock()
             call_count = 0
 
-            async def async_read_side_effect(timeout=None):
+            async def async_read_side_effect(**kwargs):
                 nonlocal call_count
                 call_count += 1
                 if call_count <= 2:
@@ -108,8 +108,17 @@ class TestCameraWorker:
             async def _run():
                 task = asyncio.create_task(worker._capture_loop())
                 # Wait until at least one frame was sent
-                while transport.send_bytes.call_count < 1:
-                    await asyncio.sleep(0.01)
+                ready = asyncio.Event()
+
+                original_send = transport.send_bytes.side_effect
+
+                async def _notify(*args, **kw):
+                    if original_send:
+                        await original_send(*args, **kw)
+                    ready.set()
+
+                transport.send_bytes.side_effect = _notify
+                await asyncio.wait_for(ready.wait(), timeout=5)
                 worker._stop_requested = True
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
