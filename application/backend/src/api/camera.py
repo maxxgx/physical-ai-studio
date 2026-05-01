@@ -1,5 +1,6 @@
 import json
 from collections import defaultdict
+from functools import cache
 from typing import Annotated
 from uuid import uuid4
 
@@ -7,7 +8,7 @@ from fastapi import APIRouter, Depends, Query, WebSocket, status
 from fastapi.responses import Response
 from loguru import logger
 
-from api.dependencies import CameraRegistryDep
+from api.dependencies import CameraRegistryDep, RecordingLockedCamerasDep
 from schemas.camera import SupportedCameraFormat
 from schemas.project_camera import Camera as ProjectCamera
 from schemas.project_camera import CameraAdapter
@@ -28,6 +29,8 @@ def _formats_to_response(raw: list[tuple[int, int, int]]) -> list[SupportedCamer
     ]
 
 
+# Cache required on MacOS to avoid repeated cam.open() which may block camera stream
+@cache
 def _query_formats(driver: str, fingerprint: str) -> list[SupportedCameraFormat]:
     """Query real formats from a device via physicalai.capture."""
     if driver == "usb_camera":
@@ -80,6 +83,7 @@ async def camera_websocket_openapi(
 async def camera_websocket(
     websocket: WebSocket,
     registry: CameraRegistryDep,
+    locked_camera_fingerprints: RecordingLockedCamerasDep,
     camera: Annotated[ProjectCamera, Depends(get_camera_from_query)],
 ) -> None:
     """WebSocket endpoint for camera streaming.
@@ -97,11 +101,12 @@ async def camera_websocket(
     """
     await websocket.accept()
 
+    is_locked = camera.fingerprint in locked_camera_fingerprints
     worker_id = uuid4()
     camera.id = worker_id
 
     transport = WebSocketTransport(websocket)
-    worker = CameraWorker(camera, transport)
+    worker = CameraWorker(camera, transport, is_locked=is_locked)
 
     try:
         await registry.create_and_register(worker_id, worker)

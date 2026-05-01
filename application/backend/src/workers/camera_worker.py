@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING
 
 from fastapi.websockets import WebSocketDisconnect
 from loguru import logger
@@ -13,10 +12,6 @@ from utils.camera_factory import build_shared_camera
 from workers.transport.worker_transport import WorkerTransport
 from workers.transport_worker import TransportWorker, WorkerState, WorkerStatus
 
-if TYPE_CHECKING:
-    from physicalai.capture.camera import Camera as CameraABC
-
-
 tj = TurboJPEG()
 
 
@@ -27,14 +22,17 @@ class CameraWorker(TransportWorker[Camera]):
         self,
         config: Camera,
         transport: WorkerTransport,
+        is_locked: bool = False,
     ) -> None:
         super().__init__(transport)
         self.config = config
-        # use idle_timeout=0.0 since it's for preview only
-        self.cam: CameraABC = build_shared_camera(
+        # When locked by active recording: attach passively (don't reconfigure
+        # the camera). Otherwise let preview drive settings so the camera
+        # edit page sees live changes.
+        self.cam = build_shared_camera(
             config=config,
             validate_on_connect=False,
-            overwrite_settings=True,
+            overwrite_settings=not is_locked,
         )
         self._stop_requested: bool = False
 

@@ -185,7 +185,6 @@ class SharedCamera(Camera):
             from ._spec import CameraSpec  # noqa: PLC0415
 
             spec = CameraSpec(self._camera_type, self._camera_kwargs)
-            logger.warning(f"camera spec: {spec}")
             publisher = CameraPublisher(spec, self._service_name, idle_timeout=self._idle_timeout)
             try:
                 publisher.start()
