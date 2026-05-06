@@ -3,8 +3,8 @@ import { useNavigate } from 'react-router';
 
 import { $api } from '../../../api/client';
 import { isRecordingLockedError } from '../../../api/errors';
-import { paths } from '../../../router';
 import { InlineAlert } from '../../../features/robots/setup-wizard/shared/inline-alert';
+import { paths } from '../../../router';
 import { useCameraId } from '../use-camera';
 import { useCameraFormBody } from './provider';
 
