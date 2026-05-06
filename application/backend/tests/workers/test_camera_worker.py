@@ -54,11 +54,13 @@ class TestCameraWorker:
         transport.close = AsyncMock()
         with patch("workers.camera_worker.build_shared_camera") as mock_build:
             mock_cam = MagicMock()
+            mock_cam.is_connected = True
+            mock_cam.disconnect.side_effect = lambda: setattr(mock_cam, "is_connected", False)
             mock_build.return_value = mock_cam
             worker = CameraWorker(config, transport)
             event_loop.run_until_complete(worker.shutdown())
             mock_cam.disconnect.assert_called_once()
-            assert worker.cam is None
+            assert not worker.cam.is_connected
 
     def test_shutdown_is_idempotent(self, event_loop):
         config = _make_config()
@@ -66,6 +68,8 @@ class TestCameraWorker:
         transport.close = AsyncMock()
         with patch("workers.camera_worker.build_shared_camera") as mock_build:
             mock_cam = MagicMock()
+            mock_cam.is_connected = True
+            mock_cam.disconnect.side_effect = lambda: setattr(mock_cam, "is_connected", False)
             mock_build.return_value = mock_cam
             worker = CameraWorker(config, transport)
 
@@ -84,9 +88,8 @@ class TestCameraWorker:
 
         with (
             patch("workers.camera_worker.build_shared_camera") as mock_build,
-            patch("workers.camera_worker.tj") as mock_tj,
+            patch("workers.camera_worker.encode_jpeg_rgb", return_value=b"\xff\xd8fake-jpeg"),
         ):
-            mock_tj.encode.return_value = b"\xff\xd8fake-jpeg"
             mock_cam = MagicMock()
             call_count = 0
 

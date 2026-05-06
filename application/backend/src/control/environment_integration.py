@@ -10,15 +10,13 @@ from loguru import logger
 from physicalai.capture import SharedCamera
 from physicalai.capture.errors import CaptureError
 from physicalai.data import Observation
-from turbojpeg import TJPF_RGB, TurboJPEG
 
 from robots.robot_client import RobotClient
 from robots.robot_client_factory import RobotClientFactory
 from schemas.environment import EnvironmentWithRelations, TeleoperatorRobotWithRobot
 from schemas.project_camera import Camera
 from utils.camera_factory import build_shared_camera
-
-tj = TurboJPEG()
+from utils.jpeg import encode_jpeg_rgb
 
 
 class EnvironmentIntegration:
@@ -166,8 +164,7 @@ class EnvironmentIntegration:
     def _base_64_encode_observation(self, observation: np.ndarray | None) -> str:
         if observation is None:
             return ""
-        _imagebytes = tj.encode(observation, pixel_format=TJPF_RGB, quality=80)
-        return base64.b64encode(_imagebytes).decode()
+        return base64.b64encode(encode_jpeg_rgb(observation)).decode()
 
     def _remap_camera_observations(self, observations: dict) -> dict:
         """Remap camera observations from camera ID keys to lowercase camera name keys."""

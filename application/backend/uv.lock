@@ -2865,7 +2865,6 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "pyrealsense2", marker = "sys_platform != 'darwin' or (extra == 'extra-18-physical-ai-studio-cpu' and extra == 'extra-18-physical-ai-studio-cuda') or (extra == 'extra-18-physical-ai-studio-cpu' and extra == 'extra-18-physical-ai-studio-xpu') or (extra == 'extra-18-physical-ai-studio-cuda' and extra == 'extra-18-physical-ai-studio-xpu')" },
     { name = "pyrealsense2-macosx", marker = "sys_platform == 'darwin' or (extra == 'extra-18-physical-ai-studio-cpu' and extra == 'extra-18-physical-ai-studio-cuda') or (extra == 'extra-18-physical-ai-studio-cpu' and extra == 'extra-18-physical-ai-studio-xpu') or (extra == 'extra-18-physical-ai-studio-cuda' and extra == 'extra-18-physical-ai-studio-xpu')" },
-    { name = "pyturbojpeg" },
     { name = "sqlalchemy" },
     { name = "sse-starlette" },
     { name = "tenacity" },
@@ -2932,7 +2931,6 @@ requires-dist = [
     { name = "pyrealsense2-macosx", marker = "sys_platform == 'darwin'" },
     { name = "pytest", marker = "extra == 'tests'" },
     { name = "pytorch-triton-xpu", marker = "(sys_platform == 'linux' and extra == 'xpu') or (sys_platform == 'win32' and extra == 'xpu')", index = "https://download.pytorch.org/whl/xpu", conflict = { package = "physical-ai-studio", extra = "xpu" } },
-    { name = "pyturbojpeg", specifier = "<2" },
     { name = "sqlalchemy", specifier = ">=2.0.43" },
     { name = "sse-starlette", specifier = ">=2.0.0" },
     { name = "tenacity", specifier = ">=9.1.2" },
@@ -3985,7 +3983,7 @@ name = "pyturbojpeg"
 version = "1.8.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "numpy" },
+    { name = "numpy", marker = "sys_platform == 'linux' or (extra == 'extra-18-physical-ai-studio-cpu' and extra == 'extra-18-physical-ai-studio-cuda') or (extra == 'extra-18-physical-ai-studio-cpu' and extra == 'extra-18-physical-ai-studio-xpu') or (extra == 'extra-18-physical-ai-studio-cuda' and extra == 'extra-18-physical-ai-studio-xpu')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/f2/2b/5fc7a7f51af947708a5d75d7637e923d2d4e60f43f6a4cfe55ae1ea241a2/pyturbojpeg-1.8.3.tar.gz", hash = "sha256:c131591a3990cc57f45a8b2705d6261c25df913a19b1fe88de5e911dbe04a1d4", size = 12757, upload-time = "2026-02-17T02:32:53.192Z" }
 

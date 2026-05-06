@@ -5,14 +5,12 @@ import asyncio
 from fastapi.websockets import WebSocketDisconnect
 from loguru import logger
 from physicalai.capture.errors import CaptureError, CaptureTimeoutError
-from turbojpeg import TJPF_RGB, TurboJPEG
 
 from schemas.project_camera import Camera
 from utils.camera_factory import build_shared_camera
+from utils.jpeg import encode_jpeg_rgb
 from workers.transport.worker_transport import WorkerTransport
 from workers.transport_worker import TransportWorker, WorkerState, WorkerStatus
-
-tj = TurboJPEG()
 
 
 class CameraWorker(TransportWorker[Camera]):
@@ -87,8 +85,7 @@ class CameraWorker(TransportWorker[Camera]):
                 logger.error(f"capture error on {self.config.fingerprint}: {exc}")
                 break
 
-            jpeg_bytes = tj.encode(frame.data, pixel_format=TJPF_RGB, quality=80)
-            await self.transport.send_bytes(jpeg_bytes)
+            await self.transport.send_bytes(encode_jpeg_rgb(frame.data))
 
     async def _command_loop(self) -> None:
         """Handle incoming commands from client."""
@@ -139,6 +136,8 @@ class CameraWorker(TransportWorker[Camera]):
 
     async def shutdown(self) -> None:
         """Graceful shutdown."""
+        if not self.cam.is_connected:
+            return
         logger.info(f"Shutting down camera: {self.config.name}")
         self._stop_requested = True
         await super().shutdown()
