@@ -43,6 +43,10 @@ def _query_formats(driver: str, fingerprint: str) -> list[SupportedCameraFormat]
 
         return _formats_to_response(RealSenseCamera.query_formats(fingerprint))
 
+    if driver == "basler":
+        # TODO: Replace with cached Basler hardware discovery once implementated in physicalai.capture
+        return _formats_to_response([(640, 480, 30), (768, 480, 30), (1920, 1200, 30)])
+
     msg = f"Format discovery not supported for driver {driver!r}"
     raise ValueError(msg)
 
