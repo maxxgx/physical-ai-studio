@@ -153,13 +153,7 @@ class EnvironmentIntegration:
 
     def format_observation_for_dataset(self, raw_observation: dict) -> dict:
         """Format observation for dataset frame input."""
-        observation = self._remap_camera_observations(raw_observation)
-        for camera in self.environment.cameras:
-            camera_name = camera.name.lower()
-            # RGB2BGR
-            observation[camera_name] = np.ascontiguousarray(observation[camera_name][..., ::-1])
-
-        return observation
+        return self._remap_camera_observations(raw_observation)
 
     def _base_64_encode_observation(self, observation: np.ndarray | None) -> str:
         if observation is None:
