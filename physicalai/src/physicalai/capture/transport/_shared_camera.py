@@ -9,6 +9,7 @@ import contextlib
 import ctypes
 import time
 from importlib import import_module
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from loguru import logger
@@ -74,6 +75,11 @@ def _probe_with_retry(service_name: str, timeout: float, interval: float = 0.1) 
 
 def _derive_service_name(camera_type: str, camera_kwargs: Mapping[str, object]) -> str:
     device_id = camera_kwargs.get("serial_number", camera_kwargs.get("device", 0))
+    # Resolve symlinks so that /dev/v4l/by-id/... and /dev/videoN produce
+    # the same service name for the same physical device.
+    if isinstance(device_id, str) and device_id.startswith("/dev/"):
+        resolved = Path(device_id).resolve()
+        device_id = resolved.name
     return f"physicalai/camera/{camera_type}/{device_id}/frame"
 
 

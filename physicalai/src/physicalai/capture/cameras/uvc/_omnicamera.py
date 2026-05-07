@@ -66,10 +66,6 @@ class OmniCamera(Camera):
                 normalized_device_id = int(device_id)
             elif device_id.startswith("/dev/video"):
                 suffix = device_id.removeprefix("/dev/video")
-                # Backward compat: strip legacy ":N" sub-device suffix
-                # (e.g. "/dev/video0:0" → "/dev/video0").
-                if ":" in suffix:
-                    suffix = suffix.split(":")[0]
                 if not suffix.isdecimal():
                     msg = f"Invalid device path: {device_id}"
                     raise ValueError(msg)

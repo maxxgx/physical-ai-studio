@@ -44,7 +44,11 @@ def _camera_type_and_kwargs(config: Camera) -> tuple[CameraType, dict[str, Any]]
     camera_kwargs: dict[str, Any] = {k: v for k, v in payload.items() if k in allowed and v is not None}
 
     if camera_type == CameraType.UVC:
-        camera_kwargs["device"] = config.fingerprint
+        fingerprint = config.fingerprint
+        # Strip legacy ":N" sub-device suffix (e.g. "/dev/video0:0" → "/dev/video0").
+        if fingerprint.startswith("/dev/video") and ":" in fingerprint:
+            fingerprint = fingerprint.split(":")[0]
+        camera_kwargs["device"] = fingerprint
     else:
         camera_kwargs["serial_number"] = config.fingerprint
 
