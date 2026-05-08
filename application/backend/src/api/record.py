@@ -122,8 +122,10 @@ async def robot_control_websocket(
         if process is not None:
             process.disconnect()
             process.join(10)
-
-        queue.close()
     finally:
+        queue.close()
+        # NOTE: this clears ALL locks, not just this session's. Safe today
+        # because only one recording websocket runs at a time. If concurrent
+        # sessions are added, scope locks per session instead.
         locked_camera_fingerprints.clear()
     logger.info("websocket handling done...")
