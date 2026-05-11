@@ -3,7 +3,6 @@
 
 from pathlib import Path
 
-import torch
 from physicalai.inference import InferenceModel
 from physicalai.policies import ACT, Pi0, Pi05, SmolVLA
 from physicalai.policies.base import Policy
@@ -27,6 +26,8 @@ def load_policy(model: Model, *, compile_model: bool = False) -> Policy:
         raise ValueError(f"Policy {model.policy} not implemented.")
 
     if compile_model:
+        import torch
+
         compile_mode = getattr(policy.config, "compile_mode", "default")
         policy.forward = torch.compile(policy.forward, mode=compile_mode)  # type: ignore[method-assign]
     return policy
