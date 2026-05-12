@@ -22,11 +22,6 @@ if TYPE_CHECKING:
 _MISSING_DEP_PKG = "omni_camera"
 _MISSING_DEP_EXTRA = "capture"
 
-# On macOS, ``info.can_open()`` opens the camera via AVFoundation which holds
-# a process-wide lock blocking subsequent subprocess opens (publisher worker).
-# On Linux v4l2 has no such lock, so filtering unopenable devices is safe.
-_FILTER_USABLE = sys.platform.startswith("linux")
-
 
 class OmniCamera(Camera):
     _POLL_INTERVAL_S = 0.001
@@ -228,7 +223,21 @@ class OmniCamera(Camera):
     def discover(cls) -> list[DeviceInfo]:
         from physicalai.capture.discovery import DeviceInfo  # noqa: PLC0415
 
-        infos = omni_camera.query(only_usable=_FILTER_USABLE)
+        import re
+
+        infos = omni_camera.query(only_usable=False)
+
+        # V4L2 exposes multiple /dev/videoN nodes per physical camera
+        # (e.g. capture + metadata with distinct by-id paths like
+        # ...-video-index0 and ...-video-index1). Keep only the lowest-
+        # index node per physical device (index0 = capture, index1+ = metadata).
+        phys_best: dict[str, object] = {}
+        for info in infos:
+            uid = info.unique_id or ""
+            phys_key = re.sub(r"-video-index\d+$", "", uid) if uid else str(info.index)
+            if phys_key not in phys_best or info.index < phys_best[phys_key].index:
+                phys_best[phys_key] = info
+        infos = list(phys_best.values())
 
         # Some vendors (e.g. InnoMaker) bake the same USB iSerial into every
         # unit of a model. When a unique_id appears more than once it cannot
