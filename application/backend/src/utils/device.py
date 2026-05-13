@@ -34,7 +34,11 @@ def get_lightning_strategy(device: str | None = None) -> str:
     hardware auto-detection.
     """
     if device is not None and device == "xpu":
-        import physicalai.devices.xpu  # noqa: F401
-
         return "xpu_single"
+
+    import torch
+
+    if device is None and torch.xpu.is_available():
+        return "xpu_single"
+
     return "auto"
