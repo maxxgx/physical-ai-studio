@@ -248,14 +248,14 @@ class SharedCamera(Camera):
         msg = "no publisher responded within timeout"
         raise CaptureTimeoutError(msg)
 
-    def read(self, timeout: float | None = None) -> Frame:
+    def read(self, timeout: float = 2.0) -> Frame:
         if not self._connected or self._subscriber is None or self._listener is None:
             msg = "shared camera is not connected"
             raise NotConnectedError(msg)
 
         iox2 = cast("Any", import_module("iceoryx2"))
 
-        wait_timeout = 3600.0 if timeout is None else timeout
+        wait_timeout = timeout
         event = self._listener.timed_wait_one(iox2.Duration.from_secs_f64(wait_timeout))
         if event is None:
             msg = "timed out waiting for frame"

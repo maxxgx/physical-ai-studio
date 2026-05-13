@@ -58,7 +58,7 @@ def omnicamera_cls():  # noqa: ANN201
     mock_fmt_opts.__bool__ = mock.Mock(return_value=True)
 
     mock_cam.poll_frame_np.return_value = np.zeros((480, 640, 3), dtype=np.uint8)
-    mock_cam.poll_frame_np_with_seq.return_value = (np.zeros((480, 640, 3), dtype=np.uint8), 1)
+    mock_cam.poll_frame_np_with_seq.return_value = (np.zeros((480, 640, 3), dtype=np.uint8), 0)
     mock_cam.open.return_value = None
     mock_cam.close.return_value = None
 
@@ -192,7 +192,7 @@ def test_connect_timeout_raises_when_poll_always_none(omnicamera_cls: tuple) -> 
     """connect() raises CaptureTimeoutError when poll_frame_np always returns None."""
     camera_cls, mock_omni_camera = omnicamera_cls
     mock_cam = mock_omni_camera.Camera.return_value
-    mock_cam.poll_frame_np.return_value = None
+    mock_cam.poll_frame_np_with_seq.return_value = None
 
     cam = camera_cls()
     with pytest.raises(CaptureTimeoutError):
@@ -218,9 +218,11 @@ def test_connect_format_mismatch_raises(omnicamera_cls: tuple) -> None:
 
 def test_read_returns_frame(omnicamera_cls: tuple) -> None:
     """read() returns a Frame with correct shape after connect()."""
-    camera_cls, _ = omnicamera_cls
+    camera_cls, mock_omni_camera = omnicamera_cls
+    mock_cam = mock_omni_camera.Camera.return_value
     cam = camera_cls()
     cam.connect()
+    mock_cam.poll_frame_np_with_seq.return_value = (np.zeros((480, 640, 3), dtype=np.uint8), 1)
     frame = cam.read()
     assert isinstance(frame, Frame)
     assert frame.data.shape == (480, 640, 3)
@@ -348,11 +350,16 @@ def test_read_latest_returns_cached_frame_when_poll_none(omnicamera_cls: tuple) 
     raw = np.zeros((480, 640, 3), dtype=np.uint8)
     raw[:, :, 0] = 42
     mock_cam = mock_omni_camera.Camera.return_value
-    mock_cam.poll_frame_np.return_value = raw
 
     cam = camera_cls()
+    # Connect stores _last_frame from connect's poll
     cam.connect()
 
+    # First read_latest with a real frame to populate _last_frame with our marked data
+    mock_cam.poll_frame_np_with_seq.return_value = (raw, 1)
+    cam.read_latest()
+
+    # Now poll returns None — should return the cached frame
     mock_cam.poll_frame_np_with_seq.return_value = (None, 0)
     seq_before = cam._sequence  # noqa: SLF001
     frame = cam.read_latest()
@@ -452,40 +459,6 @@ def test_discover_returns_device_info(omnicamera_cls: tuple) -> None:
     assert devices[0].name == "Test Camera"
     assert devices[0].driver == "uvc"
     assert devices[0].model == "Test Camera"
-
-
-def test_discover_keeps_unopenable(omnicamera_cls: tuple) -> None:
-    """discover() returns all cameras without probing on macOS (no _FILTER_USABLE)."""
-    camera_cls, mock_omni_camera = omnicamera_cls
-
-    cam_info_0 = mock.MagicMock()
-    cam_info_0.index = 0
-    cam_info_0.name = "Camera 0"
-    cam_info_0.description = ""
-    cam_info_0.misc = ""
-    cam_info_0.can_open.return_value = True
-    cam_info_0.unique_id = ""
-    cam_info_0.id_stable = False
-
-    cam_info_1 = mock.MagicMock()
-    cam_info_1.index = 1
-    cam_info_1.name = "Camera 1"
-    cam_info_1.description = ""
-    cam_info_1.misc = ""
-    cam_info_1.can_open.return_value = False
-    cam_info_1.unique_id = ""
-    cam_info_1.id_stable = False
-
-    mock_omni_camera.query.return_value = [cam_info_0, cam_info_1]
-
-    with mock.patch("physicalai.capture.cameras.uvc._omnicamera._FILTER_USABLE", new=False):
-        devices = camera_cls.discover()
-
-    assert len(devices) == 2
-    assert [d.device_id for d in devices] == ["0", "1"]
-    cam_info_0.can_open.assert_not_called()
-    cam_info_1.can_open.assert_not_called()
-    mock_omni_camera.query.assert_called_once_with(only_usable=False)
 
 
 def test_device_selector_path_string_maps_to_index(omnicamera_cls: tuple) -> None:

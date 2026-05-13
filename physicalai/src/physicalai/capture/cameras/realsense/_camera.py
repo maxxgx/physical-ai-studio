@@ -124,7 +124,7 @@ class RealSenseCamera(DepthMixin, Camera):
         """
         return f"realsense:{self._serial_number}"
 
-    def read(self, timeout: float | None = None) -> Frame:
+    def read(self, timeout: float = 2.0) -> Frame:
         """Read the next aligned color frame.
 
         Returns:
@@ -138,7 +138,7 @@ class RealSenseCamera(DepthMixin, Camera):
         if not self._connected or self._pipeline is None or self._align is None:
             raise NotConnectedError
 
-        timeout_ms = int(timeout * 1000) if timeout is not None else 15000
+        timeout_ms = int(timeout * 1000)
         try:
             frameset = self._pipeline.wait_for_frames(timeout_ms)
         except RuntimeError as err:
