@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import re
 import sys
 import time
 from typing import TYPE_CHECKING, Any, cast
@@ -21,11 +23,6 @@ if TYPE_CHECKING:
 
 _MISSING_DEP_PKG = "omni_camera"
 _MISSING_DEP_EXTRA = "capture"
-
-# On macOS, ``info.can_open()`` opens the camera via AVFoundation which holds
-# a process-wide lock blocking subsequent subprocess opens (publisher worker).
-# On Linux v4l2 has no such lock, so filtering unopenable devices is safe.
-_FILTER_USABLE = sys.platform.startswith("linux")
 
 
 class OmniCamera(Camera):
@@ -142,20 +139,26 @@ class OmniCamera(Camera):
             raise
 
         frame_data = None
+        seq = self._sequence
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            frame_data = self._cam.poll_frame_np()
-            if frame_data is not None:
+            # result could be None if camera is no connected yet
+            result = None
+            with contextlib.suppress(Exception):
+                result = self._cam.poll_frame_np_with_seq()
+            if result is not None:
+                frame_data, seq = result
                 break
-            time.sleep(self._POLL_INTERVAL_S)
+            time.sleep(1.0 / self._fps)
 
         if frame_data is None:
+            self._do_disconnect()
             msg = f"Timed out waiting for first frame after {timeout}s"
             raise CaptureTimeoutError(msg)
 
         self._last_frame = frame_data
         self._connected = True
-        self._sequence = 0
+        self._sequence = seq
 
     def _do_disconnect(self) -> None:
         if self._cam is not None:
@@ -172,22 +175,29 @@ class OmniCamera(Camera):
     def device_id(self) -> str:
         return str(self._device_id_raw)
 
-    def read(self, timeout: float | None = None) -> Frame:
+    def read(self, timeout: float = 2.0) -> Frame:
         if not self._connected or self._cam is None:
             err = NotConnectedError()
             raise err
 
-        deadline = time.monotonic() + timeout if timeout is not None else None
-
+        deadline = time.monotonic() + timeout
         while True:
-            frame_data, seq = self._cam.poll_frame_np_with_seq()
-            if frame_data is not None:
-                converted = self._convert_color(frame_data)
-                self._sequence = seq
-                self._last_frame = frame_data
-                return Frame(data=converted, timestamp=time.monotonic(), sequence=self._sequence)
+            try:
+                frame_data, seq = self._cam.poll_frame_np_with_seq()
+                if frame_data is not None and seq != self._sequence:
+                    converted = self._convert_color(frame_data)
+                    self._sequence = seq
+                    self._last_frame = frame_data
+                    return Frame(data=converted, timestamp=time.monotonic(), sequence=self._sequence)
+                last_error = None
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
 
-            if deadline is not None and time.monotonic() >= deadline:
+            if time.monotonic() >= deadline:
+                if last_error is not None:
+                    self._do_disconnect()
+                    msg = f"Failed to read frame from device {self.device_id} within {timeout}s: {last_error}"
+                    raise CaptureError(msg) from last_error
                 msg = f"Timed out waiting for frame after {timeout}s"
                 raise CaptureTimeoutError(msg)
 
@@ -198,12 +208,17 @@ class OmniCamera(Camera):
             err = NotConnectedError()
             raise err
 
-        frame_data, seq = self._cam.poll_frame_np_with_seq()
-        if frame_data is not None:
-            converted = self._convert_color(frame_data)
-            self._sequence = seq
-            self._last_frame = frame_data
-            return Frame(data=converted, timestamp=time.monotonic(), sequence=self._sequence)
+        try:
+            frame_data, seq = self._cam.poll_frame_np_with_seq()
+            if frame_data is not None:
+                converted = self._convert_color(frame_data)
+                self._sequence = seq
+                self._last_frame = frame_data
+                return Frame(data=converted, timestamp=time.monotonic(), sequence=self._sequence)
+        except Exception as exc:
+            self._do_disconnect()
+            msg = f"Failed to read frame from device: {self.device_id}"
+            raise CaptureError(msg) from exc
 
         if self._last_frame is not None:
             return Frame(
@@ -228,9 +243,22 @@ class OmniCamera(Camera):
     def discover(cls) -> list[DeviceInfo]:
         from physicalai.capture.discovery import DeviceInfo  # noqa: PLC0415
 
-        infos = omni_camera.query(only_usable=_FILTER_USABLE)
+        infos = omni_camera.query(only_usable=False)
 
-        # Some vendors (e.g. InnoMaker) bake the same USB iSerial into every
+        if sys.platform.startswith("linux"):
+            # V4L2 exposes multiple /dev/videoN nodes per physical camera
+            # (e.g. capture + metadata with distinct by-id paths like
+            # ...-video-index0 and ...-video-index1). Keep only the lowest-
+            # index node per physical device (index0 = capture, index1+ = metadata).
+            phys_best: dict[str, omni_camera.CameraInfo] = {}
+            for info in infos:
+                uid = info.unique_id or ""
+                phys_key = re.sub(r"-video-index\d+$", "", uid) if uid else str(info.index)
+                if phys_key not in phys_best or info.index < phys_best[phys_key].index:
+                    phys_best[phys_key] = info
+            infos = list(phys_best.values())
+
+        # Some vendors/models bake the same USB iSerial into every
         # unit of a model. When a unique_id appears more than once it cannot
         # identify a specific device, so demote those entries to index-based
         # fingerprints and let the user manage cable-to-config mapping.

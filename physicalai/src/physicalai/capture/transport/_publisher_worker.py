@@ -394,6 +394,11 @@ def main() -> int:  # noqa: C901, PLR0912, PLR0914, PLR0915
             with contextlib.suppress(Exception):
                 notifier.notify_with_custom_event_id(iox2.EventId.new(0))
 
+            # Yield CPU until next frame is likely ready
+            if current_fps > 0:
+                sleep_percentage = 0.85
+                time.sleep(sleep_percentage / current_fps)
+
             now = time.monotonic()
             if now - last_node_check >= node_check_interval:
                 last_node_check = now

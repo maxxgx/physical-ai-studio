@@ -159,7 +159,7 @@ class Camera(ABC):
     # ------------------------------------------------------------------
 
     @abstractmethod
-    def read(self, timeout: float | None = None) -> Frame:
+    def read(self, timeout: float = 2.0) -> Frame:
         """Read the next frame.  Blocks until available.
 
         Frames are returned in sequence; no frames are skipped.  Use for
@@ -167,8 +167,7 @@ class Camera(ABC):
         matters.
 
         Args:
-            timeout: Maximum seconds to wait.  ``None`` waits
-                indefinitely.
+            timeout: Maximum seconds to wait for a new frame.
 
         Raises:
             NotConnectedError: If not connected.
@@ -191,7 +190,7 @@ class Camera(ABC):
         """
         ...
 
-    async def async_read(self, timeout: float | None = None) -> Frame:  # noqa: ASYNC109
+    async def async_read(self, timeout: float = 2.0) -> Frame:  # noqa: ASYNC109
         """Read the next frame, yielding to the event loop while waiting.
 
         Default implementation offloads :meth:`read` to a dedicated
@@ -202,8 +201,7 @@ class Camera(ABC):
         Subclasses with native async support may override.
 
         Args:
-            timeout: Maximum seconds to wait.  ``None`` waits
-                indefinitely.
+            timeout: Maximum seconds to wait for a new frame.
 
         Returns:
             The next captured frame.

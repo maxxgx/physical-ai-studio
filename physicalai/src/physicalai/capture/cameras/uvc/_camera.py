@@ -121,7 +121,7 @@ class UVCCamera(Camera):
     # Reading
     # ------------------------------------------------------------------
 
-    def read(self, timeout: float | None = None) -> Frame:
+    def read(self, timeout: float = 2.0) -> Frame:
         return self._inner.read(timeout=timeout)
 
     def read_latest(self) -> Frame:
