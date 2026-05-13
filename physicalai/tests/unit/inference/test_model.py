@@ -203,6 +203,18 @@ class TestInferenceModelInit:
         model = InferenceModel(_make_legacy_export_dir(tmp_path), runner=explicit_runner)
         assert model.runner is explicit_runner
 
+    def test_use_action_queue_reflects_runner_not_manifest(self, tmp_path: Path) -> None:
+        chunking_runner = ActionChunking(SinglePass(), chunk_size=5)
+        model = InferenceModel(
+            _make_legacy_export_dir(tmp_path, use_action_queue=False, chunk_size=1),
+            runner=chunking_runner,
+        )
+        assert model.use_action_queue is True
+
+        single_runner = SinglePass()
+        model2 = InferenceModel(_make_legacy_export_dir(tmp_path), runner=single_runner)
+        assert model2.use_action_queue is False
+
 
 @pytest.mark.usefixtures("_patch_adapter")
 class TestManifestModelInit:
@@ -411,10 +423,10 @@ class TestSelectAction:
         mock_adapter.predict.return_value = {"actions": np.random.randn(1, 1, 2)}
         model.postprocessors = [ActionNormalizer()]
 
-        with pytest.raises(RuntimeError, match="Action chunking is not enabled"):
-            model.select_action(sample_observation)
+        action = model.select_action(sample_observation)
 
-        mock_adapter.predict.assert_not_called()
+        assert action.shape == (1, 2)
+        mock_adapter.predict.assert_called_once()
 
     def test_select_action_with_queue(
         self,
@@ -515,25 +527,93 @@ class TestSelectAction:
 
         np.testing.assert_array_equal(outputs_call["action"], action_chunk)
 
-    def test_select_action_raises_with_single_pass_runner(
+    def test_select_action_with_single_pass_runner(
         self,
         tmp_path: Path,
+        mock_adapter: MagicMock,
         sample_observation: dict[str, np.ndarray],
     ) -> None:
         model = InferenceModel(_make_legacy_export_dir(tmp_path, use_action_queue=False, chunk_size=1))
+        mock_adapter.predict.return_value = {"actions": np.random.randn(1, 1, 2)}
+        model.postprocessors = [ActionNormalizer()]
 
-        with pytest.raises(RuntimeError, match="Action chunking is not enabled"):
-            model.select_action(sample_observation)
+        action = model.select_action(sample_observation)
 
-    def test_predict_action_chunk_raises_with_action_chunking_runner(
+        assert action.shape == (1, 2)
+
+    def test_predict_action_chunk_with_action_chunking_runner(
         self,
         tmp_path: Path,
+        mock_adapter: MagicMock,
         sample_observation: dict[str, np.ndarray],
     ) -> None:
         model = InferenceModel(_make_legacy_export_dir(tmp_path))
+        model.postprocessors = [ActionNormalizer()]
+        horizon = 6
+        action_dim = 2
+        mock_adapter.predict.return_value = {"actions": np.random.randn(1, horizon, action_dim)}
 
-        with pytest.raises(RuntimeError, match="Selected runner does not support action chunking"):
-            model.predict_action_chunk(sample_observation)
+        action_chunk = model.predict_action_chunk(sample_observation)
+
+        assert isinstance(action_chunk, np.ndarray)
+        assert action_chunk.shape == (horizon, action_dim)
+
+    def test_predict_action_chunk_returns_full_chunk_for_action_chunking(
+        self,
+        tmp_path: Path,
+        mock_adapter: MagicMock,
+        sample_observation: dict[str, np.ndarray],
+    ) -> None:
+        model = InferenceModel(_make_legacy_export_dir(tmp_path))
+        model.postprocessors = [ActionNormalizer()]
+        horizon = 5
+        action_dim = 3
+        mock_adapter.predict.return_value = {"actions": np.random.randn(1, horizon, action_dim)}
+
+        action_chunk = model.predict_action_chunk(sample_observation)
+
+        assert isinstance(action_chunk, np.ndarray)
+        assert action_chunk.shape == (horizon, action_dim)
+        assert horizon > 1
+
+    def test_predict_action_chunk_returns_single_step_chunk_for_single_pass(
+        self,
+        tmp_path: Path,
+        mock_adapter: MagicMock,
+        sample_observation: dict[str, np.ndarray],
+    ) -> None:
+        model = InferenceModel(_make_legacy_export_dir(tmp_path, use_action_queue=False, chunk_size=1))
+        model.postprocessors = [ActionNormalizer()]
+        action_dim = 4
+        mock_adapter.predict.return_value = {"actions": np.random.randn(1, 1, action_dim)}
+
+        action_chunk = model.predict_action_chunk(sample_observation)
+
+        assert isinstance(action_chunk, np.ndarray)
+        assert action_chunk.shape == (1, action_dim)
+
+    def test_select_action_works_with_both_runner_types(
+        self,
+        tmp_path: Path,
+        mock_adapter: MagicMock,
+        sample_observation: dict[str, np.ndarray],
+    ) -> None:
+        chunk_model = InferenceModel(_make_legacy_export_dir(tmp_path))
+        assert isinstance(chunk_model.runner, ActionChunking)
+        chunk_model.runner.action_key = "actions"
+        chunk_model.postprocessors = [ActionNormalizer()]
+        mock_adapter.predict.return_value = {"actions": np.random.randn(1, 4, 2)}
+
+        chunk_action = chunk_model.select_action(sample_observation)
+        assert chunk_action.shape == (1, 2)
+
+        single_pass_model = InferenceModel(_make_legacy_export_dir(tmp_path, use_action_queue=False, chunk_size=1))
+        single_pass_model.postprocessors = [ActionNormalizer()]
+        mock_adapter.predict.return_value = {"actions": np.random.randn(1, 1, 2)}
+
+        single_action = single_pass_model.select_action(sample_observation)
+
+        assert single_action.shape == (1, 2)
 
 
 @pytest.mark.usefixtures("_patch_adapter")

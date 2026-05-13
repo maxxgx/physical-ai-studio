@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import warnings
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Any, Self, cast
 
 import yaml
 
@@ -16,7 +16,11 @@ from physicalai.inference.adapters import adapter_registry, get_adapter
 from physicalai.inference.component_factory import instantiate_component, resolve_artifact
 from physicalai.inference.constants import ACTION
 from physicalai.inference.manifest import ComponentSpec, Manifest
-from physicalai.inference.runners import get_runner
+from physicalai.inference.runners import ActionChunking, get_runner
+
+_ACTION_NDIM_VECTOR = 1
+_ACTION_NDIM_MATRIX = 2
+_ACTION_NDIM_BATCHED_CHUNK = 3
 
 if TYPE_CHECKING:
     import numpy as np
@@ -136,14 +140,8 @@ class InferenceModel:
 
     @property
     def use_action_queue(self) -> bool:
-        """Whether action queuing is enabled (backward compat)."""
-        runner_spec = self.manifest.model.runner
-        if runner_spec is not None:
-            if runner_spec.type == "action_chunking":
-                return True
-            if "ActionChunking" in runner_spec.class_path:
-                return True
-        return False
+        """Whether action queuing is enabled based on runtime runner type."""
+        return isinstance(self.runner, ActionChunking)
 
     @property
     def chunk_size(self) -> int:
@@ -227,48 +225,94 @@ class InferenceModel:
         Returns:
             Action array to execute.
 
-        Raises:
-            RuntimeError: If the runner does not support action chunking.
-
         Examples:
             >>> obs = env.reset()
             >>> action = policy.select_action(obs)
             >>> next_obs, reward, done = env.step(action)
         """
-        if not self.use_action_queue:
-            msg = (
-                "Action chunking is not enabled for this model. Check the runner configuration "
-                "or manifest or use predict_action_chunk() for predicting a chunk of actions."
-            )
-            raise RuntimeError(msg)
-
         outputs = self(observation)
         return outputs[ACTION]
 
     def predict_action_chunk(self, observation: dict[str, np.ndarray]) -> np.ndarray:
         """Predict a chunk of actions for the given observation.
 
-        Only applicable if the runner supports action chunking. Delegates to
-        ``__call__`` and extracts the ``"action_chunk"`` key.
+        Works for both chunk-producing and single-pass runners.
+
+        - For ``ActionChunking``, bypasses the internal deque by running the
+          adapter pipeline directly, returning the raw full chunk.
+        - For non-chunking runners, uses the normal ``__call__`` path and
+          normalizes output to a single-step chunk.
 
         Args:
             observation: Observation dict mapping names to numpy arrays.
 
         Returns:
-            Chunk of actions to execute.
+            Chunk of actions to execute with shape ``(horizon, action_dim)``.
+        """
+        if isinstance(self.runner, ActionChunking):
+            outputs = self._run_pipeline_with_adapter(observation)
+        else:
+            outputs = self(observation)
+
+        return self._to_action_chunk(outputs[ACTION])
+
+    def _run_pipeline_with_adapter(self, inputs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+        """Run preprocess/callback/postprocess pipeline with direct adapter call.
+
+        Args:
+            inputs: Raw observation inputs.
+
+        Returns:
+            Postprocessed model outputs.
+        """
+        for callback in self.callbacks:
+            modified = callback.on_predict_start(inputs)
+            if modified is not None:
+                inputs = modified
+
+        for preprocessor in self.preprocessors:
+            inputs = preprocessor(inputs)
+
+        prepared = self._prepare_inputs(inputs)
+        outputs = dict(self.adapter.predict(prepared))
+
+        for postprocessor in self.postprocessors:
+            outputs = postprocessor(outputs)
+
+        for callback in self.callbacks:
+            modified = callback.on_predict_end(outputs)
+            if modified is not None:
+                outputs = modified
+
+        return outputs
+
+    @staticmethod
+    def _to_action_chunk(action: np.ndarray) -> np.ndarray:
+        """Normalize action output to ``(horizon, action_dim)`` chunk shape.
+
+        Args:
+            action: Action tensor from inference outputs.
+
+        Returns:
+            Action chunk with shape ``(horizon, action_dim)``.
 
         Raises:
-            RuntimeError: If the runner does not support action chunking.
+            ValueError: If action rank is unsupported or batch size is not 1 for rank-3 actions.
         """
-        if self.use_action_queue:
-            msg = (
-                "Selected runner does not support action chunking. Check the runner configuration "
-                "or manifest or use select_action() for single action prediction."
-            )
-            raise RuntimeError(msg)
+        if action.ndim == _ACTION_NDIM_VECTOR:
+            return action[None, ...]
+        if action.ndim == _ACTION_NDIM_MATRIX:
+            return action
+        if action.ndim == _ACTION_NDIM_BATCHED_CHUNK:
+            if action.shape[0] != 1:
+                msg = (
+                    f"predict_action_chunk expects batch size 1 when action has 3 dimensions; got shape {action.shape}."
+                )
+                raise ValueError(msg)
+            return action[0]
 
-        outputs = self(observation)
-        return outputs[ACTION]
+        msg = f"Unsupported action shape for predict_action_chunk: {action.shape}"
+        raise ValueError(msg)
 
     def reset(self) -> None:
         """Reset policy state for new episode.
@@ -323,7 +367,7 @@ class InferenceModel:
         expected = self.adapter.input_names
 
         if expected:
-            flat_inputs: dict[str, np.ndarray] = {}
+            flat_inputs: dict[str, Any] = {}
             for key, value in inputs.items():
                 if isinstance(value, dict):
                     for sub_key, sub_value in value.items():
@@ -334,7 +378,7 @@ class InferenceModel:
             filtered: dict[str, np.ndarray] = {}
             for k in expected:
                 if k in flat_inputs:
-                    filtered[k] = flat_inputs[k]
+                    filtered[k] = cast("np.ndarray", flat_inputs[k])
                 else:
                     msg = f"Expected input '{k}' not found in inputs.\nAvailable keys: {list(flat_inputs.keys())}"
                     raise KeyError(msg)
