@@ -178,7 +178,6 @@ class ACT(ExportablePolicyMixin, Policy):
         Called by both lazy (setup) and eager (checkpoint) paths.
 
         Args:
-            env_action_dim: Environment action dimension.
             dataset_stats: Dataset normalization statistics.
         """
         features: dict[str, Feature] = {}
@@ -474,3 +473,11 @@ class ACT(ExportablePolicyMixin, Policy):
         extra_args["torch"] = TorchExportParameters()
 
         return extra_args
+
+    @property
+    def metadata_extra(self) -> dict[str, Any]:
+        """Return extra metadata for policy export."""
+        return {
+            "chunk_size": self.config.chunk_size,
+            "use_action_queue": True,
+        }

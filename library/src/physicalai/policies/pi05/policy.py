@@ -730,3 +730,11 @@ class Pi05(ExportablePolicyMixin, Policy):
         extra_args["torch"] = TorchExportParameters()
 
         return extra_args
+
+    @property
+    def metadata_extra(self) -> dict[str, Any]:
+        """Return extra metadata for policy export."""
+        return {
+            "chunk_size": self.config.chunk_size,
+            "use_action_queue": True,
+        }
