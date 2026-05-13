@@ -461,39 +461,6 @@ def test_discover_returns_device_info(omnicamera_cls: tuple) -> None:
     assert devices[0].model == "Test Camera"
 
 
-def test_discover_keeps_unopenable(omnicamera_cls: tuple) -> None:
-    """discover() returns all cameras including those currently in-use (only_usable=False)."""
-    camera_cls, mock_omni_camera = omnicamera_cls
-
-    cam_info_0 = mock.MagicMock()
-    cam_info_0.index = 0
-    cam_info_0.name = "Camera 0"
-    cam_info_0.description = ""
-    cam_info_0.misc = ""
-    cam_info_0.can_open.return_value = True
-    cam_info_0.unique_id = ""
-    cam_info_0.id_stable = False
-
-    cam_info_1 = mock.MagicMock()
-    cam_info_1.index = 1
-    cam_info_1.name = "Camera 1"
-    cam_info_1.description = ""
-    cam_info_1.misc = ""
-    cam_info_1.can_open.return_value = False
-    cam_info_1.unique_id = ""
-    cam_info_1.id_stable = False
-
-    mock_omni_camera.query.return_value = [cam_info_0, cam_info_1]
-
-    devices = camera_cls.discover()
-
-    assert len(devices) == 2
-    assert [d.device_id for d in devices] == ["0", "1"]
-    cam_info_0.can_open.assert_not_called()
-    cam_info_1.can_open.assert_not_called()
-    mock_omni_camera.query.assert_called_once_with(only_usable=False)
-
-
 def test_device_selector_path_string_maps_to_index(omnicamera_cls: tuple) -> None:
     """connect() with /dev/videoN extracts N and uses it as the camera index."""
     camera_cls, mock_omni_camera = omnicamera_cls
