@@ -373,7 +373,7 @@ def make_smolvla_preprocessors(
             features[str(stat["name"])] = Feature(
                 name=str(stat["name"]),
                 ftype=feature_type,
-                shape=cast("tuple[int, ...]", stat["shape"]),
+                shape=tuple(int(s) for s in stat["shape"]),
                 normalization_data=NormalizationParameters(
                     mean=cast("list[float]", stat["mean"]),
                     std=cast("list[float]", stat["std"]),
