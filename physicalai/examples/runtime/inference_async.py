@@ -1,3 +1,4 @@
+# pyrefly: ignore-errors
 # Copyright (C) 2026 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
 
@@ -505,7 +506,7 @@ def main(args: argparse.Namespace) -> None:
     if backend == "openvino":
         print(f"[init] Camera map: {camera_name_map}", flush=True)
         print(f"[init] Blank cameras: {blank_cameras}", flush=True)
-    
+
     # --- Set up cameras ---
     # Use CLI paths if provided, otherwise run interactive selection
     if args.overhead_camera or args.arm_camera:

@@ -10,7 +10,7 @@ The golden reference is `physicalai/examples/runtime/inference_async.py` — a w
 
 ---
 
-## Phase 1: Critical Bug Fixes (half day)
+## Phase 1: Critical Bug Fixes (half day) ✅
 
 Fix bugs on the code path Phase 2 depends on. Phase 2 defines a public runtime contract — workarounds would calcify into permanent API shape. `predict_action_chunk()` currently raises `RuntimeError` without these fixes because Bug 2's inverted guard blocks the runtime's call to `model.predict_action_chunk(obs)`. This is not stylistic — it is a hard blocker.
 
@@ -62,7 +62,7 @@ def use_action_queue(self) -> bool:
 
 ---
 
-## Phase 2: Runtime System (2–3 days)
+## Phase 2: Runtime System (2–3 days) ✅
 
 New package: `physicalai/src/physicalai/runtime/`
 
@@ -186,11 +186,8 @@ class ActionQueue:
 
     def __init__(self, smoother: ChunkSmoother | None = None) -> None:
         self._smoother = smoother or ReplaceSmoother()
+        self._deque: deque[np.ndarray] = deque()
         self._lock = threading.Lock()
-        self._queue: np.ndarray | None = None
-        self._index: int = 0
-
-        # Telemetry
         self._consecutive_holds: int = 0
         self._total_holds: int = 0
         self._total_pops: int = 0
@@ -198,36 +195,31 @@ class ActionQueue:
     def push_chunk(self, chunk: np.ndarray, offset: int = 0) -> None:
         """Merge a new chunk into the queue. Thread-safe."""
         with self._lock:
-            if self._queue is None or self._index >= len(self._queue):
-                self._queue = chunk[offset:]
-                self._index = 0
-                return
-            remaining = self._queue[self._index:]
-            self._queue = self._smoother.merge(remaining, chunk, offset)
-            self._index = 0
+            remaining = (np.stack(list(self._deque))
+                         if self._deque
+                         else np.empty((0, chunk.shape[1]), dtype=chunk.dtype))
+            merged = self._smoother.merge(remaining, chunk, offset)
+            self._deque.clear()
+            self._deque.extend(merged)
 
     def pop(self) -> np.ndarray | None:
         """Pop next action, or None if empty. Thread-safe."""
         with self._lock:
-            if self._queue is None or self._index >= len(self._queue):
+            if not self._deque:
                 self._consecutive_holds += 1
                 self._total_holds += 1
                 return None
-            action = self._queue[self._index]
-            self._index += 1
             self._consecutive_holds = 0
             self._total_pops += 1
-            return action
+            return self._deque.popleft()
 
     @property
     def remaining(self) -> int:
         with self._lock:
-            if self._queue is None:
-                return 0
-            return max(len(self._queue) - self._index, 0)
+            return len(self._deque)
 
     def below_threshold(self, threshold: int) -> bool:
-        return self.remaining <= threshold
+        return self.remaining < threshold
 
     def clear(self) -> None:
         with self._lock:
@@ -738,6 +730,314 @@ Not in `PolicyRuntime` or `Execution`. If a reusable pattern emerges across 2+ r
 
 ---
 
+## Phase 3.5: Runtime Telemetry (1–2 days)
+
+Streaming observability for the runtime control loop. The runtime process must not be bottlenecked by telemetry — all emission is fire-and-forget over zenoh pub-sub. A separate observer process handles visualization, aggregation, and persistence.
+
+### Constraint
+
+Two-week release deadline. Scope: emitter in runtime, observer CLI, zenoh-only transport. No OpenTelemetry, no Studio UI integration, no remote telemetry. Use OTel-compatible metric naming so a future OTLP bridge is trivial.
+
+### Architecture
+
+```text
+┌──────────────────────────────────────────┐
+│  Runtime Process (real-time budget)      │
+│                                          │
+│  PolicyRuntime.run()                     │
+│    └─ TelemetryEmitter                   │
+│         zenoh.put() per tick/inference   │
+│         no-op if zenoh not installed     │
+└──────────┬───────────────────────────────┘
+           │ zenoh pub-sub (local SHM)
+           ▼
+┌──────────────────────────────────────────┐
+│  Observer Process (separate, optional)   │
+│                                          │
+│  TelemetrySubscriber                     │
+│    ├─ Live console dashboard             │
+│    ├─ JSONL file sink (--record)         │
+│    └─ Future: WebSocket → Studio UI      │
+└──────────────────────────────────────────┘
+```
+
+### Topic Schema
+
+All topics prefixed with `physicalai/rt/{session_id}/`. Session ID is a short hex string generated at `run()` start.
+
+| Topic       | Frequency                            | Payload (msgpack)                                                                                                            | Purpose                                   |
+| ----------- | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
+| `tick`      | Every control loop tick (30 Hz)      | `step`, `timestamp`, `joint_positions: (D,)`, `action_sent: (D,)`, `queue_remaining: int`, `loop_duration_s`, `sleep_time_s` | Core loop health + executed trajectory    |
+| `inference` | Per inference completion (~2–3 Hz)   | `latency_s`, `offset`, `chunk: (H, D)`                                                                                       | Latency monitoring + predicted trajectory |
+| `lifecycle` | On start / warmup / shutdown / error | `event: str`, `metadata: dict`                                                                                               | Session boundaries                        |
+
+**Serialization**: msgpack with numpy arrays encoded as `{"__np__": true, "dtype": str, "shape": list, "data": bytes}`. Encode cost is ~50 μs per tick event, ~100 μs per inference event. Negligible in a 33 ms tick budget.
+
+**Naming convention**: Scalar fields use OTel-compatible names (`physicalai.runtime.loop_duration_s`, `physicalai.runtime.inference_latency_s`) so a future OTLP exporter in the observer can re-export without renaming.
+
+### New Files
+
+```text
+physicalai/src/physicalai/runtime/
+├── _telemetry.py                    # TelemetryEmitter (zenoh publisher, no-op fallback)
+└── observer/
+    ├── __init__.py
+    ├── __main__.py                  # python -m physicalai.runtime.observer
+    ├── _subscriber.py               # TelemetrySubscriber (zenoh sub + dispatch)
+    ├── _console.py                  # Live console dashboard
+    └── _recorder.py                 # JSONL file sink for offline replay
+```
+
+### Dependency
+
+```toml
+# pyproject.toml
+[project.optional-dependencies]
+telemetry = ["zenoh>=1.0", "msgpack>=1.0"]
+```
+
+zenoh is optional. `TelemetryEmitter` gracefully degrades to no-op when zenoh is not installed. Observer process requires `physicalai[telemetry]`.
+
+### ActionQueue Change
+
+Add `peek_remaining()` — returns a copy of queued actions as `(R, D)` array without consuming them. Called once per inference event (not per tick) to snapshot the post-smooth future trajectory.
+
+```python
+def peek_remaining(self) -> np.ndarray | None:
+    """Return copy of remaining actions without consuming them. Thread-safe."""
+    with self._lock:
+        if not self._deque:
+            return None
+        return np.stack(list(self._deque))
+```
+
+### Integration Points
+
+**PolicyRuntime** (4 touch points in `runtime.py`):
+
+1. Accept optional `telemetry: TelemetryEmitter | None` in `__init__`
+2. `emit_lifecycle("start")` at top of `run()`
+3. `emit_tick(...)` at end of each tick
+4. `emit_lifecycle("shutdown")` in `_shutdown()`
+
+**AsyncExecution** (1 touch point in `execution.py`):
+
+1. Accept optional `telemetry: TelemetryEmitter | None` in `__init__`
+2. `emit_inference(...)` after `push_chunk()` in the `_run()` thread
+
+No changes to `smoothers.py` or `__init__.py` exports. `TelemetryEmitter` is internal wiring, not user-facing API.
+
+### Out of Scope
+
+- Remote telemetry (zenoh is network-transparent; enabling it is config, not code)
+- Camera frame streaming (stays on iceoryx2)
+- OpenTelemetry / OTLP exporter (future observer plugin)
+- Studio UI WebSocket bridge
+- Model input snapshot recording (expensive, needs opt-in design)
+- Smoothing delta visualization (derivable in observer from `inference.chunk` vs `tick.action_sent`)
+
+---
+
+## Phase 3.6: Fault Tolerance (1 day)
+
+Robot connections over USB/serial and camera feeds are fragile. USB hubs lose power, serial timeouts occur, cameras drop frames. The runtime must not crash on transient hardware errors — it must retry and recover, or degrade gracefully.
+
+### Current Problem
+
+`PolicyRuntime._build_model_input()` calls `robot.get_observation()` and `cam.read_latest()` with no error handling. `robot.send_action()` is also unprotected. Any `ConnectionError`, `OSError`, or `serial.SerialException` from the SO-101 serial bus kills the control loop.
+
+### Design Principles
+
+1. **Never crash the loop on a transient error.** Retry the operation. If retries are exhausted, hold position and log — do not raise.
+2. **Distinguish transient vs fatal.** USB disconnect that resolves after replug = transient. `ValueError` from wrong action shape = fatal (programmer error). `KeyboardInterrupt` = always propagate.
+3. **No silent degradation.** Every recovery must log a warning and emit a telemetry lifecycle event. The operator must know the robot hiccupped.
+4. **Bound retry duration.** Retries must not exceed the tick budget. If `get_observation()` fails 3 times within the tick, use the last known observation and move on.
+5. **Camera failure ≠ robot failure.** A dropped camera frame should use the last known frame (stale but safe). A robot communication failure is more serious but still retryable.
+
+### Implementation: `_resilient_observe()` and `_resilient_send()`
+
+Replace the raw calls in the control loop with retry-wrapped variants:
+
+```python
+_MAX_OBS_RETRIES = 3
+_MAX_SEND_RETRIES = 2
+_RETRY_BACKOFF_S = 0.001  # 1ms between retries — bounded, won't bust 33ms budget
+
+def _resilient_observe(self) -> dict[str, Any]:
+    """Build model input with retry on transient hardware errors."""
+    # Robot observation
+    robot_obs = None
+    for attempt in range(_MAX_OBS_RETRIES):
+        try:
+            robot_obs = self._robot.get_observation()
+            self._consecutive_error_ticks = 0
+            break
+        except (ConnectionError, OSError) as e:
+            logger.warning("Robot observation failed (attempt %d/%d): %s",
+                           attempt + 1, _MAX_OBS_RETRIES, e)
+            if self._telemetry:
+                self._telemetry.emit_lifecycle("obs_error", error=str(e),
+                                               attempt=attempt + 1)
+            if attempt < _MAX_OBS_RETRIES - 1:
+                time.sleep(_RETRY_BACKOFF_S)
+
+    if robot_obs is None:
+        self._consecutive_error_ticks += 1
+        if self._consecutive_error_ticks >= self._max_consecutive_error_ticks:
+            msg = (f"Robot unreachable for {self._consecutive_error_ticks} consecutive ticks "
+                   f"({self._consecutive_error_ticks / self._fps:.1f}s)")
+            if self._telemetry:
+                self._telemetry.emit_lifecycle("connection_lost", error=msg)
+            raise ConnectionError(msg)
+        if self._last_robot_obs is not None:
+            logger.warning("Using stale robot observation (error tick %d/%d)",
+                           self._consecutive_error_ticks,
+                           self._max_consecutive_error_ticks)
+            robot_obs = self._last_robot_obs
+            self._stale_obs_ticks += 1
+        else:
+            raise ConnectionError("Robot observation failed and no fallback available")
+    self._last_robot_obs = robot_obs
+
+    # Camera frames — independent per camera, each can fail independently
+    camera_frames: dict[str, Frame] = {}
+    for name, cam in self._cameras.items():
+        try:
+            camera_frames[name] = cam.read_latest()
+            self._last_camera_frames[name] = camera_frames[name]
+        except (ConnectionError, OSError) as e:
+            logger.warning("Camera '%s' read failed: %s — using last frame", name, e)
+            if name in self._last_camera_frames:
+                camera_frames[name] = self._last_camera_frames[name]
+                self._stale_obs_ticks += 1
+
+    return self._obs_to_input(robot_obs, camera_frames)
+
+
+def _resilient_send(self, action: np.ndarray) -> None:
+    """Send action with retry on transient errors."""
+    for attempt in range(_MAX_SEND_RETRIES):
+        try:
+            self._robot.send_action(action)
+            self._consecutive_error_ticks = 0
+            return
+        except (ConnectionError, OSError) as e:
+            logger.warning("send_action failed (attempt %d/%d): %s",
+                           attempt + 1, _MAX_SEND_RETRIES, e)
+            if self._telemetry:
+                self._telemetry.emit_lifecycle("send_error", error=str(e),
+                                               attempt=attempt + 1)
+            if attempt < _MAX_SEND_RETRIES - 1:
+                time.sleep(_RETRY_BACKOFF_S)
+    self._consecutive_error_ticks += 1
+    self._transient_errors += 1
+    logger.error("send_action failed after %d attempts — skipping tick",
+                 _MAX_SEND_RETRIES)
+```
+
+### Error Classification
+
+| Exception type               | Source                                                    | Treatment                         |
+| ---------------------------- | --------------------------------------------------------- | --------------------------------- |
+| `ConnectionError`            | SO-101 serial port closed, servo not responding           | Retry, then stale fallback        |
+| `OSError`                    | USB disconnect, file descriptor error, camera device lost | Retry, then stale fallback        |
+| `TimeoutError`               | Serial read timeout (subclass of `OSError`)               | Retry, then stale fallback        |
+| `ValueError`, `RuntimeError` | Wrong action shape, uncalibrated mode, programming error  | **Fatal** — propagate immediately |
+| `WorkerDiedError`            | Inference thread crash                                    | **Fatal** — propagate immediately |
+| `KeyboardInterrupt`          | User Ctrl+C                                               | **Always propagate**              |
+
+### State Tracking
+
+`PolicyRuntime` gains fields for stale-observation fallback and error escalation:
+
+```python
+self._last_robot_obs: RobotObservation | None = None
+self._last_camera_frames: dict[str, Frame] = {}
+self._consecutive_error_ticks: int = 0
+self._max_consecutive_error_ticks: int = int(3 * fps)  # ~3 seconds
+self._stale_obs_ticks: int = 0
+self._transient_errors: int = 0
+```
+
+`_consecutive_error_ticks` is reset to 0 on any successful `get_observation()` or `send_action()`. It increments when all retries within a tick fail. When it reaches `max_consecutive_error_ticks`, the runtime raises `ConnectionError`.
+
+`RunStats` gains fault tolerance metrics:
+
+```python
+@dataclass(frozen=True)
+class RunStats:
+    steps: int
+    total_pops: int
+    total_holds: int
+    inference_count: int
+    transient_errors: int    # total retried hardware errors
+    stale_obs_ticks: int     # ticks where stale observation was used
+```
+
+The telemetry `tick` event gains a `stale_obs: bool` field so the observer can flag degraded ticks.
+
+### Warmup Resilience
+
+Warmup is the most fragile moment — USB may not be fully enumerated, servos may still be initializing. The first call to `_build_model_input()` has no stale fallback.
+
+Warmup gets its own retry loop with longer timeout:
+
+```python
+_WARMUP_RETRIES = 5
+_WARMUP_BACKOFF_S = 1.0  # 1 second between warmup retries
+
+def _warmup_with_retry(self) -> None:
+    for attempt in range(_WARMUP_RETRIES):
+        try:
+            sample_obs = self._build_model_input()
+            self._execution.warmup(sample_obs)
+            return
+        except (ConnectionError, OSError) as e:
+            logger.warning("Warmup failed (attempt %d/%d): %s",
+                           attempt + 1, _WARMUP_RETRIES, e)
+            if attempt < _WARMUP_RETRIES - 1:
+                time.sleep(_WARMUP_BACKOFF_S)
+    msg = f"Warmup failed after {_WARMUP_RETRIES} attempts — robot or cameras unreachable"
+    raise ConnectionError(msg)
+```
+
+Total warmup retry budget: 5 seconds. Long enough for USB enumeration, short enough to not confuse the user.
+
+### Reconnection
+
+Retry within a tick handles brief glitches (serial timeout, dropped USB packet). For sustained disconnects (USB cable pulled), the robot's `is_connected()` returns `False` and consecutive retries will keep failing.
+
+Full reconnection (calling `robot.disconnect()` then `robot.connect()`) is **not** done automatically in the runtime. Reconnecting a serial bus mid-loop is dangerous — it resets servo state, torque settings, and calibration. This must be an explicit user decision.
+
+Instead, the runtime:
+
+1. Logs an error with reconnection instructions
+2. Continues holding position (stale obs + last action)
+3. Emits `lifecycle("connection_lost")` telemetry event
+4. After `max_consecutive_errors` (default: `3 * fps` = 3 seconds of failures), raises `ConnectionError` with a clear message
+
+This gives the user time to replug USB without the loop crashing, but doesn't silently run for minutes with a dead robot.
+
+### Camera Recovery
+
+Cameras are more resilient than robots — `SharedCamera` (iceoryx2) handles publisher death and re-spawn. Direct camera backends (`RealsenseCamera`, `UVCCamera`) may need explicit reconnection.
+
+The runtime treats camera failure as soft: use last frame, log warning, continue. If a camera has never produced a frame (failure on first read), omit it from the model input dict. The model's behavior with missing camera keys is model-specific — not the runtime's concern.
+
+### Tests
+
+```text
+physicalai/tests/unit/runtime/
+└── test_fault_tolerance.py   # Mock robot that raises on get_observation/send_action:
+                              #   - transient error → retry succeeds
+                              #   - sustained error → stale fallback
+                              #   - fatal error → propagates
+                              #   - camera failure → stale frame used
+                              #   - max_consecutive_errors → ConnectionError raised
+```
+
+---
+
 ## Phase 4: Advanced (later)
 
 1. `AsyncExecution(transport="process")` for PyTorch CPU (GIL contention)
@@ -766,6 +1066,8 @@ Not in `PolicyRuntime` or `Execution`. If a reusable pattern emerges across 2+ r
 | `force_reset()` for stuck thread            | `AsyncExecution._force_reset()` via watchdog               | Auto-triggered when `busy_duration > timeout`           |
 | Hold position + `hold_count`                | `ActionQueue.consecutive_holds` + `PolicyRuntime` logging  | Telemetry via queue counters                            |
 | Two-backend support (torch/OV)              | `InferenceModel` abstraction                               | Runtime only calls `predict_action_chunk()`             |
+| (none — ad-hoc print/log)                   | `TelemetryEmitter` + zenoh pub-sub                         | Fire-and-forget, no-op when zenoh absent (Phase 3.5)    |
+| (none — loop crashes on USB error)          | `_resilient_observe()` / `_resilient_send()`               | Retry + stale fallback for transient errors (Phase 3.6) |
 
 ---
 
@@ -816,7 +1118,7 @@ Cost: one dict of numpy copies per inference request (not per tick — only when
 
 ## Resolved Questions
 
-1. **`PolicyRuntime.run()` returns `RunStats`.** `@dataclass` with 4 ints (steps, total_pops, total_holds, inference_count). Useful for testing and logging.
+1. **`PolicyRuntime.run()` returns `RunStats`.** `@dataclass` with 4 core fields (steps, total_pops, total_holds, inference_count) plus 2 fault tolerance fields (transient_errors, stale_obs_ticks) added in Phase 3.6. Useful for testing and logging.
 
 2. **Warm-up happens inside `run()`.** User doesn't forget, no "did I call warmup?" failure mode.
 
@@ -838,5 +1140,7 @@ This plan refines [policy_runtime_design.md](./policy_runtime_design.md). Key di
 | Observation bridge              | Not specified                                                    | `obs_to_input` callable with `default_observation_to_input` fallback                                       |
 | `predict_action_chunk()` return | `Mapping[str, Any]` with `"actions"` key                         | `np.ndarray` directly (matches actual implementation)                                                      |
 | Bug fixes                       | Not applicable                                                   | Phase 1 prerequisite — bugs 1-3 on critical path                                                           |
+| Telemetry                       | Not specified                                                    | Phase 3.5: zenoh pub-sub emitter (fire-and-forget), separate observer process, optional dep                |
+| Fault tolerance                 | Not specified                                                    | Phase 3.6: retry + stale fallback for transient HW errors, error classification, bounded retry             |
 
 All ownership rules, boundary constraints, and deferred-until-needed decisions from the original design doc remain in effect.

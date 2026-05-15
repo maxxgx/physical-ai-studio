@@ -18,6 +18,8 @@ from physicalai.runtime._action_queue import ActionQueue
 from physicalai.runtime.execution import SyncExecution, WorkerDiedError
 from physicalai.runtime.runtime import PolicyRuntime, RunStats, default_observation_to_input
 
+from physicalai.capture import Frame
+
 
 @dataclass
 class FakeRobotObservation:
@@ -25,13 +27,6 @@ class FakeRobotObservation:
     timestamp: float
     sensor_data: dict[str, np.ndarray] | None
     images: dict | None
-
-
-@dataclass(frozen=True)
-class FakeFrame:
-    data: np.ndarray
-    timestamp: float
-    sequence: int
 
 
 def _make_mock_robot(joint_positions: np.ndarray | None = None) -> MagicMock:
@@ -264,9 +259,9 @@ class TestDefaultObservationToInput:
             sensor_data=None,
             images=None,
         )
-        frame = FakeFrame(data=np.zeros((480, 640, 3), dtype=np.uint8), timestamp=0.0, sequence=0)
+        frame = Frame(data=np.zeros((480, 640, 3), dtype=np.uint8), timestamp=0.0, sequence=0)
 
-        result = default_observation_to_input(obs, {"cam0": frame})
+        result = default_observation_to_input(obs, camera_frames={"cam0": frame})
 
         assert "images.cam0" in result
         np.testing.assert_array_equal(result["images.cam0"], frame.data)

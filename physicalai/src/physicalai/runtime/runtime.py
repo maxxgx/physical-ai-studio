@@ -77,6 +77,8 @@ class RunStats:
     total_pops: int
     total_holds: int
     inference_count: int
+    transient_errors: int = 0
+    stale_obs_ticks: int = 0
 
 
 class PolicyRuntime:
