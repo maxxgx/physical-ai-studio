@@ -683,15 +683,15 @@ class Pi05Model(ExportableModelMixin, Model):
         for feature_id in self._dataset_stats:
             if STATE in feature_id:
                 state_feature = self._dataset_stats[feature_id]
-                sample_input[STATE] = torch.randn(1, *cast("tuple", state_feature["shape"]), device=device)
+                sample_input[STATE] = torch.randn(1, *tuple(int(s) for s in state_feature["shape"]), device=device)
             elif str(FeatureType.VISUAL) in self._dataset_stats[feature_id]["type"]:
                 image_feature = self._dataset_stats[feature_id]
                 if num_image_features == 1:
-                    sample_input[IMAGES] = torch.randn(1, *cast("tuple", image_feature["shape"]), device=device)
+                    sample_input[IMAGES] = torch.randn(1, *tuple(int(s) for s in image_feature["shape"]), device=device)
                 else:
                     sample_input[IMAGES + "." + str(image_feature["name"])] = torch.randn(
                         1,
-                        *cast("tuple", image_feature["shape"]),
+                        *tuple(int(s) for s in image_feature["shape"]),
                         device=device,
                     )
 

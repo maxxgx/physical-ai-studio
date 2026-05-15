@@ -419,7 +419,7 @@ def make_pi05_preprocessors(
             features[mapped_name] = Feature(
                 name=mapped_name,
                 ftype=feature_type,
-                shape=cast("tuple[int, ...]", stat["shape"]),
+                shape=tuple(int(s) for s in stat["shape"]),
                 normalization_data=norm_data,
             )
 
