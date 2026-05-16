@@ -25,7 +25,7 @@ class RecorderHandler:
     def __init__(self, output_path: Path) -> None:
         self._path = Path(output_path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._file = open(self._path, "a")  # noqa: SIM115
+        self._file = open(self._path, "a", encoding="utf-8")  # noqa: SIM115
 
     def __call__(self, session_id: str, topic: str, payload: dict[str, Any]) -> None:
         record = {"session_id": session_id, "topic": topic, **payload}

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import sys
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -16,9 +15,7 @@ def main(argv: list[str] | None = None) -> None:
 
     try:
         from physicalai.runtime.observer._subscriber import TelemetrySubscriber
-    except ImportError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        print("Install telemetry dependencies: pip install physicalai[telemetry]", file=sys.stderr)
+    except ImportError:
         raise SystemExit(1) from None
 
     subscriber = TelemetrySubscriber(session_id=args.session_id)
@@ -38,7 +35,6 @@ def main(argv: list[str] | None = None) -> None:
         subscriber.add_handler(recorder)
 
     subscriber.start()
-    print(f"Observing telemetry (session={args.session_id or 'all'})... Press Ctrl+C to stop.")
 
     try:
         import signal
@@ -55,7 +51,6 @@ def main(argv: list[str] | None = None) -> None:
         subscriber.stop()
         if recorder:
             recorder.close()
-        print("\nObserver stopped.")
 
 
 if __name__ == "__main__":

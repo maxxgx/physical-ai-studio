@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
-from collections.abc import Mapping
 
 import yaml
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -48,23 +48,29 @@ def load_config(path: str | Path) -> RuntimeConfig:
     """Load and validate a runtime YAML config file."""
     path = Path(path)
     if not path.exists():
-        raise FileNotFoundError(f"Config file not found: {path}")
+        msg = f"Config file not found: {path}"
+        raise FileNotFoundError(msg)
 
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             raw = yaml.safe_load(f)
     except yaml.YAMLError as exc:
-        raise ValueError(f"Invalid YAML in config file {path}: {exc}") from exc
+        msg = f"Invalid YAML in config file {path}: {exc}"
+        raise ValueError(msg) from exc
     except OSError as exc:
-        raise OSError(f"Failed to read config file {path}: {exc}") from exc
+        msg = f"Failed to read config file {path}: {exc}"
+        raise OSError(msg) from exc
 
     if raw is None:
-        raise ValueError(f"Config file is empty: {path}")
+        msg = f"Config file is empty: {path}"
+        raise ValueError(msg)
     if not isinstance(raw, Mapping):
-        raise ValueError(f"Config file must contain a mapping at top level: {path}")
+        msg = f"Config file must contain a mapping at top level: {path}"
+        raise ValueError(msg)
 
     try:
         return RuntimeConfig(**raw)
     except ValidationError as exc:
         logger.exception("Invalid runtime config in %s", path)
-        raise ValueError(f"Invalid runtime config in {path}: {exc}") from exc
+        msg = f"Invalid runtime config in {path}: {exc}"
+        raise ValueError(msg) from exc

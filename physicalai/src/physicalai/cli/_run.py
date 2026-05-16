@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
-import sys
-from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _load_config(path: str | Path):
@@ -28,11 +30,9 @@ def build_parser() -> argparse.ArgumentParser:
 def handle_run(args: argparse.Namespace) -> None:
     try:
         config = _load_config(args.config)
-    except FileNotFoundError as exc:
-        print(f"error: {exc}", file=sys.stderr)
+    except FileNotFoundError:
         raise SystemExit(2) from None
-    except ValueError as exc:
-        print(f"error: invalid config: {exc}", file=sys.stderr)
+    except ValueError:
         raise SystemExit(2) from None
 
     if args.duration_s is not None:
@@ -41,13 +41,6 @@ def handle_run(args: argparse.Namespace) -> None:
         config.fps = args.fps
 
     if args.dry_run:
-        print("Config loaded successfully")
-        print(f"  model:      {config.model.path} (backend={config.model.backend})")
-        print(f"  robot:      {config.robot}")
-        print(f"  cameras:    {list(config.cameras.keys()) or 'none'}")
-        print(f"  execution:  {config.execution.mode}")
-        print(f"  fps:        {config.fps}")
-        print(f"  duration_s: {config.duration_s}")
         return
 
     from physicalai.runtime.runtime import PolicyRuntime
@@ -58,10 +51,8 @@ def handle_run(args: argparse.Namespace) -> None:
         runtime.robot.connect()
         for cam in runtime.cameras.values():
             cam.connect()
-        stats = runtime.run(duration_s=config.duration_s)
-        print(f"Run complete: {stats}")
-    except ConnectionError as exc:
-        print(f"error: connection failed: {exc}", file=sys.stderr)
+        runtime.run(duration_s=config.duration_s)
+    except ConnectionError:
         raise SystemExit(1) from None
     finally:
         for cam in runtime.cameras.values():

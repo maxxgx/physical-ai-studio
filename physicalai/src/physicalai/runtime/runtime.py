@@ -233,7 +233,7 @@ class PolicyRuntime:
         goal_time = 1.0 / self._fps
         step = 0
         last_action: np.ndarray | None = None
-        _stale_this_tick = False
+        stale_this_tick = False
 
         try:
             while True:
@@ -241,11 +241,11 @@ class PolicyRuntime:
                     break
 
                 loop_start = time.perf_counter()
-                _stale_this_tick = False
+                stale_this_tick = False
 
                 obs = self._resilient_observe()
                 if self._consecutive_error_ticks > 0:
-                    _stale_this_tick = True
+                    stale_this_tick = True
                 self._execution.maybe_request(obs)
 
                 action = self._action_queue.pop()
@@ -291,7 +291,7 @@ class PolicyRuntime:
                         queue_remaining=self._action_queue.remaining,
                         loop_duration_s=elapsed,
                         sleep_time_s=max(sleep_time, 0.0),
-                        stale_obs=_stale_this_tick,
+                        stale_obs=stale_this_tick,
                     )
 
                 step += 1

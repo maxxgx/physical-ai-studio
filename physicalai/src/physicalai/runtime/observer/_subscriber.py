@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
-from typing import Any
-
-import numpy as np
+from typing import TYPE_CHECKING, Any
 
 from physicalai.runtime._telemetry import _decode_numpy
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -37,10 +37,7 @@ class TelemetrySubscriber:
         self._handlers.append(handler)
 
     def start(self) -> None:
-        if self._session_id:
-            prefix = f"physicalai/rt/{self._session_id}/**"
-        else:
-            prefix = "physicalai/rt/**"
+        prefix = f"physicalai/rt/{self._session_id}/**" if self._session_id else "physicalai/rt/**"
         self._sub = self._session.declare_subscriber(prefix, self._on_event)
 
     def _on_event(self, sample: Any) -> None:

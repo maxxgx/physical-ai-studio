@@ -3,12 +3,9 @@ from __future__ import annotations
 import logging
 import time
 import uuid
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import numpy as np
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 
