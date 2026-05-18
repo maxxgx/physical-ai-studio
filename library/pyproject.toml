@@ -165,7 +165,7 @@ explicit = true
 
 # PyTorch sources configuration
 [tool.uv.sources]
-physicalai = { path = "../physicalai", editable = true }
+physicalai = { git = "https://github.com/openvinotoolkit/physicalai.git", branch = "main" }
 torch = [
     { index = "pytorch-cpu", extra = "cpu" },
     { index = "pytorch-cu128", extra = "cu128" },
