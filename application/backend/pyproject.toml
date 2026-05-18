@@ -127,6 +127,10 @@ default-groups = ["all"]
 # common packages (e.g. markupsafe cp314-only, see uv #9647), PyPI
 # is listed as a named index with higher priority above.
 index-strategy = "unsafe-best-match"
+# omni-camera is a transitive dependency of FrameSource that requires Rust
+# compilation (maturin + crates.io). Exclude it via an impossible marker
+# since it is not needed and CI environments cannot reach crates.io.
+override-dependencies = ["omni-camera; python_version < '3.0'"]
 conflicts = [
     [
         { extra = "cpu" },
