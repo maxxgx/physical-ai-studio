@@ -36,7 +36,6 @@ dependencies = [
     "gym-pusht>=0.1.5",
     "pymunk>=6.6.0,<7.0.0",
     "onnx",
-    "onnxruntime_extensions",
     "openvino>=2026.0",
     "openvino_tokenizers>=2026.0",
     "onnxscript",
@@ -140,6 +139,8 @@ dev = [
 # UV CONFIGURATION                                                             #
 # ============================================================================ #
 [tool.uv]
+exclude-newer = "7 days"
+index-strategy = "unsafe-best-match"
 
 
 conflicts = [
@@ -149,6 +150,10 @@ conflicts = [
 ]
 
 # PyTorch index configuration
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple"
+
 [[tool.uv.index]]
 name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
@@ -162,11 +167,12 @@ explicit = true
 [[tool.uv.index]]
 name = "pytorch-xpu"
 url = "https://download.pytorch.org/whl/xpu"
-explicit = true
+explicit = false
 
 # PyTorch sources configuration
 [tool.uv.sources]
-physicalai = { path = "../physicalai", editable = true }
+# TODO(#450): Replace with published package once physicalai is back in its own repo.
+physicalai = { git = "https://github.com/openvinotoolkit/physicalai.git", branch = "main" }
 torch = [
     { index = "pytorch-cpu", extra = "cpu" },
     { index = "pytorch-cu128", extra = "cu128" },
@@ -179,6 +185,7 @@ torchvision = [
 ]
 
 pytorch-triton-xpu = [{ index = "pytorch-xpu", extra = "xpu" }]
+triton-xpu = { index = "pytorch-xpu" }
 
 
 # ============================================================================ #
