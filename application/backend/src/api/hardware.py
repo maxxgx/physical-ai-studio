@@ -1,4 +1,6 @@
-from fastapi import APIRouter
+from typing import Annotated
+
+from fastapi import APIRouter, Query
 from loguru import logger
 from physicalai.capture import DeviceInfo, discover_all
 
@@ -16,11 +18,8 @@ def _fingerprint_from_device_info(info: DeviceInfo) -> str:
     return info.hardware_id if (info.id_stable and info.hardware_id) else info.device_id
 
 
-@router.get("/cameras")
-async def get_cameras() -> list[Camera]:
-    """Get all cameras"""
-    discovered = discover_all()
-    logger.debug("Discovered cameras: {}", discovered)
+def _build_camera_list(discovered: dict[str, list[DeviceInfo]]) -> list[Camera]:
+    """Convert discovered devices to Camera response models."""
     res: list[Camera] = []
     sp = CameraProfile(width=640, height=480, fps=30)  # TODO: Implement proper default camera profile retrieval
 
@@ -38,6 +37,19 @@ async def get_cameras() -> list[Camera]:
                 ),
             )
     return res
+
+
+@router.get("/cameras")
+async def get_cameras(
+    all: Annotated[bool, Query(description="Include cameras in use by other processes")] = False,
+) -> list[Camera]:
+    """Get all cameras.
+
+    When `all=true`, cameras currently in use by another process are also included.
+    """
+    discovered = discover_all(only_usable=not all)
+    logger.debug("Discovered cameras: {}", discovered)
+    return _build_camera_list(discovered)
 
 
 @router.get("/serial_devices")

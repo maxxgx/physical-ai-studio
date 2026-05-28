@@ -83,3 +83,12 @@ class TestGetCameras:
         with patch("api.hardware.discover_all", return_value={}):
             cameras = event_loop.run_until_complete(get_cameras())
         assert cameras == []
+
+    def test_all_false_uses_only_usable(self, event_loop):
+        def fake_discover(*, only_usable: bool = True):
+            assert only_usable is True
+            return {"uvc": [_make_device(name="Cam A")]}
+
+        with patch("api.hardware.discover_all", side_effect=fake_discover):
+            cameras = event_loop.run_until_complete(get_cameras(all=False))
+        assert len(cameras) == 1

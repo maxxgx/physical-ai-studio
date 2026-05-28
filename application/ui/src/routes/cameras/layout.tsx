@@ -132,7 +132,9 @@ const CameraListItem = ({
 
 export const CamerasList = () => {
     const { project_id = '' } = useParams<{ project_id: string }>();
-    const { data: hardwareCameras } = $api.useSuspenseQuery('get', '/api/hardware/cameras');
+    const { data: hardwareCameras } = $api.useSuspenseQuery('get', '/api/hardware/cameras', {
+        params: { query: { all: true } },
+    });
     const { data: projectCameras } = $api.useSuspenseQuery('get', '/api/projects/{project_id}/cameras', {
         params: { path: { project_id } },
     });
