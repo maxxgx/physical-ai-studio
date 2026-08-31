@@ -1,0 +1,24 @@
+.detail {
+    padding: var(--spectrum-global-dimension-size-100) var(--spectrum-global-dimension-size-200);
+    font-size: var(--spectrum-global-dimension-font-size-75);
+    color: var(--spectrum-global-color-gray-700);
+}
+
+.subtle {
+    font-size: var(--spectrum-global-dimension-font-size-75);
+    color: var(--spectrum-global-color-gray-700);
+}
+
+.abandoned {
+    color: var(--spectrum-global-color-orange-600);
+}
+
+.errorMessage {
+    color: var(--spectrum-global-color-red-600);
+}
+
+.empty {
+    padding: var(--spectrum-global-dimension-size-400);
+    text-align: center;
+    color: var(--spectrum-global-color-gray-700);
+}
