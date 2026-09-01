@@ -44,6 +44,10 @@ const session = (overrides: Partial<SchemaRuntimeSessionInfo> = {}): SchemaRunti
 });
 
 describe('RuntimeSessionStatus', () => {
+    afterEach(() => {
+        Object.defineProperty(window.screen, 'width', { configurable: true, value: 0 });
+    });
+
     it('renders nothing when no sessions are running', async () => {
         // The footer is mounted on every page, so the resting state is this one.
         let answered = 0;
@@ -96,21 +100,36 @@ describe('RuntimeSessionStatus', () => {
 
     it('stays open when pinned if the user clicks away or presses Escape', async () => {
         const user = userEvent.setup();
+        const outside = vi.fn();
+        // Spectrum swaps a popover for a modal at <= 700px. jsdom's screen is
+        // 0, so without this the pin path never hits the non-modal popover.
+        Object.defineProperty(window.screen, 'width', { configurable: true, value: 1280 });
         server.use(
             http.get(COUNT_PATH, () => HttpResponse.json({ count: 1 })),
             http.get(SESSIONS_PATH, () => HttpResponse.json([session()]))
         );
 
-        render(<RuntimeSessionStatus />);
+        render(
+            <>
+                <button type='button' onClick={outside}>
+                    Switch fixture
+                </button>
+                <RuntimeSessionStatus />
+            </>
+        );
 
         await user.click(await screen.findByRole('button', { name: 'Runtime sessions' }));
+        expect(screen.getByTestId('underlay')).toBeInTheDocument();
+
         await user.click(await screen.findByRole('button', { name: 'Pin session list' }));
 
         expect(screen.getByRole('button', { name: 'Unpin session list' })).toHaveAttribute('aria-pressed', 'true');
+        expect(screen.queryByTestId('underlay')).not.toBeInTheDocument();
 
         await user.keyboard('{Escape}');
-        await user.click(document.body);
+        await user.click(screen.getByRole('button', { name: 'Switch fixture' }));
 
+        expect(outside).toHaveBeenCalled();
         expect(screen.getByRole('heading', { name: 'Runtime sessions' })).toBeInTheDocument();
     });
 

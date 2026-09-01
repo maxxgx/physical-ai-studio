@@ -356,12 +356,23 @@ export const RuntimeSessionStatus = () => {
         setIsOpen(false);
     };
 
+    // Spectrum popovers are modal: they cover the page with an underlay and
+    // mark it inert. Pinning is the opposite request -- keep the list up while
+    // the rest of the UI stays usable -- so those modal bits have to come off.
+    // DialogTrigger does not type the Popover flags; they still reach it.
+    const popover = {
+        type: 'popover' as const,
+        placement: 'top' as const,
+        isOpen,
+        isKeyboardDismissDisabled: isPinned,
+        isNonModal: isPinned,
+        disableFocusManagement: isPinned,
+        shouldCloseOnInteractOutside: () => !isPinned,
+    };
+
     return (
         <DialogTrigger
-            type='popover'
-            placement='top'
-            isOpen={isOpen}
-            isKeyboardDismissDisabled={isPinned}
+            {...popover}
             onOpenChange={(open) => {
                 if (!open && isPinnedRef.current) {
                     setIsOpen(true);
