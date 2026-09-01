@@ -241,6 +241,13 @@ export const RuntimeSessionsDialog = ({ close }: { close: () => void }) => {
     // its primary action fires -- react-query drops the callbacks of an
     // unmounted component, and a failed stop leaves a robot held, so it must not
     // vanish with the dialog.
+    // Scoped to the session actually being stopped. Shared across rows it would
+    // disable the confirm on a *different* session while this one is in flight --
+    // and a stop can take seconds, since the backend waits out SIGTERM before it
+    // escalates. Derived from the mutation rather than tracked separately so it
+    // cannot drift out of step with it.
+    const pendingSessionName = stopMutation.isPending ? stopMutation.variables?.params?.path?.session_name : undefined;
+
     const stopSession = (session: SchemaRuntimeSessionInfo) => {
         const label = sessionLabel(session);
         stopMutation.mutate(
@@ -281,7 +288,7 @@ export const RuntimeSessionsDialog = ({ close }: { close: () => void }) => {
                                 session={session}
                                 now={now}
                                 isConfirming={stopTarget?.session_name === session.session_name}
-                                isStopPending={stopMutation.isPending}
+                                isStopPending={pendingSessionName === session.session_name}
                                 onStop={() => setStopTarget(session)}
                                 onCancelStop={() => setStopTarget(undefined)}
                                 onConfirmStop={() => stopSession(session)}

@@ -265,6 +265,32 @@ describe('RuntimeSessionsDialog', () => {
         expect(screen.getByRole('heading', { name: 'Runtime sessions' })).toBeInTheDocument();
     });
 
+    it('lets a second session be stopped while the first stop is still in flight', async () => {
+        const user = userEvent.setup();
+        server.use(
+            http.get(SESSIONS_PATH, () =>
+                HttpResponse.json([
+                    session(),
+                    session({ session_name: 'rt-second', follower_name: 'right arm', follower_id: null }),
+                ])
+            ),
+            // Never settles, standing in for the seconds the backend spends
+            // waiting out SIGTERM before it escalates to SIGKILL.
+            http.post(STOP_PATH, () => new Promise<never>(() => {}))
+        );
+
+        render(<RuntimeSessionsDialog close={vi.fn()} />);
+
+        await user.click(await screen.findByRole('button', { name: /stop session for left arm/i }));
+        await user.click(screen.getByRole('button', { name: 'Stop session' }));
+
+        await user.click(await screen.findByRole('button', { name: /stop session for right arm/i }));
+
+        // A pending stop on one session must not disable the confirmation on
+        // another, or the second robot cannot be stopped until the first lets go.
+        expect(await screen.findByRole('button', { name: 'Stop session' })).toBeEnabled();
+    });
+
     it('surfaces a session that would not stop', async () => {
         const user = userEvent.setup();
         // The primary action dismisses the dialog, so the failure has to land
