@@ -91,6 +91,72 @@ describe('RuntimeSessionStatus', () => {
         expect(await screen.findByRole('heading', { name: 'Runtime sessions' })).toBeInTheDocument();
         expect(await screen.findByText('left arm')).toBeInTheDocument();
         expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Pin session list' })).toBeInTheDocument();
+    });
+
+    it('stays open when pinned if the user clicks away or presses Escape', async () => {
+        const user = userEvent.setup();
+        server.use(
+            http.get(COUNT_PATH, () => HttpResponse.json({ count: 1 })),
+            http.get(SESSIONS_PATH, () => HttpResponse.json([session()]))
+        );
+
+        render(<RuntimeSessionStatus />);
+
+        await user.click(await screen.findByRole('button', { name: 'Runtime sessions' }));
+        await user.click(await screen.findByRole('button', { name: 'Pin session list' }));
+
+        expect(screen.getByRole('button', { name: 'Unpin session list' })).toHaveAttribute('aria-pressed', 'true');
+
+        await user.keyboard('{Escape}');
+        await user.click(document.body);
+
+        expect(screen.getByRole('heading', { name: 'Runtime sessions' })).toBeInTheDocument();
+    });
+
+    it('keeps a pinned list open when the last session stops', async () => {
+        const user = userEvent.setup();
+        let count = 1;
+        let sessions = [session()];
+        server.use(
+            http.get(COUNT_PATH, () => HttpResponse.json({ count })),
+            http.get(SESSIONS_PATH, () => HttpResponse.json(sessions)),
+            http.post(STOP_PATH, () => {
+                count = 0;
+                sessions = [];
+                return new HttpResponse(null, { status: 204 });
+            })
+        );
+
+        render(<RuntimeSessionStatus />);
+
+        await user.click(await screen.findByRole('button', { name: 'Runtime sessions' }));
+        await user.click(await screen.findByRole('button', { name: 'Pin session list' }));
+        await user.click(screen.getByRole('button', { name: /stop session for left arm/i }));
+        await user.click(screen.getByRole('button', { name: 'Stop session' }));
+
+        // The chip unmounting at zero would take the popover with it, so a pinned
+        // panel would vanish on the very action the user opened it to perform.
+        expect(await screen.findByText('No runtime sessions are running.')).toBeInTheDocument();
+        expect(screen.getByRole('heading', { name: 'Runtime sessions' })).toBeInTheDocument();
+    });
+
+    it('closes a pinned list from the header close button', async () => {
+        const user = userEvent.setup();
+        server.use(
+            http.get(COUNT_PATH, () => HttpResponse.json({ count: 1 })),
+            http.get(SESSIONS_PATH, () => HttpResponse.json([session()]))
+        );
+
+        render(<RuntimeSessionStatus />);
+
+        await user.click(await screen.findByRole('button', { name: 'Runtime sessions' }));
+        await user.click(await screen.findByRole('button', { name: 'Pin session list' }));
+        await user.click(screen.getByRole('button', { name: 'Close' }));
+
+        await waitFor(() =>
+            expect(screen.queryByRole('heading', { name: 'Runtime sessions' })).not.toBeInTheDocument()
+        );
     });
 });
 

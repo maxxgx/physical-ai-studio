@@ -18,7 +18,7 @@ import {
     ToastQueue,
     View,
 } from '@geti-ui/ui';
-import { Close } from '@geti-ui/ui/icons';
+import { Close, Pin } from '@geti-ui/ui/icons';
 
 import { getApiErrorMessage } from '../../api/errors';
 import { SchemaRuntimeSessionInfo } from '../../api/openapi-spec';
@@ -224,7 +224,15 @@ const SessionRow = ({
     );
 };
 
-export const RuntimeSessionsDialog = ({ close }: { close: () => void }) => {
+export const RuntimeSessionsDialog = ({
+    close,
+    isPinned = false,
+    onPinnedChange,
+}: {
+    close: () => void;
+    isPinned?: boolean;
+    onPinnedChange?: (isPinned: boolean) => void;
+}) => {
     const { data: sessions, isLoading } = useRuntimeSessions();
     const [stopTarget, setStopTarget] = useState<SchemaRuntimeSessionInfo | undefined>();
     const stopMutation = useStopRuntimeSession();
@@ -263,9 +271,20 @@ export const RuntimeSessionsDialog = ({ close }: { close: () => void }) => {
     };
 
     return (
-        <Dialog onDismiss={close} UNSAFE_className={classes.dialog}>
+        <Dialog UNSAFE_className={classes.dialog}>
             <Heading>Runtime sessions</Heading>
             <Header>
+                <ActionButton
+                    isQuiet
+                    aria-label={isPinned ? 'Unpin session list' : 'Pin session list'}
+                    aria-pressed={isPinned}
+                    onPress={() => onPinnedChange?.(!isPinned)}
+                    UNSAFE_className={`${classes.pinButton} ${isPinned ? classes.pinButtonActive : ''}`}
+                >
+                    <Icon>
+                        <Pin />
+                    </Icon>
+                </ActionButton>
                 <ActionButton isQuiet aria-label='Close' onPress={close} UNSAFE_className={classes.closeButton}>
                     <Icon>
                         <Close />
@@ -311,20 +330,53 @@ export const RuntimeSessionsDialog = ({ close }: { close: () => void }) => {
 export const RuntimeSessionStatus = () => {
     const { data } = useRuntimeSessionCount();
     const count = data?.count ?? 0;
+    const [isOpen, setIsOpen] = useState(false);
+    const [isPinned, setIsPinned] = useState(false);
+    const isPinnedRef = useRef(false);
 
-    if (count === 0) {
+    // Stay mounted while the panel is open, even at zero. Unmounting here takes
+    // the popover with it, so stopping your last session used to yank the panel
+    // away mid-interaction -- and a pinned one closing is the opposite of what
+    // pinning asks for. It also left the empty state unreachable from here.
+    if (count === 0 && !isOpen) {
         return null;
     }
 
+    const setPinned = (pinned: boolean) => {
+        isPinnedRef.current = pinned;
+        setIsPinned(pinned);
+        if (pinned) {
+            setIsOpen(true);
+        }
+    };
+
+    const dismiss = () => {
+        isPinnedRef.current = false;
+        setIsPinned(false);
+        setIsOpen(false);
+    };
+
     return (
-        <DialogTrigger type='popover' placement='top'>
+        <DialogTrigger
+            type='popover'
+            placement='top'
+            isOpen={isOpen}
+            isKeyboardDismissDisabled={isPinned}
+            onOpenChange={(open) => {
+                if (!open && isPinnedRef.current) {
+                    setIsOpen(true);
+                    return;
+                }
+                setIsOpen(open);
+            }}
+        >
             <ActionButton isQuiet aria-label='Runtime sessions'>
                 <Flex alignItems='center' gap='size-50'>
                     <StatusLight variant='positive' marginEnd='size-0' />
                     <Text>{count === 1 ? '1 session' : `${count} sessions`}</Text>
                 </Flex>
             </ActionButton>
-            {(close) => <RuntimeSessionsDialog close={close} />}
+            {() => <RuntimeSessionsDialog close={dismiss} isPinned={isPinned} onPinnedChange={setPinned} />}
         </DialogTrigger>
     );
 };

@@ -59,6 +59,24 @@
     right: var(--spectrum-global-dimension-size-50);
 }
 
+.pinButton {
+    position: absolute;
+    top: var(--spectrum-global-dimension-size-50);
+    right: var(--spectrum-global-dimension-size-500);
+}
+
+.pinButton :global(svg) {
+    transition: transform 0.15s ease;
+}
+
+.pinButtonActive {
+    color: var(--energy-blue);
+}
+
+.pinButtonActive :global(svg) {
+    transform: rotate(-45deg);
+}
+
 .confirm {
     display: flex;
     flex-wrap: wrap;
