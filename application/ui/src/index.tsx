@@ -2,8 +2,6 @@ import React from 'react';
 
 import ReactDOM from 'react-dom/client';
 
-import '../mockups/runtime-sessions';
-
 import { Providers } from './providers';
 
 import './index.css';

@@ -51,10 +51,14 @@ export const sessionStatusVariant = (session: SchemaRuntimeSessionInfo): Session
         case 'starting':
             return 'notice';
         case 'running':
-        default:
-            // Listed explicitly so a new status added to the contract shows up
-            // here as a compile-time gap rather than silently rendering green.
             return sessionActivity(session) === 'hold' ? 'notice' : 'positive';
+        default: {
+            // No fallthrough on purpose: a status added to the contract makes
+            // this assignment fail to compile, so it has to be classified above
+            // rather than silently inheriting the running colour.
+            const unclassified: never = session.status;
+            return unclassified ?? 'neutral';
+        }
     }
 };
 

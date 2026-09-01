@@ -346,17 +346,6 @@ export const router = createBrowserRouter([
                 path: paths.openapi.pattern,
                 element: <OpenApi />,
             },
-            ...(import.meta.env.DEV
-                ? [
-                      {
-                          path: '/mockups/runtime-sessions',
-                          lazy: () =>
-                              import('../mockups/runtime-sessions').then((mod) => ({
-                                  Component: mod.RuntimeSessionsPreview,
-                              })),
-                      },
-                  ]
-                : []),
             {
                 path: '*',
                 loader: () => {

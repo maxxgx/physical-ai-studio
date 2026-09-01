@@ -106,6 +106,10 @@ class RuntimeSessionService:
         pid = metadata.get("pid")
         camera_keys = metadata.get("camera_keys")
         attached = metadata.get("attached")
+        # Guard the event, not the metadata: metadata is a dict by here, while
+        # "state" is absent until a session publishes one and can be any shape.
+        state = metadata.get("state")
+        activity = state.get("data") if isinstance(state, dict) else None
         return RuntimeSessionInfo(
             session_name=session_name,
             follower_id=_follower_id(session_name),
@@ -118,7 +122,7 @@ class RuntimeSessionService:
             attached=attached if isinstance(attached, bool) else None,
             idle_deadline=_timestamp(metadata.get("idle_deadline")),
             camera_keys=[key for key in camera_keys if isinstance(key, str)] if isinstance(camera_keys, list) else [],
-            activity=_model(RuntimeSessionActivity, (metadata.get("state") or {}).get("data")),
+            activity=_model(RuntimeSessionActivity, activity),
             error=_model(RuntimeSessionError, metadata.get("error")),
         )
 

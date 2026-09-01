@@ -179,6 +179,38 @@ def test_unrecognised_metadata_degrades_instead_of_failing(client: TestClient, m
     assert "extra" not in session["activity"]
 
 
+def test_a_session_that_has_not_published_state_yet_is_listed(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A starting session has no "state" key at all -- the common path, not an edge."""
+    name = _name()
+    metadata = _metadata(status="starting")
+    del metadata["state"]
+    _stub_probe(monkeypatch, {name: metadata})
+
+    with SessionNameLock(name):
+        response = client.get("/api/runtime/sessions")
+
+    assert response.status_code == 200
+    assert response.json()[0]["status"] == "starting"
+    assert response.json()[0]["activity"] is None
+
+
+@pytest.mark.parametrize("state", ["running", 42, ["a"], None, {"data": "not-a-mapping"}])
+def test_a_malformed_state_payload_does_not_break_the_listing(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, state: Any
+) -> None:
+    """Indexing an event dict that turns out to be a string would take the whole list down."""
+    name = _name()
+    _stub_probe(monkeypatch, {name: _metadata(state=state)})
+
+    with SessionNameLock(name):
+        response = client.get("/api/runtime/sessions")
+
+    assert response.status_code == 200
+    assert response.json()[0]["activity"] is None
+
+
 def test_a_fatal_session_reports_its_error(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     name = _name()
     _stub_probe(
