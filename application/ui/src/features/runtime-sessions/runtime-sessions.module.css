@@ -77,6 +77,10 @@
     transform: rotate(-45deg);
 }
 
+.status::before {
+    margin-left: 0;
+}
+
 .confirm {
     display: flex;
     flex-wrap: wrap;

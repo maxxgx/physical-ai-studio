@@ -349,9 +349,9 @@ export const router = createBrowserRouter([
             ...(import.meta.env.DEV
                 ? [
                       {
-                          path: '/dev/runtime-sessions',
+                          path: '/mockups/runtime-sessions',
                           lazy: () =>
-                              import('./dev/runtime-sessions-preview').then((mod) => ({
+                              import('../mockups/runtime-sessions').then((mod) => ({
                                   Component: mod.RuntimeSessionsPreview,
                               })),
                       },

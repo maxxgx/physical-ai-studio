@@ -2,7 +2,7 @@ import React from 'react';
 
 import ReactDOM from 'react-dom/client';
 
-import './dev/runtime-sessions-fetch-mock';
+import '../mockups/runtime-sessions';
 
 import { Providers } from './providers';
 

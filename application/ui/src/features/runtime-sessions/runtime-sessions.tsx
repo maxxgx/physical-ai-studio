@@ -38,7 +38,7 @@ import classes from './runtime-sessions.module.css';
 
 const COLUMNS: TableColumn[] = [
     { width: 'max-content' },
-    { width: '2fr', header: 'Session' },
+    { width: '2fr', header: 'Robot' },
     { width: '1fr', header: 'Status' },
     { width: '1fr', header: 'Uptime' },
     { width: 'auto', align: 'end' },
@@ -164,6 +164,8 @@ const SessionRow = ({
     now,
     isConfirming,
     isStopPending,
+    isExpanded,
+    onExpandedChange,
     onStop,
     onCancelStop,
     onConfirmStop,
@@ -172,6 +174,8 @@ const SessionRow = ({
     now: number;
     isConfirming: boolean;
     isStopPending: boolean;
+    isExpanded: boolean;
+    onExpandedChange: (isExpanded: boolean) => void;
     onStop: () => void;
     onCancelStop: () => void;
     onConfirmStop: () => void;
@@ -195,6 +199,8 @@ const SessionRow = ({
         <Table.ExpandableRow
             label={`Details for ${label}`}
             detail={<SessionDetail session={session} now={now} />}
+            isExpanded={isExpanded}
+            onExpandedChange={onExpandedChange}
             after={
                 isConfirming ? (
                     <StopConfirm
@@ -207,7 +213,9 @@ const SessionRow = ({
             }
         >
             <Text>{label}</Text>
-            <StatusLight variant={sessionStatusVariant(session)}>{sessionActivity(session)}</StatusLight>
+            <StatusLight variant={sessionStatusVariant(session)} UNSAFE_className={classes.status}>
+                {sessionActivity(session)}
+            </StatusLight>
             <Text>{uptimeLabel(session, now) ?? '—'}</Text>
             <div onClick={(event) => event.stopPropagation()}>
                 <Button
@@ -228,14 +236,34 @@ export const RuntimeSessionsDialog = ({
     close,
     isPinned = false,
     onPinnedChange,
+    expandedNames,
+    onExpandedNamesChange,
 }: {
     close: () => void;
     isPinned?: boolean;
     onPinnedChange?: (isPinned: boolean) => void;
+    expandedNames?: ReadonlySet<string>;
+    onExpandedNamesChange?: (expandedNames: ReadonlySet<string>) => void;
 }) => {
     const { data: sessions, isLoading } = useRuntimeSessions();
     const [stopTarget, setStopTarget] = useState<SchemaRuntimeSessionInfo | undefined>();
     const stopMutation = useStopRuntimeSession();
+    const [internalExpanded, setInternalExpanded] = useState<ReadonlySet<string>>(() => new Set());
+    const expanded = expandedNames ?? internalExpanded;
+
+    const setRowExpanded = (sessionName: string, isExpanded: boolean) => {
+        const next = new Set(expanded);
+        if (isExpanded) {
+            next.add(sessionName);
+        } else {
+            next.delete(sessionName);
+        }
+        if (onExpandedNamesChange !== undefined) {
+            onExpandedNamesChange(next);
+        } else {
+            setInternalExpanded(next);
+        }
+    };
 
     // Uptime and the idle countdown are derived from timestamps, so they need a
     // tick of their own -- the poll alone would make them jump in 2s steps.
@@ -308,6 +336,8 @@ export const RuntimeSessionsDialog = ({
                                 now={now}
                                 isConfirming={stopTarget?.session_name === session.session_name}
                                 isStopPending={pendingSessionName === session.session_name}
+                                isExpanded={expanded.has(session.session_name)}
+                                onExpandedChange={(isExpanded) => setRowExpanded(session.session_name, isExpanded)}
                                 onStop={() => setStopTarget(session)}
                                 onCancelStop={() => setStopTarget(undefined)}
                                 onConfirmStop={() => stopSession(session)}
@@ -333,6 +363,34 @@ export const RuntimeSessionStatus = () => {
     const [isOpen, setIsOpen] = useState(false);
     const [isPinned, setIsPinned] = useState(false);
     const isPinnedRef = useRef(false);
+    // Kept outside the overlay so a close/reopen can restore which rows were open.
+    const [expandedNames, setExpandedNames] = useState<ReadonlySet<string>>(() => new Set());
+
+    useEffect(() => {
+        if (!isOpen) {
+            return;
+        }
+
+        const onPointerDown = (event: PointerEvent) => {
+            if (isPinnedRef.current) {
+                return;
+            }
+            const target = event.target;
+            if (!(target instanceof Element)) {
+                return;
+            }
+            if (target.closest('[role="dialog"]') !== null || target.closest('[data-testid="popover"]') !== null) {
+                return;
+            }
+            if (target.closest('[aria-label="Runtime sessions"]') !== null) {
+                return;
+            }
+            setIsOpen(false);
+        };
+
+        document.addEventListener('pointerdown', onPointerDown, true);
+        return () => document.removeEventListener('pointerdown', onPointerDown, true);
+    }, [isOpen]);
 
     // Stay mounted while the panel is open, even at zero. Unmounting here takes
     // the popover with it, so stopping your last session used to yank the panel
@@ -354,19 +412,19 @@ export const RuntimeSessionStatus = () => {
         isPinnedRef.current = false;
         setIsPinned(false);
         setIsOpen(false);
+        setExpandedNames(new Set());
     };
 
-    // Spectrum popovers are modal: they cover the page with an underlay and
-    // mark it inert. Pinning is the opposite request -- keep the list up while
-    // the rest of the UI stays usable -- so those modal bits have to come off.
-    // DialogTrigger does not type the Popover flags; they still reach it.
+    // Always non-modal. Toggling that flag (or focus containment) remounts
+    // Spectrum's overlay, which is the flash you see on pin. Click-away is
+    // handled above so an unpinned list still dismisses.
     const popover = {
         type: 'popover' as const,
         placement: 'top' as const,
         isOpen,
         isKeyboardDismissDisabled: isPinned,
-        isNonModal: isPinned,
-        disableFocusManagement: isPinned,
+        isNonModal: true,
+        disableFocusManagement: true,
         shouldCloseOnInteractOutside: () => !isPinned,
     };
 
@@ -387,7 +445,15 @@ export const RuntimeSessionStatus = () => {
                     <Text>{count === 1 ? '1 session' : `${count} sessions`}</Text>
                 </Flex>
             </ActionButton>
-            {() => <RuntimeSessionsDialog close={dismiss} isPinned={isPinned} onPinnedChange={setPinned} />}
+            {() => (
+                <RuntimeSessionsDialog
+                    close={dismiss}
+                    isPinned={isPinned}
+                    onPinnedChange={setPinned}
+                    expandedNames={expandedNames}
+                    onExpandedNamesChange={setExpandedNames}
+                />
+            )}
         </DialogTrigger>
     );
 };

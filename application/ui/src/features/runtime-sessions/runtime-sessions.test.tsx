@@ -119,7 +119,6 @@ describe('RuntimeSessionStatus', () => {
         );
 
         await user.click(await screen.findByRole('button', { name: 'Runtime sessions' }));
-        expect(screen.getByTestId('underlay')).toBeInTheDocument();
 
         await user.click(await screen.findByRole('button', { name: 'Pin session list' }));
 
@@ -131,6 +130,53 @@ describe('RuntimeSessionStatus', () => {
 
         expect(outside).toHaveBeenCalled();
         expect(screen.getByRole('heading', { name: 'Runtime sessions' })).toBeInTheDocument();
+    });
+
+    it('keeps an expanded session visible after pinning', async () => {
+        const user = userEvent.setup();
+        Object.defineProperty(window.screen, 'width', { configurable: true, value: 1280 });
+        server.use(
+            http.get(COUNT_PATH, () => HttpResponse.json({ count: 1 })),
+            http.get(SESSIONS_PATH, () => HttpResponse.json([session()]))
+        );
+
+        render(<RuntimeSessionStatus />);
+
+        await user.click(await screen.findByRole('button', { name: 'Runtime sessions' }));
+        await user.click(await screen.findByRole('button', { name: /details for left arm/i }));
+
+        const heading = await screen.findByRole('heading', { name: 'Runtime sessions' });
+        const task = screen.getByText('pick up the cube');
+
+        await user.click(screen.getByRole('button', { name: 'Pin session list' }));
+
+        expect(screen.getByRole('button', { name: 'Unpin session list' })).toHaveAttribute('aria-pressed', 'true');
+        expect(screen.getByRole('heading', { name: 'Runtime sessions' })).toBe(heading);
+        expect(screen.getByText('pick up the cube')).toBe(task);
+        expect(screen.getByRole('button', { name: /details for left arm/i })).toHaveAttribute('aria-expanded', 'true');
+    });
+
+    it('closes when clicking away if it is not pinned', async () => {
+        const user = userEvent.setup();
+        Object.defineProperty(window.screen, 'width', { configurable: true, value: 1280 });
+        server.use(
+            http.get(COUNT_PATH, () => HttpResponse.json({ count: 1 })),
+            http.get(SESSIONS_PATH, () => HttpResponse.json([session()]))
+        );
+
+        render(
+            <>
+                <button type='button'>Switch fixture</button>
+                <RuntimeSessionStatus />
+            </>
+        );
+
+        await user.click(await screen.findByRole('button', { name: 'Runtime sessions' }));
+        expect(await screen.findByRole('heading', { name: 'Runtime sessions' })).toBeInTheDocument();
+
+        await user.click(screen.getByRole('button', { name: 'Switch fixture' }));
+
+        expect(screen.getByRole('button', { name: 'Runtime sessions' })).toHaveAttribute('aria-expanded', 'false');
     });
 
     it('keeps a pinned list open when the last session stops', async () => {

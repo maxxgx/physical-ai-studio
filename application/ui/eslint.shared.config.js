@@ -58,11 +58,11 @@ export default [
         )
     ),
     {
-        files: ['src/**/*.tsx', 'src/**/*.ts'],
+        files: ['src/**/*.tsx', 'src/**/*.ts', 'mockups/**/*.tsx', 'mockups/**/*.ts'],
         ...reactPlugin.configs.flat.recommended,
     },
     {
-        files: ['src/**/*.tsx', 'src/**/*.ts'],
+        files: ['src/**/*.tsx', 'src/**/*.ts', 'mockups/**/*.tsx', 'mockups/**/*.ts'],
         plugins: {
             'react-hooks': fixupPluginRules(reactHooks),
         },
