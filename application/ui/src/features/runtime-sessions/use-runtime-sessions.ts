@@ -34,6 +34,30 @@ export const sessionActivity = (session: SchemaRuntimeSessionInfo): string => {
     return session.activity.is_recording ? 'recording' : session.activity.follower_source;
 };
 
+export type SessionStatusVariant = 'positive' | 'negative' | 'notice' | 'neutral';
+
+/**
+ * Color means attention, not control mode. Green = doing work, yellow = idle
+ * or starting, red = broken, gray = stopped. Hold and teleop stay distinct
+ * without a fourth hue for policy vs recording.
+ */
+export const sessionStatusVariant = (session: SchemaRuntimeSessionInfo): SessionStatusVariant => {
+    switch (session.status) {
+        case 'error':
+        case 'unreachable':
+            return 'negative';
+        case 'stopped':
+            return 'neutral';
+        case 'starting':
+            return 'notice';
+        case 'running':
+        default:
+            // Listed explicitly so a new status added to the contract shows up
+            // here as a compile-time gap rather than silently rendering green.
+            return sessionActivity(session) === 'hold' ? 'notice' : 'positive';
+    }
+};
+
 /** What to call a session in the UI, falling back to its raw name for an orphan. */
 export const sessionLabel = (session: SchemaRuntimeSessionInfo): string =>
     session.follower_name ?? session.session_name;

@@ -9,7 +9,12 @@ import { getApiErrorMessage, isResourceInUseError, isRuntimeSessionBusyError } f
 import { SchemaRuntimeSessionInfo } from '../../api/openapi-spec';
 import { paths } from '../../router';
 import { useProjectId } from '../projects/use-project';
-import { sessionActivity, sessionForRobot, useRuntimeSessions } from '../runtime-sessions/use-runtime-sessions';
+import {
+    sessionActivity,
+    sessionForRobot,
+    sessionStatusVariant,
+    useRuntimeSessions,
+} from '../runtime-sessions/use-runtime-sessions';
 import RobotArm from './../../assets/robot-arm.webp';
 import { isUnavailableRobot, SchemaRobot } from './robot-types';
 
@@ -98,7 +103,7 @@ export const SessionStatus = ({ session }: { session: SchemaRuntimeSessionInfo |
     }
 
     return (
-        <StatusLight variant={session.status === 'running' ? 'positive' : 'notice'}>
+        <StatusLight variant={sessionStatusVariant(session)}>
             <View>Session · {sessionActivity(session)}</View>
         </StatusLight>
     );

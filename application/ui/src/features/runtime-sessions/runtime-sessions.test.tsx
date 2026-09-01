@@ -8,6 +8,7 @@ import { http } from '../../api/utils';
 import { server } from '../../msw-node-setup';
 import { render } from '../../test-utils/render';
 import { RuntimeSessionsDialog, RuntimeSessionStatus } from './runtime-sessions';
+import { sessionStatusVariant } from './use-runtime-sessions';
 
 const SESSIONS_PATH = '/api/runtime/sessions';
 const COUNT_PATH = '/api/runtime/sessions/count';
@@ -75,6 +76,22 @@ describe('RuntimeSessionStatus', () => {
 
         expect(await screen.findByText('3 sessions')).toBeInTheDocument();
     });
+
+    it('opens the session list from the footer chip', async () => {
+        const user = userEvent.setup();
+        server.use(
+            http.get(COUNT_PATH, () => HttpResponse.json({ count: 1 })),
+            http.get(SESSIONS_PATH, () => HttpResponse.json([session()]))
+        );
+
+        render(<RuntimeSessionStatus />);
+
+        await user.click(await screen.findByRole('button', { name: 'Runtime sessions' }));
+
+        expect(await screen.findByRole('heading', { name: 'Runtime sessions' })).toBeInTheDocument();
+        expect(await screen.findByText('left arm')).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument();
+    });
 });
 
 describe('RuntimeSessionsDialog', () => {
@@ -122,6 +139,30 @@ describe('RuntimeSessionsDialog', () => {
         await user.click(await screen.findByRole('button', { name: /details for left arm/i }));
 
         expect(await screen.findByText(/nobody is watching this session/i)).toBeInTheDocument();
+    });
+
+    it('labels expanded session details so the fields are readable', async () => {
+        const user = userEvent.setup();
+        server.use(http.get(SESSIONS_PATH, () => HttpResponse.json([session()])));
+
+        render(<RuntimeSessionsDialog close={vi.fn()} />);
+
+        await user.click(await screen.findByRole('button', { name: /details for left arm/i }));
+
+        expect(screen.getByText('Task')).toBeInTheDocument();
+        expect(screen.getByText('pick up the cube')).toBeInTheDocument();
+        expect(screen.getByText('Dataset')).toBeInTheDocument();
+        expect(screen.getByText('Loaded')).toBeInTheDocument();
+        expect(screen.getByText('Model')).toBeInTheDocument();
+        expect(screen.getByText('Not loaded')).toBeInTheDocument();
+        expect(screen.getByText('Leader robot')).toBeInTheDocument();
+        expect(screen.getByText('left leader')).toBeInTheDocument();
+        expect(screen.getByText('Cameras')).toBeInTheDocument();
+        expect(screen.getByText('wrist')).toBeInTheDocument();
+        expect(screen.getByText('Process ID')).toBeInTheDocument();
+        expect(screen.getByText('41273')).toBeInTheDocument();
+        expect(screen.getByText('Session ID')).toBeInTheDocument();
+        expect(screen.getByText(`rt-${ROBOT_ID}`)).toBeInTheDocument();
     });
 
     it('lists a session that will not answer instead of hiding it', async () => {
@@ -188,8 +229,40 @@ describe('RuntimeSessionsDialog', () => {
         await user.click(await screen.findByRole('button', { name: /stop session for left arm/i }));
         await user.click(await screen.findByRole('button', { name: 'Cancel' }));
 
-        await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+        await waitFor(() => expect(screen.queryByRole('button', { name: 'Stop session' })).not.toBeInTheDocument());
         expect(stopped).toEqual([]);
+    });
+
+    it('returns focus to the Stop button when the confirmation is cancelled', async () => {
+        const user = userEvent.setup();
+        server.use(http.get(SESSIONS_PATH, () => HttpResponse.json([session()])));
+
+        render(<RuntimeSessionsDialog close={vi.fn()} />);
+
+        const stop = await screen.findByRole('button', { name: /stop session for left arm/i });
+        await user.click(stop);
+
+        // Focus moves to the safe option, never the destructive one.
+        expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus();
+
+        await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+        // Back where it started. Unmounting the Stop button instead would drop
+        // focus to the body and strand a keyboard user.
+        await waitFor(() => expect(stop).toHaveFocus());
+    });
+
+    it('cancels the confirmation on Escape without closing the list', async () => {
+        const user = userEvent.setup();
+        server.use(http.get(SESSIONS_PATH, () => HttpResponse.json([session()])));
+
+        render(<RuntimeSessionsDialog close={vi.fn()} />);
+
+        await user.click(await screen.findByRole('button', { name: /stop session for left arm/i }));
+        await user.keyboard('{Escape}');
+
+        await waitFor(() => expect(screen.queryByRole('button', { name: 'Stop session' })).not.toBeInTheDocument());
+        expect(screen.getByRole('heading', { name: 'Runtime sessions' })).toBeInTheDocument();
     });
 
     it('surfaces a session that would not stop', async () => {
@@ -213,5 +286,18 @@ describe('RuntimeSessionsDialog', () => {
 
         await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.stringMatching(/could not be stopped/i)));
         toast.mockRestore();
+    });
+});
+
+describe('sessionStatusVariant', () => {
+    it('uses yellow for hold and green for teleop', () => {
+        expect(sessionStatusVariant(session({ activity: { ...baseState, follower_source: 'hold' } }))).toBe('notice');
+        expect(sessionStatusVariant(session())).toBe('positive');
+        expect(sessionStatusVariant(session({ activity: { ...baseState, is_recording: true } }))).toBe('positive');
+    });
+
+    it('uses red for broken sessions', () => {
+        expect(sessionStatusVariant(session({ status: 'unreachable', activity: null }))).toBe('negative');
+        expect(sessionStatusVariant(session({ status: 'error' }))).toBe('negative');
     });
 });

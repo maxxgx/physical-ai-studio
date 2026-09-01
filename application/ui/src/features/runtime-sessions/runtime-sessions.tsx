@@ -1,23 +1,24 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 
 import {
     ActionButton,
-    AlertDialog,
     Button,
     ButtonGroup,
     Content,
     Dialog,
-    DialogContainer,
     DialogTrigger,
     Divider,
     Flex,
+    Header,
     Heading,
+    Icon,
     Loading,
     StatusLight,
     Text,
     ToastQueue,
     View,
 } from '@geti-ui/ui';
+import { Close } from '@geti-ui/ui/icons';
 
 import { getApiErrorMessage } from '../../api/errors';
 import { SchemaRuntimeSessionInfo } from '../../api/openapi-spec';
@@ -26,6 +27,7 @@ import {
     idleSecondsRemaining,
     sessionActivity,
     sessionLabel,
+    sessionStatusVariant,
     uptimeLabel,
     useRuntimeSessionCount,
     useRuntimeSessions,
@@ -35,50 +37,28 @@ import {
 import classes from './runtime-sessions.module.css';
 
 const COLUMNS: TableColumn[] = [
+    { width: 'max-content' },
     { width: '2fr', header: 'Session' },
     { width: '1fr', header: 'Status' },
     { width: '1fr', header: 'Uptime' },
-    { width: 'auto', header: '' },
+    { width: 'auto', align: 'end' },
 ];
 
-const STATUS_VARIANTS: Record<string, 'positive' | 'negative' | 'notice' | 'neutral'> = {
-    running: 'positive',
-    starting: 'notice',
-    stopped: 'neutral',
-    error: 'negative',
-    unreachable: 'negative',
-};
+const Field = ({ label, children }: { label: string; children: string }) => (
+    <>
+        <dt>{label}</dt>
+        <dd>{children}</dd>
+    </>
+);
 
 const SessionDetail = ({ session, now }: { session: SchemaRuntimeSessionInfo; now: number }) => {
     const idleSeconds = idleSecondsRemaining(session, now);
     const cameras = session.camera_keys ?? [];
-    const facts: string[] = [];
-
-    if (session.activity?.model_loaded) {
-        facts.push('Model loaded');
-    }
-    if (session.activity?.dataset_loaded) {
-        facts.push('Dataset loaded');
-    }
-    if (session.activity?.task) {
-        facts.push(`Task: ${session.activity.task}`);
-    }
-    if (session.activity?.episodes_recorded) {
-        facts.push(`${session.activity.episodes_recorded} episodes recorded`);
-    }
-    if (session.leader_name) {
-        facts.push(`Leader: ${session.leader_name}`);
-    }
-    if (cameras.length > 0) {
-        facts.push(`Cameras: ${cameras.join(', ')}`);
-    }
-    if (session.pid !== null && session.pid !== undefined) {
-        facts.push(`pid ${session.pid}`);
-    }
-    facts.push(session.session_name);
+    const activity = session.activity;
+    const loadedLabel = (loaded: boolean | null | undefined) => (loaded ? 'Loaded' : 'Not loaded');
 
     return (
-        <Flex direction='column' gap='size-50' UNSAFE_className={classes.detail}>
+        <div className={classes.detail}>
             {idleSeconds !== undefined && (
                 <Text UNSAFE_className={classes.abandoned}>
                     Nobody is watching this session. It shuts down in {idleSeconds}s.
@@ -89,32 +69,157 @@ const SessionDetail = ({ session, now }: { session: SchemaRuntimeSessionInfo; no
                     {session.error.message} ({session.error.error_code})
                 </Text>
             )}
-            {facts.map((fact) => (
-                <Text key={fact}>{fact}</Text>
-            ))}
-        </Flex>
+
+            {(activity || session.leader_name || cameras.length > 0) && (
+                <dl className={classes.fields}>
+                    {activity?.task ? <Field label='Task'>{activity.task}</Field> : null}
+                    {activity ? <Field label='Dataset'>{loadedLabel(activity.dataset_loaded)}</Field> : null}
+                    {activity ? <Field label='Model'>{loadedLabel(activity.model_loaded)}</Field> : null}
+                    {activity?.episodes_recorded != null && activity.episodes_recorded > 0 ? (
+                        <Field label='Episodes recorded'>{String(activity.episodes_recorded)}</Field>
+                    ) : null}
+                    {session.leader_name ? <Field label='Leader robot'>{session.leader_name}</Field> : null}
+                    {cameras.length > 0 ? <Field label='Cameras'>{cameras.join(', ')}</Field> : null}
+                </dl>
+            )}
+
+            <dl className={`${classes.fields} ${classes.diagnostics}`}>
+                {session.pid !== null && session.pid !== undefined ? (
+                    <Field label='Process ID'>{String(session.pid)}</Field>
+                ) : null}
+                <Field label='Session ID'>{session.session_name}</Field>
+            </dl>
+        </div>
+    );
+};
+
+/**
+ * Inline confirmation attached to a row.
+ *
+ * Deliberately a ``group`` and not an ``alertdialog``: that role promises a
+ * modal that traps focus and swallows Escape, and this bar is neither. It does
+ * take focus on open and hand it back on cancel -- see ``SessionRow`` -- because
+ * the button that opened it is disabled the moment it appears.
+ */
+const StopConfirm = ({
+    label,
+    isPending,
+    onCancel,
+    onConfirm,
+}: {
+    label: string;
+    isPending: boolean;
+    onCancel: () => void;
+    onConfirm: () => void;
+}) => {
+    const headingId = useId();
+    const descId = useId();
+    const cancelId = useId();
+
+    // Explicit rather than autoFocus: this is focus management in response to a
+    // press, not focus stolen on load, and jsx-a11y rightly forbids the latter.
+    useEffect(() => {
+        document.getElementById(cancelId)?.focus();
+    }, [cancelId]);
+
+    return (
+        <div
+            role='group'
+            aria-labelledby={headingId}
+            aria-describedby={descId}
+            className={classes.confirm}
+            onClick={(event) => event.stopPropagation()}
+            onKeyDown={(event) => {
+                if (event.key === 'Escape') {
+                    // Stopping a robot mid-task is worth an easy way out, and
+                    // Escape must not reach the popover and close the whole list.
+                    event.stopPropagation();
+                    onCancel();
+                }
+            }}
+        >
+            <div>
+                <Heading id={headingId} level={4} margin={0}>
+                    {`Stop session for '${label}'?`}
+                </Heading>
+                <Text id={descId} UNSAFE_className={classes.confirmCopy}>
+                    The session will be terminated.
+                </Text>
+            </div>
+            <ButtonGroup>
+                {/* Focus lands on the safe option, never on the destructive one. */}
+                <Button id={cancelId} variant='secondary' onPress={onCancel}>
+                    Cancel
+                </Button>
+                <Button variant='negative' onPress={onConfirm} isDisabled={isPending}>
+                    Stop session
+                </Button>
+            </ButtonGroup>
+        </div>
     );
 };
 
 const SessionRow = ({
     session,
     now,
+    isConfirming,
+    isStopPending,
     onStop,
+    onCancelStop,
+    onConfirmStop,
 }: {
     session: SchemaRuntimeSessionInfo;
     now: number;
+    isConfirming: boolean;
+    isStopPending: boolean;
     onStop: () => void;
+    onCancelStop: () => void;
+    onConfirmStop: () => void;
 }) => {
     const label = sessionLabel(session);
+    const stopButtonId = useId();
+    const wasConfirming = useRef(false);
+
+    // Cancelling has to put the caret back where it came from. The Stop button
+    // stays mounted so there is something to return to -- unmounting it would
+    // drop focus to the document body, and a keyboard user would have to tab in
+    // from the top of the page to reach the list again.
+    useEffect(() => {
+        if (wasConfirming.current && !isConfirming) {
+            document.getElementById(stopButtonId)?.focus();
+        }
+        wasConfirming.current = isConfirming;
+    }, [isConfirming, stopButtonId]);
 
     return (
-        <Table.ExpandableRow label={`Details for ${label}`} detail={<SessionDetail session={session} now={now} />}>
+        <Table.ExpandableRow
+            label={`Details for ${label}`}
+            detail={<SessionDetail session={session} now={now} />}
+            after={
+                isConfirming ? (
+                    <StopConfirm
+                        label={label}
+                        isPending={isStopPending}
+                        onCancel={onCancelStop}
+                        onConfirm={onConfirmStop}
+                    />
+                ) : undefined
+            }
+        >
             <Text>{label}</Text>
-            <StatusLight variant={STATUS_VARIANTS[session.status] ?? 'neutral'}>{sessionActivity(session)}</StatusLight>
+            <StatusLight variant={sessionStatusVariant(session)}>{sessionActivity(session)}</StatusLight>
             <Text>{uptimeLabel(session, now) ?? '—'}</Text>
-            <Button variant='negative' onPress={onStop} aria-label={`Stop session for ${label}`}>
-                Stop
-            </Button>
+            <div onClick={(event) => event.stopPropagation()}>
+                <Button
+                    id={stopButtonId}
+                    variant='negative'
+                    onPress={onStop}
+                    isDisabled={isConfirming}
+                    aria-label={`Stop session for ${label}`}
+                >
+                    Stop
+                </Button>
+            </div>
         </Table.ExpandableRow>
     );
 };
@@ -151,8 +256,15 @@ export const RuntimeSessionsDialog = ({ close }: { close: () => void }) => {
     };
 
     return (
-        <Dialog onDismiss={close}>
+        <Dialog onDismiss={close} UNSAFE_className={classes.dialog}>
             <Heading>Runtime sessions</Heading>
+            <Header>
+                <ActionButton isQuiet aria-label='Close' onPress={close} UNSAFE_className={classes.closeButton}>
+                    <Icon>
+                        <Close />
+                    </Icon>
+                </ActionButton>
+            </Header>
             <Divider />
             <Content>
                 {isLoading ? (
@@ -168,33 +280,16 @@ export const RuntimeSessionsDialog = ({ close }: { close: () => void }) => {
                                 key={session.session_name}
                                 session={session}
                                 now={now}
+                                isConfirming={stopTarget?.session_name === session.session_name}
+                                isStopPending={stopMutation.isPending}
                                 onStop={() => setStopTarget(session)}
+                                onCancelStop={() => setStopTarget(undefined)}
+                                onConfirmStop={() => stopSession(session)}
                             />
                         ))}
                     </Table>
                 )}
-
-                <DialogContainer onDismiss={() => setStopTarget(undefined)}>
-                    {stopTarget && (
-                        <AlertDialog
-                            title={`Stop session for '${sessionLabel(stopTarget)}'?`}
-                            variant='destructive'
-                            primaryActionLabel='Stop session'
-                            cancelLabel='Cancel'
-                            onCancel={() => setStopTarget(undefined)}
-                            onPrimaryAction={() => stopSession(stopTarget)}
-                            isPrimaryActionDisabled={stopMutation.isPending}
-                        >
-                            <Text>The session will be terminated.</Text>
-                        </AlertDialog>
-                    )}
-                </DialogContainer>
             </Content>
-            <ButtonGroup>
-                <Button variant='secondary' onPress={close}>
-                    Close
-                </Button>
-            </ButtonGroup>
         </Dialog>
     );
 };
@@ -215,7 +310,7 @@ export const RuntimeSessionStatus = () => {
     }
 
     return (
-        <DialogTrigger type='fullscreen'>
+        <DialogTrigger type='popover' placement='top'>
             <ActionButton isQuiet aria-label='Runtime sessions'>
                 <Flex alignItems='center' gap='size-50'>
                     <StatusLight variant='positive' marginEnd='size-0' />
