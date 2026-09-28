@@ -187,6 +187,22 @@ On startup (`./run.sh`), the backend runs migration checks before Alembic:
 
 In interactive terminals, users are prompted for confirmation when a migration is needed.
 
+### Leftover SSH Job Containers After Upgrading
+
+Finish or cancel SSH training jobs before upgrading; Studio removes their
+containers when a job ends. The upgrade removes unsupported SSH job records and
+never contacts remote hosts. If those records referenced containers, startup
+logs a warning listing each host and container. To remove a leftover, run on
+that host:
+
+```bash
+docker ps -a --filter label=org.open-edge-platform.physicalai.managed=true
+docker rm -f <container>
+```
+
+The label also matches trainer containers Studio still manages, so remove only
+the containers named in the warning.
+
 ### Camera Not Detected
 
 - **RealSense**: Install [librealsense](https://github.com/IntelRealSense/librealsense)
