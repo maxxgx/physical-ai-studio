@@ -51,4 +51,10 @@ describe('remote-trainer-health-utils starting status', () => {
             })
         ).toBe('Studio started the trainer, but its container cannot access a CUDA or XPU device.');
     });
+
+    it('explains how to fix a trainer that cannot reach the internet', () => {
+        expect(
+            healthDescription({ ...startingHealth, status: 'degraded', reason_code: 'internet_unavailable' })
+        ).toContain('cannot reach the internet');
+    });
 });

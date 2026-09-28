@@ -333,3 +333,34 @@ async def test_mark_reachable_ends_the_grace_period() -> None:
     persistent_trainer.mark_reachable(trainer.id)
 
     assert persistent_trainer.is_within_startup_grace_period(trainer.id) is False
+
+
+@pytest.mark.parametrize(
+    ("check_result", "expected_failure"),
+    [
+        (MagicMock(ok=False, failure=None, exit_status=3), persistent_trainer.INTERNET_UNAVAILABLE),
+        (MagicMock(ok=True, failure=None, exit_status=0), None),
+        # The check could not run at all (e.g. timed out): best effort, not a verdict.
+        (MagicMock(ok=False, failure="timeout", exit_status=124, stderr=""), None),
+    ],
+)
+async def test_start_checks_the_running_containers_internet_access(
+    check_result: MagicMock, expected_failure: str | None
+) -> None:
+    trainer = _ssh_trainer()
+    transport = _fake_transport_cm()
+    run_command = AsyncMock(side_effect=[MagicMock(ok=True), check_result])
+    transport.__aenter__.return_value.run_command = run_command
+
+    with (
+        patch(f"{MODULE}.SshTransport", return_value=transport),
+        patch(f"{MODULE}.docker_ops") as docker_ops_module,
+    ):
+        docker_ops_module.inspect_container = AsyncMock(return_value=ContainerInspection(running=True, labels={}))
+        await persistent_trainer.start(trainer)
+
+    check_argv = run_command.await_args_list[1].args[0]
+    assert check_argv[:3] == ["docker", "exec", f"physicalai-trainer-{trainer.id}"]
+    assert "https://huggingface.co" in check_argv
+    assert persistent_trainer.get_launch_failure(trainer.id) == expected_failure
+    assert persistent_trainer.get_launch_phase(trainer.id) is None

@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Final
 
+from loguru import logger
+
 from core.backend_instance import get_backend_instance_id
 from schemas.hardware import DeviceType
 from schemas.remote_trainer import RemoteTrainer
@@ -48,6 +50,29 @@ _launch_failure: dict[UUID, str] = {}
 # actually is - something a user should look into, not silently wait out.
 _STARTUP_GRACE_PERIOD: Final = timedelta(minutes=15)
 
+# Hosts a training job downloads from: pretrained weights on the Hugging Face
+# Hub and torchvision backbones (e.g. ACT's ResNet) from download.pytorch.org.
+_INTERNET_CHECK_URLS: Final = ("https://huggingface.co", "https://download.pytorch.org")
+_INTERNET_CHECK_TIMEOUT_S: Final = 10
+_INTERNET_UNREACHABLE_EXIT: Final = 3
+# Runs inside the trainer container, so it uses the proxy variables the
+# container received (see `docker_ops.PROXY_ENV_VARS`). Any HTTP response,
+# including an error status, proves the host is reachable.
+_INTERNET_CHECK_SCRIPT: Final = f"""
+import sys, urllib.error, urllib.request
+failed = []
+for url in sys.argv[1:]:
+    try:
+        urllib.request.urlopen(urllib.request.Request(url, method="HEAD"), timeout={_INTERNET_CHECK_TIMEOUT_S})
+    except urllib.error.HTTPError:
+        pass
+    except Exception:
+        failed.append(url)
+print("unreachable: " + ", ".join(failed) if failed else "ok")
+sys.exit({_INTERNET_UNREACHABLE_EXIT} if failed else 0)
+"""
+INTERNET_UNAVAILABLE: Final = "internet_unavailable"
+
 
 def get_launch_phase(remote_trainer_id: UUID) -> str | None:
     """Return the in-progress launch phase for a trainer, or ``None`` if it isn't launching."""
@@ -75,6 +100,25 @@ def mark_reachable(remote_trainer_id: UUID) -> None:
 
 def _container_name(trainer_id: object) -> str:
     return f"physicalai-trainer-{trainer_id}"
+
+
+async def _check_internet_access(transport: SshTransport, remote_trainer: RemoteTrainer, container_name: str) -> None:
+    """Record `INTERNET_UNAVAILABLE` if the running container cannot reach the model download hosts.
+
+    Without this, a missing proxy surfaces only when a job fails, after its
+    dataset has already been uploaded. The check is best effort: if it cannot
+    run at all, the trainer is left as is.
+    """
+    _launch_phase[remote_trainer.id] = "Checking internet access…"
+    result = await transport.run_command(
+        ["docker", "exec", container_name, "python3", "-c", _INTERNET_CHECK_SCRIPT, *_INTERNET_CHECK_URLS],
+        timeout=_INTERNET_CHECK_TIMEOUT_S * len(_INTERNET_CHECK_URLS) + 15,
+    )
+    if result.failure is None and result.exit_status == _INTERNET_UNREACHABLE_EXIT:
+        _launch_failure[remote_trainer.id] = INTERNET_UNAVAILABLE
+        logger.warning("Trainer '{}' cannot reach the internet: {}", remote_trainer.name, result.first_line())
+    elif not result.ok:
+        logger.warning("Could not check internet access for trainer '{}': {}", remote_trainer.name, result.stderr)
 
 
 def _ssh_target(remote_trainer: RemoteTrainer) -> AliasTarget | DirectTarget:
@@ -110,6 +154,7 @@ async def start(remote_trainer: RemoteTrainer, accepted_host_key_fingerprint: st
                 raise ValueError("Docker is not available on the SSH host")
             existing = await docker_ops.inspect_container(transport, name)
             if existing and existing.running:
+                await _check_internet_access(transport, remote_trainer, name)
                 return
             if existing:
                 await docker_ops.stop_and_remove_container(transport, name, settings.ssh_container_stop_timeout_s)
@@ -159,6 +204,7 @@ async def start(remote_trainer: RemoteTrainer, accepted_host_key_fingerprint: st
                 transport, remote_port, backend_instance_id, str(remote_trainer.id)
             )
             await docker_ops.launch_container(transport, argv, remote_trainer.name)
+            await _check_internet_access(transport, remote_trainer, name)
     finally:
         _launch_phase.pop(remote_trainer.id, None)
 

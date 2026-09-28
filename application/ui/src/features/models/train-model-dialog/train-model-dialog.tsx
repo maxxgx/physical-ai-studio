@@ -135,7 +135,8 @@ export const TrainModelDialog = ({ baseModel, close, defaultMaxEpochs = 5 }: Tra
             remoteTrainerHealth?.status === 'starting' ||
             remoteTrainerHealth?.reason_code === 'docker_unavailable' ||
             remoteTrainerHealth?.reason_code === 'accelerator_unavailable' ||
-            remoteTrainerHealth?.reason_code === 'container_accelerator_unavailable');
+            remoteTrainerHealth?.reason_code === 'container_accelerator_unavailable' ||
+            remoteTrainerHealth?.reason_code === 'internet_unavailable');
     const {
         data: policyAccess,
         isLoading: isCheckingPolicyAccess,

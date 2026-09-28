@@ -19,6 +19,7 @@ from exceptions import (
 )
 from schemas.remote_trainer import RemoteTrainer, RemoteTrainerConnectionMode, RemoteTrainerCreate, RemoteTrainerUpdate
 from services import RemoteTrainerService
+from services.ssh.persistent_trainer import INTERNET_UNAVAILABLE
 
 MODULE = "services.remote_trainer_service"
 
@@ -501,3 +502,42 @@ async def test_delete_stops_the_tunnel_manager() -> None:
         await RemoteTrainerService(session).delete_remote_trainer(remote_trainer.id)
 
     tunnel_manager.stop_tunnel.assert_awaited_once_with(remote_trainer.id)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(("active_job", "expect_recreate"), [(None, True), ("active-job", False)])
+async def test_saving_a_trainer_without_internet_recreates_its_idle_container(
+    active_job: str | None, expect_recreate: bool
+) -> None:
+    session = _session()
+    session.execute.return_value = MagicMock()
+    session.execute.return_value.scalar_one_or_none.return_value = active_job
+    trainer = RemoteTrainer(
+        id=uuid4(),
+        name="gpu",
+        url="http://127.0.0.1:8001",
+        connection_mode=RemoteTrainerConnectionMode.SSH,
+        ssh_host_alias="gpu-box",
+    )
+    repository = MagicMock()
+    repository.get_by_id = AsyncMock(return_value=trainer)
+    repository.list_ordered = AsyncMock(return_value=[trainer])
+    repository.update = AsyncMock(return_value=trainer)
+
+    with (
+        patch(f"{MODULE}.RemoteTrainerRepository", return_value=repository),
+        patch(f"{MODULE}.remote_trainer_tunnel_manager.sync_tunnel", new_callable=AsyncMock),
+        patch(
+            f"{MODULE}.persistent_trainer.get_launch_failure",
+            return_value=INTERNET_UNAVAILABLE,
+        ),
+        patch(f"{MODULE}.persistent_trainer.stop", new_callable=AsyncMock) as stop,
+        patch.object(RemoteTrainerService, "_start_persistent_trainer_in_background") as start,
+    ):
+        await RemoteTrainerService(session).update_remote_trainer(trainer.id, RemoteTrainerUpdate(name="gpu"))
+
+    if expect_recreate:
+        stop.assert_awaited_once_with(trainer, remove_volume=False)
+    else:
+        stop.assert_not_awaited()
+    start.assert_called_once_with(trainer, None)

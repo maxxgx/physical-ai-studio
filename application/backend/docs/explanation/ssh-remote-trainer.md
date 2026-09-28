@@ -52,6 +52,21 @@ for configured targets; an SSH host that is temporarily offline at startup is
 retried in the background. A container that stopped independently may still
 need to be started again by saving the target.
 
+### Internet access and proxies
+
+Training jobs download pretrained weights from the Hugging Face Hub and
+`download.pytorch.org`. The trainer container receives the proxy variables
+(`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, and their lowercase forms) of the
+SSH user's session on the host; Studio does not read or store their values. If
+the host reaches the internet only through a proxy, set these variables for the
+SSH user in a place that non-interactive SSH commands load, such as
+`/etc/environment`. Check with `ssh <host> env | grep -i proxy`.
+
+After starting the container, Studio checks that it can reach both hosts. If it
+cannot, the target reports **Degraded** and training on it is blocked. Fix the
+proxy on the host, then save the target again: Studio recreates the container
+so it picks up the new variables, provided no job is running on it.
+
 Settings > General > Managed SSH Training exposes four timeouts
 (`connect_timeout_s`, `command_timeout_s`, `preflight_timeout_s`, and
 `image_pull_timeout_s`) and the trainer's shared-memory size

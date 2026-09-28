@@ -222,7 +222,7 @@ class RemoteTrainerService:
                     f"SSH host already has a trainer using remote port {remote_trainer.ssh_remote_port}.",
                 )
 
-    async def _require_no_active_jobs(self, remote_trainer_id: UUID) -> None:
+    async def _has_active_jobs(self, remote_trainer_id: UUID) -> bool:
         result = await self.session.execute(
             select(JobDB.id)
             .where(
@@ -232,7 +232,10 @@ class RemoteTrainerService:
             )
             .limit(1)
         )
-        if result.scalar_one_or_none() is not None:
+        return result.scalar_one_or_none() is not None
+
+    async def _require_no_active_jobs(self, remote_trainer_id: UUID) -> None:
+        if await self._has_active_jobs(remote_trainer_id):
             raise ResourceInUseError(ResourceType.REMOTE_TRAINER, remote_trainer_id)
 
     @staticmethod
@@ -354,6 +357,13 @@ class RemoteTrainerService:
             await self.repo.update(saved, remote_trainer.model_dump(include={"name", *_CONNECTION_FIELDS}))
             raise
         if remote_trainer.connection_mode is RemoteTrainerConnectionMode.SSH:
+            # Read before `_cancel_launch`: a container that could not reach the
+            # internet keeps the environment it was created with, so saving
+            # after fixing the host's proxy must recreate it to pick that up.
+            # Only when idle: removing the container would kill a running job.
+            lacks_internet = persistent_trainer.get_launch_failure(
+                remote_trainer_id
+            ) == persistent_trainer.INTERNET_UNAVAILABLE and not await self._has_active_jobs(remote_trainer_id)
             await self._cancel_launch(remote_trainer_id)
             host_changed = (
                 remote_trainer.ssh_host_alias != saved.ssh_host_alias
@@ -361,6 +371,7 @@ class RemoteTrainerService:
             )
             if (
                 host_changed
+                or lacks_internet
                 or remote_trainer.ssh_remote_port != saved.ssh_remote_port
                 or saved.connection_mode is RemoteTrainerConnectionMode.DIRECT
             ):

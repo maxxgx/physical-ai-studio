@@ -57,6 +57,13 @@ INSTANCE_LABEL: Final = "org.open-edge-platform.physicalai.backend-instance-id"
 # Records the image digest used to start the container.
 IMAGE_DIGEST_LABEL: Final = "org.open-edge-platform.physicalai.image-digest"
 
+# Proxy variables copied into the trainer container. `docker run --env NAME`
+# with no value takes the value from the environment of the `docker` process,
+# i.e. the SSH session on the host, and skips variables that are unset there.
+# The container therefore reaches the internet the same way the SSH account
+# does, and Studio never reads or stores the proxy values.
+PROXY_ENV_VARS: Final = ("HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy")
+
 # Named volume backing the trainer's writable storage directory. Disk-backed,
 # unlike the `/tmp` tmpfs, so datasets/artifacts consume disk rather than RAM.
 _DATA_VOLUME_NAME_PREFIX: Final = "physicalai-trainer-data-"
@@ -317,6 +324,9 @@ def build_run_argv(  # noqa: PLR0913 - each flag is an independent run/security 
     * `--read-only` root filesystem, a bounded `--tmpfs` for `/tmp` scratch,
       and a trainer-scoped data volume for datasets and model artifacts.
     * A private, sized `/dev/shm` for PyTorch DataLoader multiprocessing.
+    * The SSH session's proxy variables (`PROXY_ENV_VARS`), so the trainer can
+      download model weights on hosts that reach the internet only through a
+      proxy.
 
     `render_gid`, from `services.ssh.trainer_image.resolve_render_group_gid`,
     is required for a working XPU container: without it the fixed non-root
@@ -352,6 +362,7 @@ def build_run_argv(  # noqa: PLR0913 - each flag is an independent run/security 
         f"/tmp:size=2g,{tmpfs_owner}",  # noqa: S108  # nosec B108 - a `docker run` mount spec, not a local temp-file access
         "--mount",
         f"type=volume,src={data_volume},dst=/var/lib/physicalai-trainer",
+        *(arg for var in PROXY_ENV_VARS for arg in ("--env", var)),
         *_device_run_args(device_type, render_gid),
         image_digest_ref,
     ]

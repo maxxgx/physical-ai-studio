@@ -47,6 +47,11 @@ export const healthDescription = (health?: SchemaRemoteTrainerHealth) => {
             return 'Studio-managed training requires a working CUDA or XPU driver on the SSH host.';
         case 'container_accelerator_unavailable':
             return 'Studio started the trainer, but its container cannot access a CUDA or XPU device.';
+        case 'internet_unavailable':
+            return (
+                'The trainer cannot reach the internet to download model weights. Set a proxy for the SSH user on ' +
+                'the host (for example https_proxy in /etc/environment), then save this target again.'
+            );
         default:
             return 'The trainer returned an invalid device report.';
     }

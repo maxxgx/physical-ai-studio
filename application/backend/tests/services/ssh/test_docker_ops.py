@@ -655,3 +655,20 @@ async def test_remove_stale_containers_on_port_is_a_noop_when_nothing_holds_the_
 
     assert removed == []
     assert transport.removed == []
+
+
+def test_build_run_argv_passes_proxy_variables_through_without_values() -> None:
+    """Values come from the SSH session on the host; Studio never embeds them."""
+    argv = docker_ops.build_run_argv(
+        image_digest_ref=f"{_REGISTRY}/physicalai-trainer-cuda@{_DIGEST}",
+        device_type=DeviceType.CUDA,
+        name="physicalai-trainer-abc",
+        labels={},
+        data_volume="physicalai-trainer-data-abc",
+        remote_container_port=8080,
+        stop_timeout_s=30,
+    )
+
+    env_args = [argv[i + 1] for i, arg in enumerate(argv) if arg == "--env"]
+    assert env_args == list(docker_ops.PROXY_ENV_VARS)
+    assert {"https_proxy", "HTTPS_PROXY", "no_proxy"} <= set(env_args)
