@@ -60,16 +60,7 @@ def build_camera_config(config: Camera) -> Config:
         raise ValueError("Camera must be reselected")
 
     if config.driver == "usb_camera":
-        uuid = fingerprint.get("uuid")
-        if isinstance(uuid, str) and uuid.startswith("0x"):
-            # macOS reports USB cameras with a hex uuid, which the publisher's jsonargparse
-            # parsing of UVCCamera(device: dict[str, Any]) turns into an int that matches no
-            # camera. Open these by their discovered name instead.
-            if not config.hardware_name:
-                raise ValueError("Camera must be reselected")
-            init_args["device"] = config.hardware_name
-        else:
-            init_args["device"] = fingerprint
+        init_args["device"] = fingerprint
     elif config.driver != "ipcam":
         serial = fingerprint.get("serial")
         if not isinstance(serial, str) or not serial:
