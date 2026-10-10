@@ -65,14 +65,22 @@ class RobotSimulationService:
             if not isinstance(robot, UnavailableRobot)
             and getattr(self._registry.get_definition(robot.type), "simulation", None) is not None
         ]
-        results = await asyncio.gather(*(self._probe(robot, self._owner_name(robot)) for robot in robots))
+        results = await asyncio.gather(*(self._probe_or_none(robot) for robot in robots))
         return [
             ProjectRobotSimulation(
                 **result.model_dump(), robot_id=robot.id, robot_name=robot.name, robot_type=robot.type
             )
             for robot, result in zip(robots, results, strict=True)
-            if result.running
+            if result is not None and result.running
         ]
+
+    async def _probe_or_none(self, robot: Any) -> RobotSimulation | None:
+        # One robot with a bad name or address must not hide the others.
+        try:
+            return await self._probe(robot, self._owner_name(robot))
+        except Exception:
+            logger.exception("Could not check the simulation of robot {!r}", robot.name)
+            return None
 
     async def _probe(self, robot: Any, owner_name: str) -> RobotSimulation:
         robot_id = robot.id

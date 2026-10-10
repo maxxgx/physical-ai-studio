@@ -314,3 +314,13 @@ async def test_listing_returns_the_running_simulations_of_simulated_robots(robot
     assert [(r.robot_id, r.robot_name, r.robot_type, r.started_by) for r in result] == [
         (ROBOT_ID, "Sim arm", "Sim_Follower", "external")
     ]
+
+
+async def test_one_robot_that_cannot_be_probed_does_not_hide_the_others(robot: SimpleNamespace) -> None:
+    robot.others = [
+        SimpleNamespace(id=uuid4(), name="Broken", type="Sim_Follower", payload=Payload(http_url="http://[::1/")),
+    ]
+
+    result = await service(sim_api(EXTERNAL)).list_running(PROJECT_ID)
+
+    assert [r.robot_name for r in result] == ["Sim arm"]

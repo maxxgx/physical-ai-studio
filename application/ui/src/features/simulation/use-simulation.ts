@@ -108,6 +108,7 @@ export const useStartSimulation = (project_id: string) => {
 
 export const useStopSimulation = (project_id?: string) => {
     const setSimulation = useSetSimulation();
+    const queryClient = useQueryClient();
 
     return $api.useMutation('delete', '/api/simulation', {
         meta:
@@ -118,7 +119,11 @@ export const useStopSimulation = (project_id?: string) => {
                           ['get', '/api/projects/{project_id}/robots/online', { params: { path: { project_id } } }],
                       ],
                   },
-        onSuccess: setSimulation,
+        onSuccess: (simulation) => {
+            setSimulation(simulation);
+            // The footer's list of the project's simulations.
+            void queryClient.invalidateQueries({ queryKey: ['get', '/api/projects/{project_id}/simulations'] });
+        },
     });
 };
 
