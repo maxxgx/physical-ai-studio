@@ -26,7 +26,9 @@ export const useRobotSimulation = (project_id: string, robot_id: string, enabled
         // A new object per probe, even an identical one: each probe counts below.
         { enabled, refetchInterval: enabled ? 2_000 : false, structuralSharing: false }
     );
-    const [stable, setStable] = useState<RobotSimulation | undefined>(undefined);
+    // Keyed by robot: another robot's last result must not stand in for this one's.
+    const [kept, setKept] = useState<{ robot_id: string; data: RobotSimulation } | undefined>(undefined);
+    const stable = kept?.robot_id === robot_id ? kept.data : undefined;
     const misses = useRef(0);
 
     useEffect(() => {
@@ -41,8 +43,8 @@ export const useRobotSimulation = (project_id: string, robot_id: string, enabled
             }
         }
         misses.current = 0;
-        setStable(latest);
-    }, [query.data, stable]);
+        setKept({ robot_id, data: latest });
+    }, [query.data, stable, robot_id]);
 
     return { ...query, data: stable ?? query.data };
 };

@@ -58,6 +58,9 @@ class RobotSimulationService:
         owner_name = self._owner_name(robot)
 
         state = self._manager.state()
+        if state.robot_id == robot_id and state.status in {SimulationStatus.STARTING, SimulationStatus.STOPPING}:
+            # Studio is starting or stopping it: it may already answer, but it is not ready.
+            return RobotSimulation(running=False, owner_name=owner_name)
         studio = state.robot_id == robot_id and state.status is SimulationStatus.RUNNING
         http_url = state.http_url if studio else getattr(robot.payload, "http_url", None)
         if not isinstance(http_url, str):
@@ -149,7 +152,9 @@ class RobotSimulationService:
                     environment.model_copy(update={"cameras": [*environment.cameras, *added]}),
                 )
         except Exception:
-            # Each camera is committed on its own: remove the ones this call made.
+            # Each camera is committed on its own: remove the ones this call made, in a clean
+            # transaction (the failure may have left the session's one unusable).
+            await self._session.rollback()
             for camera in created:
                 with contextlib.suppress(Exception):
                     await camera_service.delete_camera(project_id, camera.id)

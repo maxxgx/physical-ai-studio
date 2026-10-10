@@ -58,6 +58,7 @@ export const useSimulationUpdates = () => {
                 for (const path of [
                     '/api/projects/{project_id}/robots/online',
                     '/api/projects/{project_id}/cameras',
+                    '/api/projects/{project_id}/cameras/{camera_id}',
                     '/api/projects/{project_id}/environments/{environment_id}',
                 ]) {
                     queryClient.invalidateQueries({ queryKey: ['get', path] });

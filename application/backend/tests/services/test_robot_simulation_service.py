@@ -5,6 +5,7 @@
 
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import httpx
@@ -79,7 +80,8 @@ def service(
     launch = SimpleNamespace(owner_name=lambda payload: payload.name)
     registry = SimpleNamespace(get_definition=lambda _type: SimpleNamespace(simulation=launch if simulated else None))
     manager = SimpleNamespace(state=lambda: state or Simulation())
-    return RobotSimulationService(None, registry, manager, transport=transport(responses))  # type: ignore[arg-type]
+    session = SimpleNamespace(rollback=AsyncMock())
+    return RobotSimulationService(session, registry, manager, transport=transport(responses))  # type: ignore[arg-type]
 
 
 async def test_an_external_simulation_that_answers_under_the_robots_name(robot: SimpleNamespace) -> None:
@@ -106,6 +108,14 @@ async def test_studios_own_simulation_uses_the_managers_addresses(robot: SimpleN
     assert result.started_by == "studio"
     assert result.viewer_url == "http://127.0.0.1:56210"
     assert result.cameras[0].stream_url == f"{STUDIO}/cameras/wrist/mjpeg"
+
+
+async def test_a_simulation_studio_is_still_starting_is_not_running_yet(robot: SimpleNamespace) -> None:
+    state = Simulation(status=SimulationStatus.STARTING, robot_id=ROBOT_ID)
+
+    result = await service(sim_api(EXTERNAL), state).get(PROJECT_ID, ROBOT_ID)
+
+    assert result.running is False
 
 
 async def test_a_simulation_under_another_name_is_not_this_robots(robot: SimpleNamespace) -> None:
