@@ -134,7 +134,10 @@ def environment_store(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
             id=uuid4(), name="Env", robots=[], cameras=[CameraEnvironmentConfiguration(camera_id=uuid4())]
         ),
         "created": [],
+        "deleted": [],
+        "existing": [],
         "updated": None,
+        "fail_update": False,
     }
 
     class FakeEnvironmentRepository:
@@ -148,15 +151,23 @@ def environment_store(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         def __init__(self, *args: Any) -> None:
             pass
 
+        async def get_camera_list(self, project_id: UUID) -> list[IPCamera]:
+            return store["existing"]
+
         async def create_camera(self, project_id: UUID, camera: IPCamera) -> IPCamera:
             store["created"].append(camera)
             return camera
+
+        async def delete_camera(self, project_id: UUID, camera_id: UUID) -> None:
+            store["deleted"].append(camera_id)
 
     class FakeEnvironmentService:
         def __init__(self, *args: Any) -> None:
             pass
 
         async def update_environment(self, project_id: UUID, environment: Environment) -> None:
+            if store["fail_update"]:
+                raise RuntimeError("database is gone")
             store["updated"] = environment
 
     monkeypatch.setattr(module, "ProjectEnvironmentRepository", FakeEnvironmentRepository)
@@ -227,3 +238,47 @@ async def test_moving_the_simulation_rewrites_only_its_camera_urls() -> None:
     assert [(c.id, c.payload.url, c.fingerprint) for c in updates] == [
         (cameras[0].id, f"{STUDIO}/cameras/wrist/mjpeg", {"url": f"{STUDIO}/cameras/wrist/mjpeg"})
     ]
+
+
+def _ip_camera(url: str) -> IPCamera:
+    return IPCamera(id=uuid4(), name="cam", fingerprint={"url": url}, hardware_name="cam", payload={"url": url})
+
+
+async def test_a_camera_already_on_the_stream_is_reused(
+    robot: SimpleNamespace, environment_store: dict[str, Any]
+) -> None:
+    existing = _ip_camera(f"{EXTERNAL}/cameras/wrist/mjpeg")
+    environment_store["existing"] = [existing]
+
+    cameras = await service(sim_api(EXTERNAL)).add_cameras(PROJECT_ID, uuid4(), ROBOT_ID, ["wrist"])
+
+    assert [camera.id for camera in cameras] == [existing.id]
+    assert environment_store["created"] == []
+    assert environment_store["updated"].cameras[-1].camera_id == existing.id
+
+
+async def test_a_camera_already_in_the_environment_is_not_added_again(
+    robot: SimpleNamespace, environment_store: dict[str, Any]
+) -> None:
+    existing = _ip_camera(f"{EXTERNAL}/cameras/wrist/mjpeg")
+    environment_store["existing"] = [existing]
+    environment_store["environment"] = environment_store["environment"].model_copy(
+        update={"cameras": [CameraEnvironmentConfiguration(camera_id=existing.id)]}
+    )
+
+    await service(sim_api(EXTERNAL)).add_cameras(PROJECT_ID, uuid4(), ROBOT_ID, ["wrist"])
+
+    assert environment_store["created"] == []
+    assert environment_store["updated"] is None
+
+
+async def test_cameras_created_before_a_failure_are_removed(
+    robot: SimpleNamespace, environment_store: dict[str, Any]
+) -> None:
+    environment_store["fail_update"] = True
+
+    with pytest.raises(RuntimeError):
+        await service(sim_api(EXTERNAL)).add_cameras(PROJECT_ID, uuid4(), ROBOT_ID, ["wrist"])
+
+    assert environment_store["deleted"] == [camera.id for camera in environment_store["created"]]
+    assert len(environment_store["deleted"]) == 1

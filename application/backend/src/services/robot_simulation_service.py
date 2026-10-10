@@ -4,6 +4,7 @@
 """What a simulated robot's simulation serves (viewer, speed, cameras), and adding its cameras."""
 
 import asyncio
+import contextlib
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -83,7 +84,7 @@ class RobotSimulationService:
             owner_name=owner_name,
             http_url=http_url,
             viewer_url=viewer_url if isinstance(viewer_url, str) else None,
-            scene=_str_or_none(health.get("scene", root.get("scene"))),
+            scene=_str_or_none(health.get("scene")) or _str_or_none(root.get("scene")),
             real_time_factor=float(real_time_factor) if isinstance(real_time_factor, int | float) else None,
             cameras=_cameras(http_url, cameras),
         )
@@ -91,7 +92,9 @@ class RobotSimulationService:
     async def add_cameras(
         self, project_id: UUID, environment_id: UUID, robot_id: UUID, names: list[str]
     ) -> list[IPCamera]:
-        """Create IP cameras for some of a running simulation's cameras and add them to an environment.
+        """Add some of a running simulation's cameras to an environment, as IP cameras on their streams.
+
+        A project camera already on a stream is reused. Returns the cameras for *names*.
 
         Raises:
             ResourceNotFoundError: The robot or the environment does not exist.
@@ -116,29 +119,42 @@ class RobotSimulationService:
 
         robot = await RobotService(self._session, self._registry).get_robot_by_id(project_id, robot_id)
         camera_service = ProjectCameraService(self._session, self._registry)
+        # A camera on the same stream is reused, not duplicated (e.g. a second click, or a stale page).
+        on_stream = {
+            camera.payload.url: camera
+            for camera in await camera_service.get_camera_list(project_id)
+            if isinstance(camera, IPCamera)
+        }
+        in_environment = {configuration.camera_id for configuration in environment.cameras}
+        cameras: list[IPCamera] = []
         created: list[IPCamera] = []
-        for name in dict.fromkeys(names):
-            source = by_name[name]
-            camera_name = f"{robot.name} {name}"
-            camera = IPCamera(
-                id=uuid4(),
-                name=camera_name,
-                fingerprint={"url": source.stream_url},
-                # Required by the database; the camera form also uses the name when there is no hardware.
-                hardware_name=camera_name,
-                payload=IPCameraPayload(
-                    url=source.stream_url, width=source.width, height=source.height, fps=source.fps
-                ),
-            )
-            await camera_service.create_camera(project_id, camera)
-            created.append(camera)
+        try:
+            for name in dict.fromkeys(names):
+                source = by_name[name]
+                camera = on_stream.get(source.stream_url)
+                if camera is None:
+                    camera = _ip_camera(f"{robot.name} {name}", source)
+                    await camera_service.create_camera(project_id, camera)
+                    created.append(camera)
+                cameras.append(camera)
 
-        added = [CameraEnvironmentConfiguration(camera_id=camera.id) for camera in created]
-        await EnvironmentService(self._session, self._registry).update_environment(
-            project_id,
-            environment.model_copy(update={"cameras": [*environment.cameras, *added]}),
-        )
-        return created
+            added = [
+                CameraEnvironmentConfiguration(camera_id=camera.id)
+                for camera in cameras
+                if camera.id not in in_environment
+            ]
+            if added:
+                await EnvironmentService(self._session, self._registry).update_environment(
+                    project_id,
+                    environment.model_copy(update={"cameras": [*environment.cameras, *added]}),
+                )
+        except Exception:
+            # Each camera is committed on its own: remove the ones this call made.
+            for camera in created:
+                with contextlib.suppress(Exception):
+                    await camera_service.delete_camera(project_id, camera.id)
+            raise
+        return cameras
 
     def _owner_name(self, robot: Any) -> str:
         definition = None if isinstance(robot, UnavailableRobot) else self._registry.get_definition(robot.type)
@@ -156,6 +172,17 @@ async def _get_json(client: httpx.AsyncClient, url: str) -> Any:
     except (httpx.HTTPError, ValueError) as error:
         logger.debug("Simulation probe {} failed: {}", url, error)
         return None
+
+
+def _ip_camera(name: str, source: SimulationCamera) -> IPCamera:
+    return IPCamera(
+        id=uuid4(),
+        name=name,
+        fingerprint={"url": source.stream_url},
+        # Required by the database; the camera form also uses the name when there is no hardware.
+        hardware_name=name,
+        payload=IPCameraPayload(url=source.stream_url, width=source.width, height=source.height, fps=source.fps),
+    )
 
 
 def _str_or_none(value: object) -> str | None:

@@ -100,9 +100,11 @@ class DatabaseSimulationRobots:
             old_url = robot.payload.http_url
             if old_url == http_url:
                 return
+            # Cameras first: if moving them fails, the robot still has the old address and the next
+            # start moves the rest.
+            await _move_simulation_cameras(ProjectCameraService(session, self._registry), project_id, old_url, http_url)
             payload = robot.payload.model_copy(update={"http_url": http_url})
             await service.update_robot(project_id, robot.model_copy(update={"payload": payload}))
-            await _move_simulation_cameras(ProjectCameraService(session, self._registry), project_id, old_url, http_url)
 
 
 async def _move_simulation_cameras(cameras: ProjectCameraService, project_id: UUID, old_url: str, new_url: str) -> None:
@@ -367,17 +369,28 @@ class SimulationManager:
         http_url = event.get("http_url")
         cameras = event.get("cameras")
         pid = event.get("pid")
-        self._update(
-            status=SimulationStatus.RUNNING,
-            phase=None,
-            download=None,
-            pid=pid if isinstance(pid, int) else child.process.pid,
-            http_url=http_url if isinstance(http_url, str) else None,
-            viewer_url=event.get("viewer_url") if isinstance(event.get("viewer_url"), str) else None,
-            cameras=[str(camera) for camera in cameras] if isinstance(cameras, list) else [],
-        )
-        if isinstance(http_url, str) and self._state.project_id and self._state.robot_id:
-            self._spawn_background(self._store_address(self._state.project_id, self._state.robot_id, http_url))
+        running = {
+            "status": SimulationStatus.RUNNING,
+            "phase": None,
+            "download": None,
+            "pid": pid if isinstance(pid, int) else child.process.pid,
+            "http_url": http_url if isinstance(http_url, str) else None,
+            "viewer_url": event.get("viewer_url") if isinstance(event.get("viewer_url"), str) else None,
+            "cameras": [str(camera) for camera in cameras] if isinstance(cameras, list) else [],
+        }
+        self._spawn_background(self._finish_ready(child, running))
+
+    async def _finish_ready(self, child: _Child, running: dict[str, Any]) -> None:
+        """Store the simulation's address, then report it running.
+
+        In this order, so that whoever reacts to ``running`` (the UI refetching the robot and its
+        cameras) already sees the new address.
+        """
+        http_url = running["http_url"]
+        if http_url is not None and self._state.project_id and self._state.robot_id:
+            await self._store_address(self._state.project_id, self._state.robot_id, http_url)
+        if child is self._child and not child.stop_requested and self._state.status is SimulationStatus.STARTING:
+            self._update(**running)
 
     async def _store_address(self, project_id: UUID, robot_id: UUID, http_url: str) -> None:
         try:

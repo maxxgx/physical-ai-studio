@@ -253,7 +253,7 @@ async def test_start_reports_phases_then_ready_and_stores_the_address(harness: H
     assert running.pid == 4242
     assert running.phase is None
     assert running.download is None
-    await wait_until(lambda: harness.robots.http_urls == [(robot_id, "http://127.0.0.1:56209")])
+    assert harness.robots.http_urls == [(robot_id, "http://127.0.0.1:56209")]
     downloads = [state.download for state in seen if state.download is not None]
     assert downloads and downloads[0].bytes == 10 and downloads[0].total == 100
     phases = [state.phase for state in seen if state.phase is not None]
@@ -637,11 +637,35 @@ async def test_a_slow_address_write_does_not_delay_stopping(harness: Harness) ->
     harness.robots.set_http_url_delay_s = 30.0
     harness.scenario = {"events": ["READY"]}
     await harness.manager.start(harness.request(robot_id))
-    await harness.wait_for(SimulationStatus.RUNNING)
+    await asyncio.sleep(0.5)  # ready is in, the address is being stored
 
     await harness.manager.stop()
 
     await harness.wait_for(SimulationStatus.IDLE, timeout_s=3.0)
+
+
+async def test_running_is_reported_once_the_address_is_stored(harness: Harness) -> None:
+    robot_id = harness.robots.add()
+    harness.robots.set_http_url_delay_s = 0.3
+    harness.scenario = {"events": ["READY"]}
+    await harness.manager.start(harness.request(robot_id))
+
+    await harness.wait_for(SimulationStatus.RUNNING)
+
+    assert harness.robots.http_urls == [(robot_id, "http://127.0.0.1:56209")]
+
+
+async def test_a_stop_while_the_address_is_stored_is_not_undone(harness: Harness) -> None:
+    robot_id = harness.robots.add()
+    harness.robots.set_http_url_delay_s = 0.5
+    harness.scenario = {"events": ["READY"]}
+    await harness.manager.start(harness.request(robot_id))
+    await asyncio.sleep(0.2)
+
+    await harness.manager.stop()
+    await asyncio.sleep(0.6)
+
+    assert harness.manager.state().status is not SimulationStatus.RUNNING
 
 
 async def test_a_robot_that_allows_remote_simulations_is_refused(harness: Harness) -> None:
