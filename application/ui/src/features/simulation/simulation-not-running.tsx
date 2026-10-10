@@ -14,11 +14,11 @@ import {
     View,
 } from '@geti-ui/ui';
 
-import { startCommandFromMessage } from './robot-simulation';
+import { startCommandFromMessage, StartCommandHint } from './robot-simulation';
 
 import classes from './simulation.module.css';
 
-export const StartCommand = ({ command }: { command: string }) => {
+export const StartCommand = ({ command, host }: StartCommandHint) => {
     const copy = async () => {
         try {
             await navigator.clipboard.writeText(command);
@@ -29,12 +29,15 @@ export const StartCommand = ({ command }: { command: string }) => {
     };
 
     return (
-        <div className={classes.command}>
-            <code>{command}</code>
-            <ActionButton isQuiet onPress={copy}>
-                Copy
-            </ActionButton>
-        </div>
+        <Flex direction='column' gap='size-50'>
+            {host !== undefined ? <Text>Run it on {host}:</Text> : null}
+            <div className={classes.command}>
+                <code>{command}</code>
+                <ActionButton isQuiet onPress={copy}>
+                    Copy
+                </ActionButton>
+            </div>
+        </Flex>
     );
 };
 
@@ -48,13 +51,16 @@ export const SimulationNotRunning = ({
     message,
     onStart,
     onRetry,
+    isStarting = false,
 }: {
     robot: { name: string };
     message?: string | null;
     onStart?: () => void;
     onRetry?: () => void;
+    /** Studio is starting (or stopping) the simulation: offer its progress instead. */
+    isStarting?: boolean;
 }) => {
-    const command = startCommandFromMessage(message);
+    const hint = startCommandFromMessage(message);
 
     return (
         <View width='100%' height='100%' padding='size-300'>
@@ -67,7 +73,7 @@ export const SimulationNotRunning = ({
                 gap='size-200'
             >
                 <Heading level={3} margin={0}>
-                    Simulation not running
+                    {isStarting ? 'Simulation starting' : 'Simulation not running'}
                 </Heading>
                 <Text>
                     {robot.name} needs a running simulation. Start it to see it here, move its joints and use it in
@@ -76,7 +82,7 @@ export const SimulationNotRunning = ({
                 <Flex gap='size-100'>
                     {onStart !== undefined ? (
                         <Button variant='accent' onPress={onStart}>
-                            Start simulation…
+                            {isStarting ? 'Show progress…' : 'Start simulation…'}
                         </Button>
                     ) : null}
                     {onRetry !== undefined ? (
@@ -85,12 +91,12 @@ export const SimulationNotRunning = ({
                         </Button>
                     ) : null}
                 </Flex>
-                {command !== undefined ? (
+                {hint !== undefined ? (
                     <View width='100%' maxWidth='size-6000'>
                         <Disclosure isQuiet>
                             <DisclosureTitle>Or start it yourself</DisclosureTitle>
                             <DisclosurePanel>
-                                <StartCommand command={command} />
+                                <StartCommand {...hint} />
                             </DisclosurePanel>
                         </Disclosure>
                     </View>

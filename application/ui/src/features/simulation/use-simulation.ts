@@ -39,10 +39,11 @@ export const useSimulationUpdates = () => {
         if (typeof EventSource === 'undefined') {
             return;
         }
-        const events = new EventSource(fetchClient.PATH('/api/simulation/events'));
-
+        let events: EventSource;
+        let reopen: ReturnType<typeof setTimeout> | undefined;
         let lastStatus: Simulation['status'] | undefined;
-        events.onmessage = (event: MessageEvent<string>) => {
+
+        const onMessage = (event: MessageEvent<string>) => {
             let simulation: Simulation;
             try {
                 simulation = JSON.parse(event.data) as Simulation;
@@ -58,9 +59,27 @@ export const useSimulationUpdates = () => {
             lastStatus = simulation.status;
         };
 
-        return () => events.close();
+        const open = () => {
+            events = new EventSource(fetchClient.PATH('/api/simulation/events'));
+            events.onmessage = onMessage;
+            // The browser retries a dropped stream by itself, but gives up for good on an error
+            // response (e.g. while the backend restarts): open a new one then.
+            events.onerror = () => {
+                if (events.readyState === EventSource.CLOSED) {
+                    reopen = setTimeout(open, REOPEN_DELAY_MS);
+                }
+            };
+        };
+        open();
+
+        return () => {
+            clearTimeout(reopen);
+            events.close();
+        };
     }, [queryClient]);
 };
+
+const REOPEN_DELAY_MS = 3_000;
 
 const useSetSimulation = () => {
     const queryClient = useQueryClient();

@@ -25,27 +25,40 @@ export const Robot = () => {
 };
 
 /** Whether a simulated robot's simulation is down, so the page shows how to start it instead. */
-const useIsSimulationDown = (robot: AvailableSchemaRobot) => {
+const useSimulationAvailability = (robot: AvailableSchemaRobot) => {
     const { project_id } = useProjectId();
     const launch = useRobotSimulationLaunch(robot.type);
     const { data: simulation } = useSimulation();
-    const { data: onlineRobots } = $api.useQuery('get', '/api/projects/{project_id}/robots/online', {
-        params: { path: { project_id } },
-    });
+    const { data: onlineRobots, refetch } = $api.useQuery(
+        'get',
+        '/api/projects/{project_id}/robots/online',
+        { params: { path: { project_id } } },
+        // A simulation started or stopped outside Studio only shows up here.
+        { refetchInterval: launch !== null ? 5_000 : false }
+    );
     const connectionStatus = onlineRobots?.find(({ id }) => id === robot.id)?.connection_status ?? 'unknown';
     const status = robotSimulationStatus(robot.id, simulation, connectionStatus);
 
-    return launch !== null && (status === 'offline' || status === 'starting' || status === 'stopping');
+    return {
+        isDown: launch !== null && (status === 'offline' || status === 'starting' || status === 'stopping'),
+        isStarting: status === 'starting' || status === 'stopping',
+        refetch,
+    };
 };
 
 const AvailableRobot = ({ robot }: { robot: AvailableSchemaRobot }) => {
-    const isSimulationDown = useIsSimulationDown(robot);
+    const simulation = useSimulationAvailability(robot);
     const simulationDialog = useSimulationDialog(robot);
 
     return (
         <>
-            {isSimulationDown ? (
-                <SimulationNotRunning robot={robot} onStart={simulationDialog.open} />
+            {simulation.isDown ? (
+                <SimulationNotRunning
+                    robot={robot}
+                    isStarting={simulation.isStarting}
+                    onStart={simulationDialog.open}
+                    onRetry={() => void simulation.refetch()}
+                />
             ) : (
                 <ConnectableRobot robot={robot} />
             )}

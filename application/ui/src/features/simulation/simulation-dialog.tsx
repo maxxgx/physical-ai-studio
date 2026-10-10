@@ -46,23 +46,20 @@ interface SimulatedRobot {
 
 const robotTypeLabel = (type: string | null | undefined) => (type ?? 'robot').replaceAll('_', ' ');
 
-const errorCode = (error: unknown): string | undefined =>
-    typeof error === 'object' && error !== null && 'error_code' in error
-        ? String((error as { error_code: unknown }).error_code)
-        : undefined;
-
 const StartForm = ({
     robot,
     project_id,
     launch,
     simulation,
     close,
+    onStarted,
 }: {
     robot: SimulatedRobot;
     project_id: string;
     launch: RobotSimulationLaunch;
     simulation: Simulation | undefined;
     close: () => void;
+    onStarted: () => void;
 }) => {
     const [scene, setScene] = useState(() => rememberedScene(robot.id, launch));
     const [seedMode, setSeedMode] = useState<'random' | 'fixed'>('random');
@@ -74,20 +71,23 @@ const StartForm = ({
 
     const start = () => {
         rememberScene(robot.id, scene);
-        startMutation.mutate({
-            body: {
-                project_id,
-                robot_id: robot.id,
-                scene,
-                seed: launch.max_seed !== null && seedMode === 'fixed' ? seed : null,
-                replace: other !== undefined,
+        startMutation.mutate(
+            {
+                body: {
+                    project_id,
+                    robot_id: robot.id,
+                    scene,
+                    seed: launch.max_seed !== null && seedMode === 'fixed' ? seed : null,
+                    // Also this robot's own simulation, e.g. one still stopping after a failed start.
+                    replace: isActiveSimulation(simulation),
+                },
             },
-        });
+            { onSuccess: onStarted }
+        );
     };
 
-    const code = errorCode(startMutation.error);
     const startError =
-        startMutation.error === null || code === 'simulation_busy'
+        startMutation.error === null
             ? undefined
             : (getApiErrorMessage(startMutation.error) ?? 'Could not start the simulation.');
 
@@ -252,7 +252,7 @@ const SimulationProgress = ({
                                     {download.total != null ? ` of ${formatMegabytes(download.total)}` : ''}
                                 </Text>
                             ) : null}
-                            {index === STEPS.length - 1 ? (
+                            {index === STEPS.length - 1 && simulation.owner_name != null ? (
                                 <Text UNSAFE_className={classes.detail}>as {simulation.owner_name}</Text>
                             ) : null}
                         </Step>
@@ -349,7 +349,16 @@ export const SimulationDialog = ({
         );
     }
 
-    return <StartForm robot={robot} project_id={project_id} launch={launch} simulation={simulation} close={close} />;
+    return (
+        <StartForm
+            robot={robot}
+            project_id={project_id}
+            launch={launch}
+            simulation={simulation}
+            close={close}
+            onStarted={() => setShowForm(false)}
+        />
+    );
 };
 
 /**

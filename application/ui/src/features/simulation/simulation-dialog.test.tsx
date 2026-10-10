@@ -155,6 +155,34 @@ describe('SimulationDialog', () => {
         expect(await screen.findByRole('heading', { name: 'Start simulation' })).toBeInTheDocument();
     });
 
+    it('replaces its own simulation when starting again after a failed start', async () => {
+        mockSimulation({
+            ...idle,
+            status: 'failed',
+            robot_id: robot.id,
+            error: { message: 'boom', phase: 'load', exit_code: null },
+        });
+        const started: { replace?: boolean }[] = [];
+        server.use(
+            // The failed child is still exiting: Back leaves it stopping.
+            http.delete('/api/simulation', () =>
+                HttpResponse.json({ ...idle, status: 'stopping', robot_id: robot.id })
+            ),
+            http.post('/api/simulation', async ({ request }) => {
+                started.push((await request.json()) as { replace?: boolean });
+                return HttpResponse.json({ ...idle, status: 'starting', robot_id: robot.id }, { status: 202 });
+            })
+        );
+        const user = userEvent.setup();
+        renderDialog();
+
+        await user.click(await screen.findByRole('button', { name: 'Back' }));
+        await user.click(await screen.findByRole('button', { name: 'Start simulation' }));
+
+        await waitFor(() => expect(started[0]?.replace).toBe(true));
+        expect(await screen.findByRole('heading', { name: 'Starting simulation' })).toBeInTheDocument();
+    });
+
     it('reports when the simulation is running', async () => {
         mockSimulation({ ...idle, status: 'running', robot_id: robot.id, cameras: ['wrist'] });
         const { onRunning } = renderDialog();
@@ -218,6 +246,28 @@ describe('SimulationNotRunning', () => {
         expect(onRetry).toHaveBeenCalled();
         await user.click(screen.getByRole('button', { name: 'Or start it yourself' }));
         expect(await screen.findByText('uv run physicalai-mujoco start')).toBeInTheDocument();
+    });
+
+    it('says where to run the command for a simulation on another host', async () => {
+        render(
+            <SimulationNotRunning
+                robot={robot}
+                message="No MuJoCo simulation named 'sim' is running. Start it on box with: uv run x --allow-remote"
+            />
+        );
+        const user = userEvent.setup();
+
+        await user.click(await screen.findByRole('button', { name: 'Or start it yourself' }));
+
+        expect(await screen.findByText('Run it on box:')).toBeInTheDocument();
+        expect(screen.getByText('uv run x --allow-remote')).toBeInTheDocument();
+    });
+
+    it('offers the progress of a simulation that is starting', async () => {
+        render(<SimulationNotRunning robot={robot} isStarting onStart={vi.fn()} />);
+
+        expect(await screen.findByRole('heading', { name: 'Simulation starting' })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Show progress…' })).toBeInTheDocument();
     });
 
     it('has no start button for a robot type without a simulation', async () => {

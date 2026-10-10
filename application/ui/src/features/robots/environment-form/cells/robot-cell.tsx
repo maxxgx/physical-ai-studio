@@ -1,3 +1,5 @@
+import { useEffect } from 'react';
+
 import { Button, Flex, ProgressCircle, Switch, Tooltip, TooltipTrigger, View } from '@geti-ui/ui';
 import { Focusable } from 'react-aria';
 
@@ -6,11 +8,24 @@ import { getRobotConnectionErrorTitle } from '../../../../api/errors';
 import { useProjectId } from '../../../projects/use-project';
 import { useSimulationDialog } from '../../../simulation/simulation-dialog';
 import { SimulationNotRunning } from '../../../simulation/simulation-not-running';
+import { useSimulation } from '../../../simulation/use-simulation';
 import { RobotViewer, UnavailableRobotViewer } from '../../controller/robot-viewer';
 import { RobotModelsProvider } from '../../robot-models-context';
 import { AvailableSchemaRobot, isUnavailableRobot } from '../../robot-types';
 import { InlineAlert } from '../../setup-wizard/shared/inline-alert';
 import { useJointState, useSynchronizeModelJoints } from '../../use-joint-state';
+
+/** Reconnect a session that failed for want of a simulation once Studio's simulation for the robot runs. */
+const useRestartWhenSimulationRuns = (robotId: string, errorCode: string | null, restart: () => void) => {
+    const { data: simulation } = useSimulation();
+    const isRunning = simulation?.robot_id === robotId && simulation.status === 'running';
+
+    useEffect(() => {
+        if (isRunning && errorCode === 'simulation_not_running') {
+            restart();
+        }
+    }, [isRunning, errorCode, restart]);
+};
 
 const AvailableRobotCell = ({
     robot,
@@ -25,9 +40,10 @@ const AvailableRobotCell = ({
 }) => {
     const { project_id } = useProjectId();
     const jointState = useJointState(project_id, followerId, leaderId, cameraIds);
+    useRestartWhenSimulationRuns(robot.id, jointState.errorCode, jointState.restart);
     // Rendered beside the cell's content, not in it: the "not running" view goes away once the
     // simulation runs, and the dialog has to stay to show that it does.
-    const simulationDialog = useSimulationDialog(robot, jointState.restart);
+    const simulationDialog = useSimulationDialog(robot);
 
     return (
         <>

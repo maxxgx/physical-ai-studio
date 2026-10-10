@@ -58,15 +58,15 @@ describe('startCommandFromMessage', () => {
             startCommandFromMessage(
                 "No MuJoCo simulation named 'sim' is running. Start it with: uv run physicalai-mujoco start --profile so101"
             )
-        ).toBe('uv run physicalai-mujoco start --profile so101');
+        ).toEqual({ command: 'uv run physicalai-mujoco start --profile so101' });
     });
 
-    it('extracts the command from a remote start hint', () => {
+    it('extracts the command and the host to run it on from a remote start hint', () => {
         expect(
             startCommandFromMessage(
                 "No MuJoCo simulation named 'sim' is running. Start it on box with: uv run x --allow-remote"
             )
-        ).toBe('uv run x --allow-remote');
+        ).toEqual({ command: 'uv run x --allow-remote', host: 'box' });
     });
 
     it('returns nothing without a hint', () => {
