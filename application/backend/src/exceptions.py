@@ -632,3 +632,18 @@ class SimulationNameInUseError(BaseException):
             http_status=http.HTTPStatus.CONFLICT,
             details={"owner_name": owner_name},
         )
+
+
+class SimulationNotRunningError(BaseException):
+    """Raised when a simulated robot cannot attach because its simulation is not running.
+
+    The message comes from the simulation plugin: it names the simulation and says how to start it.
+    """
+
+    def __init__(self, message: str, *, robot_name: str | None = None) -> None:
+        super().__init__(
+            message=message,
+            error_code="simulation_not_running",
+            http_status=http.HTTPStatus.SERVICE_UNAVAILABLE,
+            details={"robot_name": robot_name} if robot_name else None,
+        )

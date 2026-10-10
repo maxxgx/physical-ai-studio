@@ -12,11 +12,30 @@ from exceptions import (
     RobotNameConflictError,
     RobotProtocolMismatchError,
     SharedRobotTransportError,
+    SimulationNotRunningError,
 )
 from robots.shared_robot_errors import translate_robot_error
 
 
 class TestTranslateRobotError:
+    def test_simulation_not_running_forwards_the_start_hint(self):
+        message = (
+            "No MuJoCo simulation named 'mujoco-so101-follow' is running. "
+            "Start it with: uv run physicalai-mujoco start --profile so101"
+        )
+
+        result = translate_robot_error(RobotTransportError(message), robot_name="Sim arm")
+
+        assert isinstance(result, SimulationNotRunningError)
+        assert result.error_code == "simulation_not_running"
+        assert result.message == message
+        assert result.details == {"robot_name": "Sim arm"}
+
+    def test_other_transport_errors_are_not_simulation_not_running(self):
+        result = translate_robot_error(RobotTransportError("handshake timed out"))
+
+        assert isinstance(result, SharedRobotTransportError)
+
     def test_device_already_owned_includes_device_id(self):
         result = translate_robot_error(
             RobotDeviceAlreadyOwned("ignored", phase="device_lock_contention", device_ids=("serial:ttyACM0",))

@@ -17,10 +17,15 @@ from exceptions import (
     RobotNameConflictError,
     RobotProtocolMismatchError,
     SharedRobotTransportError,
+    SimulationNotRunningError,
 )
 
+# Prefix of the error a simulated robot raises on connect when no simulation runs under its name.
+# Its message is written for users (it says how to start the simulation), so it is forwarded as is.
+SIMULATION_NOT_RUNNING_PREFIX = "No MuJoCo simulation named "
 
-def translate_robot_error(
+
+def translate_robot_error(  # noqa: PLR0911 - one return per mapped error.
     exc: BaseException,
     *,
     robot_name: str | None = None,
@@ -29,7 +34,8 @@ def translate_robot_error(
 
     User-facing copy lives on the app exceptions. Only structured fields are used:
     ``RobotDeviceAlreadyOwned.device_ids`` from physicalai, and ``robot_name`` from
-    the Studio connect context. Library messages are never parsed or forwarded.
+    the Studio connect context. Library messages are never parsed or forwarded, except
+    a simulated robot's "not running" error, which is written for users.
     """
     if isinstance(exc, AppBaseException):
         return exc
@@ -45,6 +51,9 @@ def translate_robot_error(
         # physicalai.RobotProtocolMismatch does not expose supported/remote
         # protocol versions as structured fields — only in the message string.
         return RobotProtocolMismatchError()
+
+    if type(exc) is RobotTransportError and str(exc).startswith(SIMULATION_NOT_RUNNING_PREFIX):
+        return SimulationNotRunningError(str(exc), robot_name=robot_name)
 
     if isinstance(exc, RobotTransportError):
         logger.warning("Unmapped SharedRobot transport failure (phase={!r}): {}", exc.phase, exc)
