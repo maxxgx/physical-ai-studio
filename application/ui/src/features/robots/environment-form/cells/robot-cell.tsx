@@ -4,6 +4,7 @@ import { Focusable } from 'react-aria';
 import { $api } from '../../../../api/client';
 import { getRobotConnectionErrorTitle } from '../../../../api/errors';
 import { useProjectId } from '../../../projects/use-project';
+import { SimulationNotRunning } from '../../../simulation/simulation-not-running';
 import { RobotViewer, UnavailableRobotViewer } from '../../controller/robot-viewer';
 import { RobotModelsProvider } from '../../robot-models-context';
 import { AvailableSchemaRobot, isUnavailableRobot } from '../../robot-types';
@@ -33,6 +34,10 @@ const AvailableRobotCell = ({
     const canTeleoperate = state.has_leader;
 
     const isTeleoperating = state.follower_source === 'teleop';
+
+    if (error && errorCode === 'simulation_not_running') {
+        return <SimulationNotRunning robot={robot} message={error} onRetry={restart} onRunning={restart} />;
+    }
 
     if (error) {
         return (
