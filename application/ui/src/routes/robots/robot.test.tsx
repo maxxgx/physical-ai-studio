@@ -24,6 +24,18 @@ const mockSimulatedRobot = (connection_status: 'online' | 'offline', simulation:
         http.get('/api/projects/{project_id}/robots/online', () =>
             HttpResponse.json([{ ...robot, connection_status }])
         ),
+        http.get('/api/projects/{project_id}/robots/{robot_id}/simulation', () =>
+            HttpResponse.json({
+                running: false,
+                started_by: null,
+                owner_name: 'sim',
+                http_url: null,
+                viewer_url: null,
+                scene: null,
+                real_time_factor: null,
+                cameras: [],
+            })
+        ),
         // After /online: `{robot_id}` would match it too.
         http.get('/api/projects/{project_id}/robots/{robot_id}', () => HttpResponse.json(robot)),
         http.get('/api/simulation', () => HttpResponse.json({ cameras: [], ...simulation } as never)),
@@ -73,11 +85,51 @@ describe('Robot page of a simulated robot', () => {
         expect(screen.getByRole('button', { name: 'Show progress…' })).toBeInTheDocument();
     });
 
-    it('shows the robot when its simulation runs', async () => {
+    it('shows the viewer of a simulation started outside Studio', async () => {
         mockSimulatedRobot('online', { status: 'idle' });
+        server.use(
+            http.get('/api/projects/{project_id}/robots/{robot_id}/simulation', () =>
+                HttpResponse.json({
+                    running: true,
+                    started_by: 'external',
+                    owner_name: 'sim',
+                    http_url: 'http://127.0.0.1:8080',
+                    viewer_url: 'http://127.0.0.1:8081',
+                    scene: 'yahtzee',
+                    real_time_factor: 0.987,
+                    cameras: [],
+                })
+            )
+        );
         renderRobotPage();
 
-        expect(await screen.findByRole('button', { name: 'Identify' })).toBeInTheDocument();
+        expect(await screen.findByTitle('Sim arm simulation viewer')).toHaveAttribute('src', 'http://127.0.0.1:8081');
+        expect(screen.getByText('started by someone else (CLI)')).toBeInTheDocument();
+        expect(screen.getByText('0.99× real time')).toBeInTheDocument();
+        expect(screen.getByText(':8080 / :8081')).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Stop simulation' })).not.toBeInTheDocument();
         expect(screen.queryByRole('heading', { name: 'Simulation not running' })).not.toBeInTheDocument();
+    });
+
+    it('lets Studio stop the simulation it started', async () => {
+        mockSimulatedRobot('online', { status: 'running', robot_id: ROBOT_ID });
+        server.use(
+            http.get('/api/projects/{project_id}/robots/{robot_id}/simulation', () =>
+                HttpResponse.json({
+                    running: true,
+                    started_by: 'studio',
+                    owner_name: 'sim',
+                    http_url: 'http://127.0.0.1:56209',
+                    viewer_url: 'http://127.0.0.1:56210',
+                    scene: 'yahtzee',
+                    real_time_factor: 1,
+                    cameras: [],
+                })
+            )
+        );
+        renderRobotPage();
+
+        expect(await screen.findByText('started by Studio')).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Stop simulation' })).toBeInTheDocument();
     });
 });

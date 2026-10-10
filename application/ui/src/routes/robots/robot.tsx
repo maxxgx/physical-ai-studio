@@ -2,18 +2,14 @@ import { useState } from 'react';
 
 import { Button, ButtonGroup, Flex, Grid, View } from '@geti-ui/ui';
 
-import { $api } from '../../api/client';
-import { useProjectId } from '../../features/projects/use-project';
 import { JointControls } from '../../features/robots/controller/joint-controls';
 import { RobotViewer, UnavailableRobotViewer } from '../../features/robots/controller/robot-viewer';
 import { useCatalogIdentifyMutation } from '../../features/robots/robot-catalog.hooks';
 import { RobotModelsProvider } from '../../features/robots/robot-models-context';
 import { AvailableSchemaRobot, isUnavailableRobot } from '../../features/robots/robot-types';
 import { useRobot } from '../../features/robots/use-robot';
-import { robotSimulationStatus, useRobotSimulationLaunch } from '../../features/simulation/robot-simulation';
-import { useSimulationDialog } from '../../features/simulation/simulation-dialog';
-import { SimulationNotRunning } from '../../features/simulation/simulation-not-running';
-import { useSimulation } from '../../features/simulation/use-simulation';
+import { useRobotSimulationLaunch } from '../../features/simulation/robot-simulation';
+import { SimulationViewer } from '../../features/simulation/simulation-viewer';
 
 export const Robot = () => {
     const robot = useRobot();
@@ -24,46 +20,24 @@ export const Robot = () => {
     );
 };
 
-/** Whether a simulated robot's simulation is down, so the page shows how to start it instead. */
-const useSimulationAvailability = (robot: AvailableSchemaRobot) => {
-    const { project_id } = useProjectId();
-    const launch = useRobotSimulationLaunch(robot.type);
-    const { data: simulation } = useSimulation();
-    const { data: onlineRobots, refetch } = $api.useQuery(
-        'get',
-        '/api/projects/{project_id}/robots/online',
-        { params: { path: { project_id } } },
-        // A simulation started or stopped outside Studio only shows up here.
-        { refetchInterval: launch !== null ? 5_000 : false }
-    );
-    const connectionStatus = onlineRobots?.find(({ id }) => id === robot.id)?.connection_status ?? 'unknown';
-    const status = robotSimulationStatus(robot.id, simulation, connectionStatus);
+const AvailableRobot = ({ robot }: { robot: AvailableSchemaRobot }) => {
+    const isSimulated = useRobotSimulationLaunch(robot.type) !== null;
 
-    return {
-        isDown: launch !== null && (status === 'offline' || status === 'starting' || status === 'stopping'),
-        isStarting: status === 'starting' || status === 'stopping',
-        refetch,
-    };
+    return isSimulated ? <SimulatedRobot robot={robot} /> : <ConnectableRobot robot={robot} />;
 };
 
-const AvailableRobot = ({ robot }: { robot: AvailableSchemaRobot }) => {
-    const simulation = useSimulationAvailability(robot);
-    const simulationDialog = useSimulationDialog(robot);
+/** A simulated robot shows its simulation's own viewer; the joint state stays below it. */
+const SimulatedRobot = ({ robot }: { robot: AvailableSchemaRobot }) => {
+    const [isConnected, setIsConnected] = useState(false);
 
     return (
-        <>
-            {simulation.isDown ? (
-                <SimulationNotRunning
-                    robot={robot}
-                    isStarting={simulation.isStarting}
-                    onStart={simulationDialog.open}
-                    onRetry={() => void simulation.refetch()}
-                />
-            ) : (
-                <ConnectableRobot robot={robot} />
-            )}
-            {simulationDialog.dialog}
-        </>
+        <View height='100%' minHeight='0'>
+            <RobotModelsProvider>
+                <SimulationViewer robot={robot}>
+                    <JointControls isConnected={isConnected} setIsConnected={setIsConnected} />
+                </SimulationViewer>
+            </RobotModelsProvider>
+        </View>
     );
 };
 

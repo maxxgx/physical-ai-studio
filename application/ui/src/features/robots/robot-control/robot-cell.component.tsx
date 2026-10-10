@@ -4,6 +4,8 @@ import { View } from '@geti-ui/ui';
 
 import { SchemaEnvironmentWithRelations } from '../../../api/openapi-spec';
 import { useInterval } from '../../../routes/datasets/use-interval';
+import { useSimulatedRobotTypes } from '../../simulation/robot-simulation';
+import { SimulationViewer } from '../../simulation/simulation-viewer';
 import { RobotViewer, UnavailableRobotViewer } from '../controller/robot-viewer';
 import { RobotModelsProvider } from '../robot-models-context';
 import { isUnavailableRobot } from '../robot-types';
@@ -18,6 +20,7 @@ export const RobotCell = ({
     joints: RefObject<Record<string, number> | undefined>;
 }) => {
     const [current, setCurrent] = useState<Record<string, number>>();
+    const simulatedTypes = useSimulatedRobotTypes();
     useInterval(() => {
         setCurrent(joints.current === undefined ? undefined : { ...joints.current });
     }, 1000 / 30);
@@ -31,6 +34,10 @@ export const RobotCell = ({
 
     if (isUnavailableRobot(environmentRobot)) {
         return <UnavailableRobotViewer robotType={environmentRobot.type} />;
+    }
+
+    if (simulatedTypes.has(environmentRobot.type)) {
+        return <SimulationViewer robot={environmentRobot} compact />;
     }
 
     const action_values = current === undefined ? undefined : Object.values(current);

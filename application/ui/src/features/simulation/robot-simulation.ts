@@ -14,6 +14,13 @@ export const useRobotSimulationLaunch = (robotType: string): RobotSimulationLaun
     return catalog.find(({ type }) => type === robotType)?.simulation ?? null;
 };
 
+/** The robot types Studio can simulate. */
+export const useSimulatedRobotTypes = (): Set<string> => {
+    const { data: catalog } = useRobotCatalogQuery();
+
+    return new Set(catalog.filter(({ simulation }) => simulation != null).map(({ type }) => type));
+};
+
 export type RobotSimulationStatus = 'studio' | 'starting' | 'stopping' | 'external' | 'offline' | 'unknown';
 
 /**

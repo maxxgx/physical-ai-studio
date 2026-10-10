@@ -6,8 +6,10 @@ import { Focusable } from 'react-aria';
 import { $api } from '../../../../api/client';
 import { getRobotConnectionErrorTitle } from '../../../../api/errors';
 import { useProjectId } from '../../../projects/use-project';
+import { useRobotSimulationLaunch } from '../../../simulation/robot-simulation';
 import { useSimulationDialog } from '../../../simulation/simulation-dialog';
 import { SimulationNotRunning } from '../../../simulation/simulation-not-running';
+import { SimulationViewer } from '../../../simulation/simulation-viewer';
 import { useSimulation } from '../../../simulation/use-simulation';
 import { RobotViewer, UnavailableRobotViewer } from '../../controller/robot-viewer';
 import { RobotModelsProvider } from '../../robot-models-context';
@@ -75,6 +77,7 @@ const RobotCellContent = ({
     onStartSimulation?: () => void;
 } & ReturnType<typeof useJointState>) => {
     useSynchronizeModelJoints(joints, robot.type);
+    const isSimulated = useRobotSimulationLaunch(robot.type) !== null;
 
     const canTeleoperate = state.has_leader;
 
@@ -118,6 +121,38 @@ const RobotCellContent = ({
         );
     }
 
+    const controls = (
+        <Flex gap='size-100' alignItems='center'>
+            <Button variant='secondary' onPress={restart}>
+                Restart session
+            </Button>
+            {leaderId !== undefined && (
+                <TooltipTrigger delay={300}>
+                    {/* Disabled elements don't fire hover events, so the tooltip trigger is
+                        moved to a wrapping span (react-aria's documented workaround) rather
+                        than the Switch itself. */}
+                    <Focusable excludeFromTabOrder>
+                        <span>
+                            <Switch
+                                isEmphasized
+                                isSelected={isTeleoperating}
+                                onChange={(b) => setFollowerSource(b ? 'teleop' : 'hold')}
+                                isDisabled={!canTeleoperate}
+                            >
+                                Teleoperate
+                            </Switch>
+                        </span>
+                    </Focusable>
+                    <Tooltip>
+                        {canTeleoperate
+                            ? 'Control the follower using the leader robot'
+                            : 'Connect a leader robot to enable teleoperation'}
+                    </Tooltip>
+                </TooltipTrigger>
+            )}
+        </Flex>
+    );
+
     return (
         <View
             minWidth='size-4000'
@@ -127,43 +162,23 @@ const RobotCellContent = ({
             backgroundColor={'gray-600'}
             position={'relative'}
         >
-            <RobotViewer robot={robot} />
+            {isSimulated ? <SimulationViewer robot={robot} actions={controls} /> : <RobotViewer robot={robot} />}
             {warning && (
-                <View position={'absolute'} left={0} top={0} padding='size-100' maxWidth='size-4600'>
+                <View
+                    position={'absolute'}
+                    left={0}
+                    top={isSimulated ? 'size-600' : 0}
+                    padding='size-100'
+                    maxWidth='size-4600'
+                >
                     <InlineAlert variant='warning'>{warning}</InlineAlert>
                 </View>
             )}
-            <View position={'absolute'} right={0} top={0} padding='size-100'>
-                <Flex gap='size-100' alignItems='center'>
-                    <Button variant='secondary' onPress={restart}>
-                        Restart session
-                    </Button>
-                    {leaderId !== undefined && (
-                        <TooltipTrigger delay={300}>
-                            {/* Disabled elements don't fire hover events, so the tooltip trigger is
-                                moved to a wrapping span (react-aria's documented workaround) rather
-                                than the Switch itself. */}
-                            <Focusable excludeFromTabOrder>
-                                <span>
-                                    <Switch
-                                        isEmphasized
-                                        isSelected={isTeleoperating}
-                                        onChange={(b) => setFollowerSource(b ? 'teleop' : 'hold')}
-                                        isDisabled={!canTeleoperate}
-                                    >
-                                        Teleoperate
-                                    </Switch>
-                                </span>
-                            </Focusable>
-                            <Tooltip>
-                                {canTeleoperate
-                                    ? 'Control the follower using the leader robot'
-                                    : 'Connect a leader robot to enable teleoperation'}
-                            </Tooltip>
-                        </TooltipTrigger>
-                    )}
-                </Flex>
-            </View>
+            {isSimulated ? null : (
+                <View position={'absolute'} right={0} top={0} padding='size-100'>
+                    {controls}
+                </View>
+            )}
         </View>
     );
 };
