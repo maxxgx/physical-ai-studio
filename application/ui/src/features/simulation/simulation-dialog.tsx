@@ -9,6 +9,7 @@ import {
     ButtonGroup,
     Content,
     Dialog,
+    DialogContainer,
     Divider,
     Flex,
     Heading,
@@ -23,8 +24,9 @@ import {
 } from '@geti-ui/ui';
 
 import { getApiErrorMessage } from '../../api/errors';
+import { useProjectId } from '../projects/use-project';
 import { InlineAlert } from '../robots/setup-wizard/shared/inline-alert';
-import { rememberedScene, rememberScene, RobotSimulationLaunch } from './robot-simulation';
+import { rememberedScene, rememberScene, RobotSimulationLaunch, useRobotSimulationLaunch } from './robot-simulation';
 import {
     isActiveSimulation,
     Simulation,
@@ -348,4 +350,31 @@ export const SimulationDialog = ({
     }
 
     return <StartForm robot={robot} project_id={project_id} launch={launch} simulation={simulation} close={close} />;
+};
+
+/**
+ * The start dialog of a robot's simulation, with a function that opens it (undefined when the
+ * robot type is not simulated). Render `dialog` where it stays mounted while the simulation starts:
+ * views that show "not running" go away once it runs, and the dialog must outlive them.
+ */
+export const useSimulationDialog = (robot: SimulatedRobot, onRunning?: () => void) => {
+    const { project_id } = useProjectId();
+    const launch = useRobotSimulationLaunch(robot.type);
+    const [isOpen, setIsOpen] = useState(false);
+
+    const dialog = (
+        <DialogContainer onDismiss={() => setIsOpen(false)}>
+            {isOpen && launch !== null ? (
+                <SimulationDialog
+                    robot={robot}
+                    project_id={project_id}
+                    launch={launch}
+                    close={() => setIsOpen(false)}
+                    onRunning={onRunning}
+                />
+            ) : null}
+        </DialogContainer>
+    );
+
+    return { open: launch !== null ? () => setIsOpen(true) : undefined, dialog };
 };

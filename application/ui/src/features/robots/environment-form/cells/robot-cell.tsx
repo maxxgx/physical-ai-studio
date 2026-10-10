@@ -4,6 +4,7 @@ import { Focusable } from 'react-aria';
 import { $api } from '../../../../api/client';
 import { getRobotConnectionErrorTitle } from '../../../../api/errors';
 import { useProjectId } from '../../../projects/use-project';
+import { useSimulationDialog } from '../../../simulation/simulation-dialog';
 import { SimulationNotRunning } from '../../../simulation/simulation-not-running';
 import { RobotViewer, UnavailableRobotViewer } from '../../controller/robot-viewer';
 import { RobotModelsProvider } from '../../robot-models-context';
@@ -23,12 +24,40 @@ const AvailableRobotCell = ({
     cameraIds: string[];
 }) => {
     const { project_id } = useProjectId();
-    const { joints, state, error, errorCode, warning, setFollowerSource, restart } = useJointState(
-        project_id,
-        followerId,
-        leaderId,
-        cameraIds
+    const jointState = useJointState(project_id, followerId, leaderId, cameraIds);
+    // Rendered beside the cell's content, not in it: the "not running" view goes away once the
+    // simulation runs, and the dialog has to stay to show that it does.
+    const simulationDialog = useSimulationDialog(robot, jointState.restart);
+
+    return (
+        <>
+            <RobotCellContent
+                robot={robot}
+                leaderId={leaderId}
+                onStartSimulation={simulationDialog.open}
+                {...jointState}
+            />
+            {simulationDialog.dialog}
+        </>
     );
+};
+
+const RobotCellContent = ({
+    robot,
+    leaderId,
+    joints,
+    state,
+    error,
+    errorCode,
+    warning,
+    setFollowerSource,
+    restart,
+    onStartSimulation,
+}: {
+    robot: AvailableSchemaRobot;
+    leaderId?: string;
+    onStartSimulation?: () => void;
+} & ReturnType<typeof useJointState>) => {
     useSynchronizeModelJoints(joints, robot.type);
 
     const canTeleoperate = state.has_leader;
@@ -36,7 +65,7 @@ const AvailableRobotCell = ({
     const isTeleoperating = state.follower_source === 'teleop';
 
     if (error && errorCode === 'simulation_not_running') {
-        return <SimulationNotRunning robot={robot} message={error} onRetry={restart} onRunning={restart} />;
+        return <SimulationNotRunning robot={robot} message={error} onStart={onStartSimulation} onRetry={restart} />;
     }
 
     if (error) {

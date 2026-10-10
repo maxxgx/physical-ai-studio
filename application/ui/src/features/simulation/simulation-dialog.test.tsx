@@ -198,41 +198,33 @@ describe('SimulationDialog running transition', () => {
 });
 
 describe('SimulationNotRunning', () => {
-    it('offers to start the simulation and shows the start command', async () => {
-        mockSimulation(idle);
-        server.use(
-            http.get('/api/robots/catalog', () =>
-                HttpResponse.json([
-                    {
-                        type: 'SO101_Follower',
-                        display_name: 'SO101 Follower',
-                        role: 'follower',
-                        urdf_path: '',
-                        package_map: {},
-                        joint_map: {},
-                        zero_calibration: null,
-                        simulation: launch,
-                    },
-                ])
-            )
-        );
+    it('offers to start or retry and shows the start command', async () => {
+        const onStart = vi.fn();
         const onRetry = vi.fn();
         const user = userEvent.setup();
         render(
             <SimulationNotRunning
                 robot={robot}
                 message="No MuJoCo simulation named 'sim' is running. Start it with: uv run physicalai-mujoco start"
+                onStart={onStart}
                 onRetry={onRetry}
-            />,
-            { route: `/projects/${PROJECT_ID}/robots`, path: '/projects/:project_id/robots' }
+            />
         );
 
         expect(await screen.findByRole('heading', { name: 'Simulation not running' })).toBeInTheDocument();
+        await user.click(screen.getByRole('button', { name: 'Start simulation…' }));
+        expect(onStart).toHaveBeenCalled();
         await user.click(screen.getByRole('button', { name: 'Retry' }));
         expect(onRetry).toHaveBeenCalled();
         await user.click(screen.getByRole('button', { name: 'Or start it yourself' }));
         expect(await screen.findByText('uv run physicalai-mujoco start')).toBeInTheDocument();
-        await user.click(screen.getByRole('button', { name: 'Start simulation…' }));
-        expect(await screen.findByRole('heading', { name: 'Start simulation' })).toBeInTheDocument();
+    });
+
+    it('has no start button for a robot type without a simulation', async () => {
+        render(<SimulationNotRunning robot={robot} />);
+
+        expect(await screen.findByRole('heading', { name: 'Simulation not running' })).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Start simulation…' })).not.toBeInTheDocument();
+        expect(screen.queryByText('Or start it yourself')).not.toBeInTheDocument();
     });
 });

@@ -4,7 +4,6 @@
 import {
     ActionButton,
     Button,
-    DialogTrigger,
     Disclosure,
     DisclosurePanel,
     DisclosureTitle,
@@ -15,9 +14,7 @@ import {
     View,
 } from '@geti-ui/ui';
 
-import { useProjectId } from '../projects/use-project';
-import { startCommandFromMessage, useRobotSimulationLaunch } from './robot-simulation';
-import { SimulationDialog } from './simulation-dialog';
+import { startCommandFromMessage } from './robot-simulation';
 
 import classes from './simulation.module.css';
 
@@ -43,21 +40,20 @@ export const StartCommand = ({ command }: { command: string }) => {
 
 /**
  * Shown where a simulated robot should appear while its simulation is not running: offers to start
- * it, and shows the command to start it by hand when the robot's error message has one.
+ * it (`onStart`, from `useSimulationDialog`), and shows the command to start it by hand when the
+ * robot's error message has one.
  */
 export const SimulationNotRunning = ({
     robot,
     message,
+    onStart,
     onRetry,
-    onRunning,
 }: {
-    robot: { id: string; name: string; type: string };
+    robot: { name: string };
     message?: string | null;
+    onStart?: () => void;
     onRetry?: () => void;
-    onRunning?: () => void;
 }) => {
-    const { project_id } = useProjectId();
-    const launch = useRobotSimulationLaunch(robot.type);
     const command = startCommandFromMessage(message);
 
     return (
@@ -78,19 +74,10 @@ export const SimulationNotRunning = ({
                     environments.
                 </Text>
                 <Flex gap='size-100'>
-                    {launch !== null ? (
-                        <DialogTrigger type='modal'>
-                            <Button variant='accent'>Start simulation…</Button>
-                            {(close) => (
-                                <SimulationDialog
-                                    robot={robot}
-                                    project_id={project_id}
-                                    launch={launch}
-                                    close={close}
-                                    onRunning={onRunning}
-                                />
-                            )}
-                        </DialogTrigger>
+                    {onStart !== undefined ? (
+                        <Button variant='accent' onPress={onStart}>
+                            Start simulation…
+                        </Button>
                     ) : null}
                     {onRetry !== undefined ? (
                         <Button variant='secondary' onPress={onRetry}>

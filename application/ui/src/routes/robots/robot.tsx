@@ -11,6 +11,7 @@ import { RobotModelsProvider } from '../../features/robots/robot-models-context'
 import { AvailableSchemaRobot, isUnavailableRobot } from '../../features/robots/robot-types';
 import { useRobot } from '../../features/robots/use-robot';
 import { robotSimulationStatus, useRobotSimulationLaunch } from '../../features/simulation/robot-simulation';
+import { useSimulationDialog } from '../../features/simulation/simulation-dialog';
 import { SimulationNotRunning } from '../../features/simulation/simulation-not-running';
 import { useSimulation } from '../../features/simulation/use-simulation';
 
@@ -39,12 +40,18 @@ const useIsSimulationDown = (robot: AvailableSchemaRobot) => {
 
 const AvailableRobot = ({ robot }: { robot: AvailableSchemaRobot }) => {
     const isSimulationDown = useIsSimulationDown(robot);
+    const simulationDialog = useSimulationDialog(robot);
 
-    if (isSimulationDown) {
-        return <SimulationNotRunning robot={robot} />;
-    }
-
-    return <ConnectableRobot robot={robot} />;
+    return (
+        <>
+            {isSimulationDown ? (
+                <SimulationNotRunning robot={robot} onStart={simulationDialog.open} />
+            ) : (
+                <ConnectableRobot robot={robot} />
+            )}
+            {simulationDialog.dialog}
+        </>
+    );
 };
 
 const ConnectableRobot = ({ robot }: { robot: AvailableSchemaRobot }) => {

@@ -1,7 +1,5 @@
-import { useState } from 'react';
-
 import { Grid, StatusLight } from '@adobe/react-spectrum';
-import { ActionButton, DialogContainer, Flex, Heading, Item, Menu, MenuTrigger, toast, View } from '@geti-ui/ui';
+import { ActionButton, Flex, Heading, Item, Menu, MenuTrigger, toast, View } from '@geti-ui/ui';
 import { MoreMenu } from '@geti-ui/ui/icons';
 import { clsx } from 'clsx';
 import { NavLink, useNavigate, useParams } from 'react-router';
@@ -25,7 +23,7 @@ import {
     RobotSimulationStatus,
     useRobotSimulationLaunch,
 } from '../simulation/robot-simulation';
-import { SimulationDialog } from '../simulation/simulation-dialog';
+import { useSimulationDialog } from '../simulation/simulation-dialog';
 import { useSimulation, useStopSimulation } from '../simulation/use-simulation';
 import RobotArm from './../../assets/robot-arm.webp';
 import { isUnavailableRobot, SchemaRobot } from './robot-types';
@@ -106,7 +104,7 @@ const MenuActions = ({
     const { project_id } = useProjectId();
     const deleteRobot = useDeleteRobot(robot);
     const stopSimulation = useStopSimulation(project_id);
-    const [isStartOpen, setIsStartOpen] = useState(false);
+    const simulationDialog = useSimulationDialog(robot);
 
     const editPath = paths.project.robots.edit({ project_id, robot_id: robot.id });
     const isSO101 = robot.type === 'SO101_Follower' || robot.type === 'SO101_Leader';
@@ -131,7 +129,7 @@ const MenuActions = ({
                             deleteRobot();
                         }
                         if (action === 'start-simulation') {
-                            setIsStartOpen(true);
+                            simulationDialog.open?.();
                         }
                         if (action === 'stop-simulation') {
                             stopSimulation.mutate(
@@ -159,16 +157,7 @@ const MenuActions = ({
                     <Item key='delete'>Delete</Item>
                 </Menu>
             </MenuTrigger>
-            <DialogContainer onDismiss={() => setIsStartOpen(false)}>
-                {isStartOpen && launch !== null ? (
-                    <SimulationDialog
-                        robot={robot}
-                        project_id={project_id}
-                        launch={launch}
-                        close={() => setIsStartOpen(false)}
-                    />
-                ) : null}
-            </DialogContainer>
+            {simulationDialog.dialog}
         </>
     );
 };
