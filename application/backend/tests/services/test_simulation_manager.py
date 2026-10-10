@@ -613,7 +613,10 @@ async def test_stopping_a_failed_simulation_that_is_still_exiting_reports_stoppi
         await harness.manager.start(harness.request(robot_id))
         await harness.wait_for(SimulationStatus.FAILED)
 
-        assert (await harness.manager.stop()).status is SimulationStatus.STOPPING
+        stopping = await harness.manager.stop()
+
+        assert stopping.status is SimulationStatus.STOPPING
+        assert stopping.error is None
         await harness.wait_for(SimulationStatus.IDLE)
     finally:
         await harness.manager.shutdown()

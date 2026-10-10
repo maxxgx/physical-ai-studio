@@ -427,7 +427,7 @@ class SimulationManager:
         if child.stop_requested:
             return
         child.stop_requested = True
-        self._update(status=SimulationStatus.STOPPING, phase=None, download=None)
+        self._update(status=SimulationStatus.STOPPING, phase=None, download=None, error=None)
         self._close_stdin(child)
         self._spawn_background(self._escalate(child))
 
@@ -443,12 +443,12 @@ class SimulationManager:
             stdin.close()
 
     async def _escalate(self, child: _Child) -> None:
-        if await self._exited(child, self._stop_eof_timeout_s):
+        if await self._exited(child, self._stop_eof_timeout_s) or child.process.returncode is not None:
             return
         logger.warning("Simulation {!r} ignored end of input; terminating it", child.owner_name)
         with contextlib.suppress(ProcessLookupError):
             child.process.terminate()
-        if await self._exited(child, self._stop_term_timeout_s):
+        if await self._exited(child, self._stop_term_timeout_s) or child.process.returncode is not None:
             return
         logger.warning("Simulation {!r} ignored SIGTERM; killing it", child.owner_name)
         with contextlib.suppress(ProcessLookupError):
