@@ -119,11 +119,13 @@ class RobotSimulationService:
         created: list[IPCamera] = []
         for name in dict.fromkeys(names):
             source = by_name[name]
+            camera_name = f"{robot.name} {name}"
             camera = IPCamera(
                 id=uuid4(),
-                name=f"{robot.name} {name}",
+                name=camera_name,
                 fingerprint={"url": source.stream_url},
-                hardware_name=None,
+                # Required by the database; the camera form also uses the name when there is no hardware.
+                hardware_name=camera_name,
                 payload=IPCameraPayload(
                     url=source.stream_url, width=source.width, height=source.height, fps=source.fps
                 ),

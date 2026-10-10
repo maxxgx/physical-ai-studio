@@ -172,8 +172,17 @@ async def test_adding_cameras_creates_ip_cameras_on_the_streams(
 
     created = await service(sim_api(EXTERNAL)).add_cameras(PROJECT_ID, environment.id, ROBOT_ID, ["wrist", "wrist"])
 
-    assert [(c.name, c.payload.url, c.payload.width, c.payload.fps, c.fingerprint) for c in created] == [
-        ("Sim arm wrist", f"{EXTERNAL}/cameras/wrist/mjpeg", 640, 30, {"url": f"{EXTERNAL}/cameras/wrist/mjpeg"})
+    assert [
+        (c.name, c.hardware_name, c.payload.url, c.payload.width, c.payload.fps, c.fingerprint) for c in created
+    ] == [
+        (
+            "Sim arm wrist",
+            "Sim arm wrist",
+            f"{EXTERNAL}/cameras/wrist/mjpeg",
+            640,
+            30,
+            {"url": f"{EXTERNAL}/cameras/wrist/mjpeg"},
+        )
     ]
     updated = environment_store["updated"]
     assert [c.camera_id for c in updated.cameras] == [environment.cameras[0].camera_id, created[0].id]
