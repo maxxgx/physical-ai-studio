@@ -20,7 +20,7 @@ from exceptions import (
     SimulationNotRunningError,
 )
 
-# Prefix of the error a simulated robot raises on connect when no simulation runs under its name.
+# Start of the error a simulated robot raises on connect when no simulation runs under its name.
 # Its message is written for users (it says how to start the simulation), so it is forwarded as is.
 SIMULATION_NOT_RUNNING_PREFIX = "No MuJoCo simulation named "
 
@@ -52,8 +52,8 @@ def translate_robot_error(  # noqa: PLR0911 - one return per mapped error.
         # protocol versions as structured fields — only in the message string.
         return RobotProtocolMismatchError()
 
-    if type(exc) is RobotTransportError and str(exc).startswith(SIMULATION_NOT_RUNNING_PREFIX):
-        return SimulationNotRunningError(str(exc), robot_name=robot_name)
+    if isinstance(exc, RobotTransportError) and (hint := _simulation_not_running_hint(exc)) is not None:
+        return SimulationNotRunningError(hint, robot_name=robot_name)
 
     if isinstance(exc, RobotTransportError):
         logger.warning("Unmapped SharedRobot transport failure (phase={!r}): {}", exc.phase, exc)
@@ -63,3 +63,21 @@ def translate_robot_error(  # noqa: PLR0911 - one return per mapped error.
         return exc
 
     return SharedRobotTransportError()
+
+
+def _simulation_not_running_hint(exc: BaseException) -> str | None:
+    """Return a simulated robot's "not running" message from *exc* or the errors that caused it.
+
+    Studio runs the driver in its own owner process, which wraps the driver's error
+    ("failed to start robot owner: driver.connect() failed: No MuJoCo simulation named ...").
+    """
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        start = str(current).find(SIMULATION_NOT_RUNNING_PREFIX)
+        if start >= 0:
+            # The owner worker appends its traceback on the following lines.
+            return str(current)[start:].splitlines()[0]
+        current = current.__cause__ or current.__context__
+    return None
