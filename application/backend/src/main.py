@@ -27,6 +27,7 @@ from api.remote_trainers import router as remote_trainers_router
 from api.robot_catalog import router as robot_catalog_router
 from api.robot_observations import router as robot_observations_router
 from api.robot_setup import router as robot_setup_router
+from api.robot_simulation import router as robot_simulation_router
 from api.robot_zero_calibration import router as robot_zero_calibration_router
 from api.robots import router as project_robots_router
 from api.runtime_sessions import router as runtime_sessions_router
@@ -67,6 +68,7 @@ app.include_router(remote_trainers_router)
 app.include_router(remote_servers_router)
 app.include_router(settings_router)
 app.include_router(simulation_router)
+app.include_router(robot_simulation_router)
 app.include_router(models_router)
 app.include_router(policies_router)
 app.include_router(plugins_router)

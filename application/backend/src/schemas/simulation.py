@@ -5,6 +5,7 @@
 
 from datetime import datetime
 from enum import StrEnum
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -68,3 +69,31 @@ class StartSimulationRequest(BaseModel):
 
 class SimulationLogs(BaseModel):
     lines: list[str] = Field(..., description="Latest log lines of the current or last simulation, oldest first")
+
+
+class SimulationCamera(BaseModel):
+    name: str
+    width: int
+    height: int
+    fps: int
+    source: str = Field(..., description="Where the camera comes from: override, model, default (robot) or scene")
+    stream_url: str = Field(..., description="MJPEG stream of the camera")
+    snapshot_url: str = Field(..., description="Latest frame of the camera as a JPEG")
+
+
+class RobotSimulation(BaseModel):
+    """Whether a simulated robot's simulation runs, who started it, and what it serves."""
+
+    running: bool
+    started_by: Literal["studio", "external"] | None = None
+    owner_name: str = Field(..., description="Name the robot attaches to")
+    http_url: str | None = None
+    viewer_url: str | None = None
+    scene: str | None = None
+    real_time_factor: float | None = None
+    cameras: list[SimulationCamera] = Field(default_factory=list)
+
+
+class AddSimulationCamerasRequest(BaseModel):
+    robot_id: UUID = Field(..., description="The simulated robot whose cameras to add")
+    cameras: list[str] = Field(..., min_length=1, description="Names of the simulation's cameras to add")

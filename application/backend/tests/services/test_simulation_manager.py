@@ -692,6 +692,7 @@ async def test_the_database_store_writes_the_address_only_when_it_changes(
         yield None
 
     monkeypatch.setattr(module, "RobotService", FakeService)
+    monkeypatch.setattr(module, "ProjectCameraService", lambda *_args: SimpleNamespace(get_camera_list=_no_cameras))
     monkeypatch.setattr(module, "get_async_db_session_ctx", fake_session)
     new_url = "http://127.0.0.1:9"
 
@@ -701,3 +702,7 @@ async def test_the_database_store_writes_the_address_only_when_it_changes(
         assert updates == []
     else:
         assert [update.payload.http_url for update in updates] == [new_url]
+
+
+async def _no_cameras(project_id: UUID) -> list[Any]:
+    return []

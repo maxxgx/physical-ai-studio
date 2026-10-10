@@ -39,6 +39,7 @@ from exceptions import (
 )
 from robots.catalog.registry import RobotCatalogRegistry
 from robots.robot_service import RobotService
+from schemas.project_camera import IPCamera
 from schemas.robot import UnavailableRobot
 from schemas.simulation import (
     Simulation,
@@ -48,6 +49,7 @@ from schemas.simulation import (
     SimulationStatus,
     StartSimulationRequest,
 )
+from services.project_camera_service import ProjectCameraService
 
 START_TIMEOUT_S = 180.0
 """A starting simulation that prints no event for this long is stopped as failed."""
@@ -95,10 +97,30 @@ class DatabaseSimulationRobots:
             robot = await service.get_robot_by_id(project_id, robot_id)
             if isinstance(robot, UnavailableRobot) or "http_url" not in type(robot.payload).model_fields:
                 return
-            if robot.payload.http_url == http_url:
+            old_url = robot.payload.http_url
+            if old_url == http_url:
                 return
             payload = robot.payload.model_copy(update={"http_url": http_url})
             await service.update_robot(project_id, robot.model_copy(update={"payload": payload}))
+            await _move_simulation_cameras(ProjectCameraService(session, self._registry), project_id, old_url, http_url)
+
+
+async def _move_simulation_cameras(cameras: ProjectCameraService, project_id: UUID, old_url: str, new_url: str) -> None:
+    """Point the project's IP cameras on a simulation's streams at its new address.
+
+    Simulations start on free ports, so the address changes on every start.
+    """
+    prefix = f"{old_url}/cameras/"
+    for camera in await cameras.get_camera_list(project_id):
+        if not isinstance(camera, IPCamera) or not camera.payload.url.startswith(prefix):
+            continue
+        url = f"{new_url}/cameras/{camera.payload.url.removeprefix(prefix)}"
+        await cameras.update_camera(
+            project_id,
+            camera.model_copy(
+                update={"payload": camera.payload.model_copy(update={"url": url}), "fingerprint": {"url": url}}
+            ),
+        )
 
 
 @dataclass
