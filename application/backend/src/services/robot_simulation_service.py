@@ -25,7 +25,7 @@ from robots.robot_service import RobotService
 from schemas.environment import CameraEnvironmentConfiguration
 from schemas.project_camera import IPCamera, IPCameraPayload
 from schemas.robot import UnavailableRobot
-from schemas.simulation import RobotSimulation, SimulationCamera, SimulationStatus
+from schemas.simulation import ProjectRobotSimulation, RobotSimulation, SimulationCamera, SimulationStatus
 from services.environment_service import EnvironmentService
 from services.project_camera_service import ProjectCameraService
 from services.simulation_manager import SimulationManager
@@ -55,8 +55,27 @@ class RobotSimulationService:
             SimulationNotSupportedError: The robot type has no simulation.
         """
         robot = await RobotService(self._session, self._registry).get_robot_by_id(project_id, robot_id)
-        owner_name = self._owner_name(robot)
+        return await self._probe(robot, self._owner_name(robot))
 
+    async def list_running(self, project_id: UUID) -> list[ProjectRobotSimulation]:
+        """Return the running simulations of the project's simulated robots, probed in parallel."""
+        robots = [
+            robot
+            for robot in await RobotService(self._session, self._registry).get_robot_list(project_id)
+            if not isinstance(robot, UnavailableRobot)
+            and getattr(self._registry.get_definition(robot.type), "simulation", None) is not None
+        ]
+        results = await asyncio.gather(*(self._probe(robot, self._owner_name(robot)) for robot in robots))
+        return [
+            ProjectRobotSimulation(
+                **result.model_dump(), robot_id=robot.id, robot_name=robot.name, robot_type=robot.type
+            )
+            for robot, result in zip(robots, results, strict=True)
+            if result.running
+        ]
+
+    async def _probe(self, robot: Any, owner_name: str) -> RobotSimulation:
+        robot_id = robot.id
         state = self._manager.state()
         if state.robot_id == robot_id and state.status in {SimulationStatus.STARTING, SimulationStatus.STOPPING}:
             # Studio is starting or stopping it: it may already answer, but it is not ready.

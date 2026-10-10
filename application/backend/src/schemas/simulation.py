@@ -94,6 +94,14 @@ class RobotSimulation(BaseModel):
     cameras: list[SimulationCamera] = Field(default_factory=list)
 
 
+class ProjectRobotSimulation(RobotSimulation):
+    """A running simulation of one of a project's robots."""
+
+    robot_id: UUID
+    robot_name: str
+    robot_type: str
+
+
 class AddSimulationCamerasRequest(BaseModel):
     robot_id: UUID = Field(..., description="The simulated robot whose cameras to add")
     cameras: list[str] = Field(..., min_length=1, description="Names of the simulation's cameras to add")

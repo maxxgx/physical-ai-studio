@@ -17,7 +17,7 @@ from api.dependencies import (
     get_robot_id,
 )
 from schemas.project_camera import IPCamera
-from schemas.simulation import AddSimulationCamerasRequest, RobotSimulation
+from schemas.simulation import AddSimulationCamerasRequest, ProjectRobotSimulation, RobotSimulation
 from services.robot_simulation_service import RobotSimulationService
 
 router = APIRouter(prefix="/api/projects/{project_id}", tags=["Simulation"])
@@ -43,6 +43,14 @@ async def get_robot_simulation(
 ) -> RobotSimulation:
     """Whether the robot's simulation runs, who started it, and its viewer, speed and cameras."""
     return await service.get(project_id, robot_id)
+
+
+@router.get("/simulations")
+async def list_project_simulations(
+    project_id: ProjectID, service: RobotSimulationServiceDep
+) -> list[ProjectRobotSimulation]:
+    """The running simulations of the project's simulated robots, started by Studio or elsewhere."""
+    return await service.list_running(project_id)
 
 
 @router.post("/environments/{environment_id}/simulation-cameras", status_code=status.HTTP_201_CREATED)

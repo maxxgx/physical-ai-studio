@@ -61,7 +61,7 @@ def transport(responses: dict[str, Any]) -> httpx.MockTransport:
 
 @pytest.fixture
 def robot(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
-    robot = SimpleNamespace(id=ROBOT_ID, name="Sim arm", type="Sim_Follower", payload=Payload())
+    robot = SimpleNamespace(id=ROBOT_ID, name="Sim arm", type="Sim_Follower", payload=Payload(), others=[])
 
     class FakeRobotService:
         def __init__(self, session: Any, registry: Any) -> None:
@@ -69,6 +69,9 @@ def robot(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
 
         async def get_robot_by_id(self, project_id: UUID, robot_id: UUID) -> Any:
             return robot
+
+        async def get_robot_list(self, project_id: UUID) -> list[Any]:
+            return [robot, *robot.others]
 
     monkeypatch.setattr(module, "RobotService", FakeRobotService)
     return robot
@@ -78,7 +81,11 @@ def service(
     responses: dict[str, Any], state: Simulation | None = None, simulated: bool = True
 ) -> RobotSimulationService:
     launch = SimpleNamespace(owner_name=lambda payload: payload.name)
-    registry = SimpleNamespace(get_definition=lambda _type: SimpleNamespace(simulation=launch if simulated else None))
+    registry = SimpleNamespace(
+        get_definition=lambda robot_type: SimpleNamespace(
+            simulation=launch if simulated and robot_type.startswith("Sim") else None
+        )
+    )
     manager = SimpleNamespace(state=lambda: state or Simulation())
     session = SimpleNamespace(rollback=AsyncMock())
     return RobotSimulationService(session, registry, manager, transport=transport(responses))  # type: ignore[arg-type]
@@ -292,3 +299,18 @@ async def test_cameras_created_before_a_failure_are_removed(
 
     assert environment_store["deleted"] == [camera.id for camera in environment_store["created"]]
     assert len(environment_store["deleted"]) == 1
+
+
+async def test_listing_returns_the_running_simulations_of_simulated_robots(robot: SimpleNamespace) -> None:
+    robot.others = [
+        SimpleNamespace(id=uuid4(), name="Real arm", type="Real_Follower", payload=Payload(name="real")),
+        SimpleNamespace(
+            id=uuid4(), name="Idle sim", type="Sim_Follower", payload=Payload(name="idle", http_url=STUDIO)
+        ),
+    ]
+
+    result = await service(sim_api(EXTERNAL)).list_running(PROJECT_ID)
+
+    assert [(r.robot_id, r.robot_name, r.robot_type, r.started_by) for r in result] == [
+        (ROBOT_ID, "Sim arm", "Sim_Follower", "external")
+    ]
