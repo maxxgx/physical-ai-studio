@@ -4,6 +4,7 @@
 """SimulationManager against a fake simulation process that follows the launch contract."""
 
 import asyncio
+import contextlib
 import json
 import os
 import sys
@@ -42,8 +43,16 @@ FAKE_SIMULATION = textwrap.dedent(
         f.write(str(os.getpid()))
     for line in scenario.get("stderr", []):
         print(line, file=sys.stderr, flush=True)
+    if scenario.get("grandchild_file"):
+        # Like the runtime's owner: its own session, and it inherits stdout and stderr.
+        import subprocess
+        grandchild = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True)
+        with open(scenario["grandchild_file"], "w") as f:
+            f.write(str(grandchild.pid))
     for line in scenario.get("stdout", []):
         print(line, flush=True)
+    if scenario.get("long_line_bytes"):
+        print("x" * scenario["long_line_bytes"], flush=True)
     for event in scenario.get("events", []):
         time.sleep(scenario.get("delay", 0.0))
         print(json.dumps(event), flush=True)
@@ -115,6 +124,7 @@ class FakeRobots:
     robots: dict[UUID, Any] = field(default_factory=dict)
     http_urls: list[tuple[UUID, str]] = field(default_factory=list)
     fail_set_http_url: bool = False
+    set_http_url_delay_s: float = 0.0
 
     def add(self, robot_type: str = "Sim_Follower", payload: BaseModel | None = None) -> UUID:
         robot_id = uuid4()
@@ -129,6 +139,7 @@ class FakeRobots:
         return self.robots[robot_id]
 
     async def set_http_url(self, project_id: UUID, robot_id: UUID, http_url: str) -> None:
+        await asyncio.sleep(self.set_http_url_delay_s)
         if self.fail_set_http_url:
             raise RuntimeError("database is gone")
         self.http_urls.append((robot_id, http_url))
@@ -185,6 +196,14 @@ class Harness:
         return await asyncio.wait_for(until(), timeout_s)
 
 
+async def wait_until(condition: Any, timeout_s: float = 5.0) -> None:
+    for _ in range(int(timeout_s / 0.01)):
+        if condition():
+            return
+        await asyncio.sleep(0.01)
+    raise TimeoutError("condition not met")
+
+
 def process_alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
@@ -234,7 +253,7 @@ async def test_start_reports_phases_then_ready_and_stores_the_address(harness: H
     assert running.pid == 4242
     assert running.phase is None
     assert running.download is None
-    assert harness.robots.http_urls == [(robot_id, "http://127.0.0.1:56209")]
+    await wait_until(lambda: harness.robots.http_urls == [(robot_id, "http://127.0.0.1:56209")])
     downloads = [state.download for state in seen if state.download is not None]
     assert downloads and downloads[0].bytes == 10 and downloads[0].total == 100
     phases = [state.phase for state in seen if state.phase is not None]
@@ -540,3 +559,142 @@ async def test_the_real_launch_contract(harness: Harness) -> None:
     await harness.manager.start(harness.request(robot_id, seed=3))
 
     assert (await harness.wait_for(SimulationStatus.RUNNING)).owner_name == "sim-a"
+
+
+async def test_stop_does_not_wait_for_a_process_the_simulation_left_holding_its_output(tmp_path: Path) -> None:
+    harness = Harness(tmp_path, stop_eof_timeout_s=5.0)
+    grandchild_file = tmp_path / "grandchild"
+    robot_id = harness.robots.add()
+    harness.scenario = {"events": ["READY"], "grandchild_file": str(grandchild_file)}
+    try:
+        await harness.manager.start(harness.request(robot_id))
+        await harness.wait_for(SimulationStatus.RUNNING)
+        pid = harness.child_pid()
+
+        await harness.manager.stop()
+
+        await harness.wait_for(SimulationStatus.IDLE, timeout_s=3.0)
+        assert not process_alive(pid)
+    finally:
+        await harness.manager.shutdown()
+        if grandchild_file.exists():
+            os.kill(int(grandchild_file.read_text()), 9)
+
+
+async def test_stop_while_starting_ends_idle(tmp_path: Path) -> None:
+    harness = Harness(tmp_path)
+    robot_id = harness.robots.add()
+    harness.scenario = {"events": [*PHASES, "READY"], "delay": 1.0}
+    try:
+        await harness.manager.start(harness.request(robot_id))
+
+        assert (await harness.manager.stop()).status is SimulationStatus.STOPPING
+        await harness.wait_for(SimulationStatus.IDLE)
+    finally:
+        await harness.manager.shutdown()
+
+
+async def test_an_error_event_while_running_fails_and_stops_the_process(harness: Harness) -> None:
+    robot_id = harness.robots.add()
+    harness.scenario = {"events": ["READY", {"event": "error", "message": "physics diverged"}]}
+    await harness.manager.start(harness.request(robot_id))
+
+    failed = await harness.wait_for(SimulationStatus.FAILED)
+
+    assert failed.error is not None and failed.error.message == "physics diverged"
+    await wait_until(lambda: harness.manager.state().error.exit_code == 0)
+
+
+async def test_stopping_a_failed_simulation_that_is_still_exiting_reports_stopping(tmp_path: Path) -> None:
+    harness = Harness(tmp_path, stop_eof_timeout_s=0.5, stop_term_timeout_s=2.0)
+    robot_id = harness.robots.add()
+    harness.scenario = {"events": [{"event": "error", "message": "boom"}], "ignore_eof": True}
+    try:
+        await harness.manager.start(harness.request(robot_id))
+        await harness.wait_for(SimulationStatus.FAILED)
+
+        assert (await harness.manager.stop()).status is SimulationStatus.STOPPING
+        await harness.wait_for(SimulationStatus.IDLE)
+    finally:
+        await harness.manager.shutdown()
+
+
+async def test_an_over_long_output_line_is_dropped_and_reading_goes_on(harness: Harness) -> None:
+    robot_id = harness.robots.add()
+    harness.scenario = {"long_line_bytes": 2 << 20, "events": ["READY"]}
+    await harness.manager.start(harness.request(robot_id))
+
+    await harness.wait_for(SimulationStatus.RUNNING)
+
+    assert any("dropped an output line" in line for line in harness.manager.logs())
+
+
+async def test_a_slow_address_write_does_not_delay_stopping(harness: Harness) -> None:
+    robot_id = harness.robots.add()
+    harness.robots.set_http_url_delay_s = 30.0
+    harness.scenario = {"events": ["READY"]}
+    await harness.manager.start(harness.request(robot_id))
+    await harness.wait_for(SimulationStatus.RUNNING)
+
+    await harness.manager.stop()
+
+    await harness.wait_for(SimulationStatus.IDLE, timeout_s=3.0)
+
+
+async def test_a_robot_that_allows_remote_simulations_is_refused(harness: Harness) -> None:
+    class RemotePayload(FakePayload):
+        allow_remote: bool = True
+
+    robot_id = harness.robots.add(payload=RemotePayload())
+
+    with pytest.raises(SimulationNotSupportedError, match="allows remote simulations"):
+        await harness.manager.start(harness.request(robot_id))
+
+
+class _PayloadWithoutAddress(BaseModel):
+    name: str = "sim-a"
+
+
+@pytest.mark.parametrize(
+    ("robot", "updated_url"),
+    [
+        (SimpleNamespace(type="Sim_Follower", payload=FakePayload(http_url="http://127.0.0.1:8080")), "new"),
+        (SimpleNamespace(type="Sim_Follower", payload=FakePayload(http_url="http://127.0.0.1:9")), None),
+        (SimpleNamespace(type="Sim_Follower", payload=_PayloadWithoutAddress()), None),
+        (UnavailableRobot(id=uuid4(), name="Gone", type="Gone_Follower", payload={}), None),
+    ],
+    ids=["different", "same", "no-field", "unavailable"],
+)
+async def test_the_database_store_writes_the_address_only_when_it_changes(
+    monkeypatch: pytest.MonkeyPatch, robot: Any, updated_url: str | None
+) -> None:
+    import services.simulation_manager as module
+
+    if not isinstance(robot, UnavailableRobot):
+        robot = SimpleNamespace(**vars(robot), model_copy=lambda update: SimpleNamespace(**update))
+    updates: list[Any] = []
+
+    class FakeService:
+        def __init__(self, session: Any, registry: Any) -> None:
+            pass
+
+        async def get_robot_by_id(self, project_id: UUID, robot_id: UUID) -> Any:
+            return robot
+
+        async def update_robot(self, project_id: UUID, updated: Any) -> None:
+            updates.append(updated)
+
+    @contextlib.asynccontextmanager
+    async def fake_session():
+        yield None
+
+    monkeypatch.setattr(module, "RobotService", FakeService)
+    monkeypatch.setattr(module, "get_async_db_session_ctx", fake_session)
+    new_url = "http://127.0.0.1:9"
+
+    await module.DatabaseSimulationRobots(SimpleNamespace()).set_http_url(uuid4(), uuid4(), new_url)  # type: ignore[arg-type]
+
+    if updated_url is None:
+        assert updates == []
+    else:
+        assert [update.payload.http_url for update in updates] == [new_url]

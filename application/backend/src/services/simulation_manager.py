@@ -30,6 +30,7 @@ from uuid import UUID
 from loguru import logger
 from pydantic import BaseModel
 
+from db import get_async_db_session_ctx
 from exceptions import (
     SimulationBusyError,
     SimulationInvalidRequestError,
@@ -37,6 +38,7 @@ from exceptions import (
     SimulationNotSupportedError,
 )
 from robots.catalog.registry import RobotCatalogRegistry
+from robots.robot_service import RobotService
 from schemas.robot import UnavailableRobot
 from schemas.simulation import (
     Simulation,
@@ -53,6 +55,12 @@ STOP_EOF_TIMEOUT_S = 10.0
 """How long a simulation gets to exit after its stdin closes before it is terminated."""
 STOP_TERM_TIMEOUT_S = 5.0
 """How long a terminated simulation gets to exit before it is killed."""
+STORE_ADDRESS_TIMEOUT_S = 10.0
+"""How long writing the simulation's address onto its robot may take."""
+DRAIN_TIMEOUT_S = 1.0
+"""How long to keep reading output after the process exited. A process the simulation spawned can
+hold its output open (the runtime's owner inherits stderr), so reading never waits for end of file."""
+EXIT_POLL_S = 0.05
 LOG_LINES = 500
 _LINE_LIMIT = 1 << 20
 
@@ -78,20 +86,16 @@ class DatabaseSimulationRobots:
         self._registry = registry
 
     async def get(self, project_id: UUID, robot_id: UUID) -> Any:
-        from db import get_async_db_session_ctx
-        from robots.robot_service import RobotService
-
         async with get_async_db_session_ctx() as session:
             return await RobotService(session, self._registry).get_robot_by_id(project_id, robot_id)
 
     async def set_http_url(self, project_id: UUID, robot_id: UUID, http_url: str) -> None:
-        from db import get_async_db_session_ctx
-        from robots.robot_service import RobotService
-
         async with get_async_db_session_ctx() as session:
             service = RobotService(session, self._registry)
             robot = await service.get_robot_by_id(project_id, robot_id)
-            if isinstance(robot, UnavailableRobot) or getattr(robot.payload, "http_url", None) == http_url:
+            if isinstance(robot, UnavailableRobot) or "http_url" not in type(robot.payload).model_fields:
+                return
+            if robot.payload.http_url == http_url:
                 return
             payload = robot.payload.model_copy(update={"http_url": http_url})
             await service.update_robot(project_id, robot.model_copy(update={"payload": payload}))
@@ -266,7 +270,16 @@ class SimulationManager:
     async def _read_events(self, child: _Child) -> None:
         if child.process.stdout is None:
             return
-        async for raw in child.process.stdout:
+        stdout = child.process.stdout
+        while True:
+            try:
+                raw = await stdout.readline()
+            except ValueError:
+                # Longer than the line limit: readline dropped it; keep reading so the pipe never fills.
+                self._log(f"(dropped an output line longer than {_LINE_LIMIT} bytes)")
+                continue
+            if not raw:
+                return
             line = raw.decode(errors="replace").rstrip()
             if not line:
                 continue
@@ -279,26 +292,37 @@ class SimulationManager:
                 continue
             if child is self._child:
                 child.deadline = time.monotonic() + self._start_timeout_s
-                await self._on_event(child, event)
+                try:
+                    self._on_event(child, event)
+                except Exception:
+                    logger.exception("Could not handle simulation event {}", line)
 
     async def _read_log(self, child: _Child) -> None:
         if child.process.stderr is None:
             return
-        async for raw in child.process.stderr:
+        stderr = child.process.stderr
+        while True:
+            try:
+                raw = await stderr.readline()
+            except ValueError:
+                self._log(f"(dropped a log line longer than {_LINE_LIMIT} bytes)")
+                continue
+            if not raw:
+                return
             self._log(raw.decode(errors="replace").rstrip())
 
     def _log(self, line: str) -> None:
         self._logs.append(line)
         logger.debug("simulation: {}", line)
 
-    async def _on_event(self, child: _Child, event: dict[str, Any]) -> None:
+    def _on_event(self, child: _Child, event: dict[str, Any]) -> None:
         if child.stop_requested or self._state.status not in {SimulationStatus.STARTING, SimulationStatus.RUNNING}:
             return
         kind = event.get("event")
         if kind == "phase" and self._state.status is SimulationStatus.STARTING:
             self._on_phase(event)
         elif kind == "ready" and self._state.status is SimulationStatus.STARTING:
-            await self._on_ready(child, event)
+            self._on_ready(child, event)
         elif kind == "error":
             self._fail(child, str(event.get("message") or "The simulation reported an error."))
 
@@ -313,7 +337,7 @@ class SimulationManager:
             download = SimulationDownload(bytes=event["bytes"], total=total if isinstance(total, int) else None)
         self._update(phase=phase, download=download)
 
-    async def _on_ready(self, child: _Child, event: dict[str, Any]) -> None:
+    def _on_ready(self, child: _Child, event: dict[str, Any]) -> None:
         name = event.get("name")
         if name != child.owner_name:
             self._fail(child, f"The simulation started as {name!r}, not as {child.owner_name!r}.")
@@ -331,10 +355,13 @@ class SimulationManager:
             cameras=[str(camera) for camera in cameras] if isinstance(cameras, list) else [],
         )
         if isinstance(http_url, str) and self._state.project_id and self._state.robot_id:
-            try:
-                await self._robots.set_http_url(self._state.project_id, self._state.robot_id, http_url)
-            except Exception:
-                logger.exception("Could not store the simulation's address {} on its robot", http_url)
+            self._spawn_background(self._store_address(self._state.project_id, self._state.robot_id, http_url))
+
+    async def _store_address(self, project_id: UUID, robot_id: UUID, http_url: str) -> None:
+        try:
+            await asyncio.wait_for(self._robots.set_http_url(project_id, robot_id, http_url), STORE_ADDRESS_TIMEOUT_S)
+        except Exception:
+            logger.exception("Could not store the simulation's address {} on its robot", http_url)
 
     def _fail(self, child: _Child, message: str) -> None:
         """Mark the simulation failed and stop its process; the exit keeps the failed state."""
@@ -356,11 +383,14 @@ class SimulationManager:
             await asyncio.sleep(remaining)
 
     async def _wait_exit(self, child: _Child, *readers: asyncio.Task) -> None:
-        exit_code = await child.process.wait()
-        await asyncio.gather(*readers, return_exceptions=True)
+        exit_code = await _exit_code(child.process)
+        _, pending = await asyncio.wait(readers, timeout=DRAIN_TIMEOUT_S)
         for task in child.tasks:
             if task is not asyncio.current_task() and not task.done():
                 task.cancel()
+        for task in readers:
+            if task not in pending and not task.cancelled() and task.exception() is not None:
+                logger.opt(exception=task.exception()).error("Reading the simulation's output failed")
         logger.info("Simulation {!r} exited with code {}", child.owner_name, exit_code)
         if child is self._child:
             self._child = None
@@ -397,8 +427,7 @@ class SimulationManager:
         if child.stop_requested:
             return
         child.stop_requested = True
-        if self._state.status is not SimulationStatus.FAILED:
-            self._update(status=SimulationStatus.STOPPING, phase=None, download=None)
+        self._update(status=SimulationStatus.STOPPING, phase=None, download=None)
         self._close_stdin(child)
         self._spawn_background(self._escalate(child))
 
@@ -438,7 +467,13 @@ class SimulationManager:
         if child is None:
             return
         self._request_stop(child)
-        await child.done.wait()
+        budget = self._stop_eof_timeout_s + self._stop_term_timeout_s + DRAIN_TIMEOUT_S + 5.0
+        if not await self._exited(child, budget):
+            # SIGKILL was sent, so this only happens if the OS never reports the exit.
+            logger.error("Simulation {!r} (pid {}) did not exit", child.owner_name, child.process.pid)
+            if child is self._child:
+                self._child = None
+                self._set(Simulation())
 
     def _spawn_background(self, coroutine: Any) -> None:
         task = asyncio.create_task(coroutine)
@@ -458,8 +493,24 @@ class SimulationManager:
             queue.put_nowait(state.model_copy(deep=True))
 
 
+async def _exit_code(process: asyncio.subprocess.Process) -> int:
+    """Wait until *process* exited and return its exit code.
+
+    Not ``process.wait()``: asyncio only returns from it once every pipe is closed, and a process
+    the simulation spawned can keep its stderr open long after the simulation exited.
+    """
+    while True:
+        if process.returncode is not None:
+            return process.returncode
+        await asyncio.sleep(EXIT_POLL_S)
+
+
 def _check_local(robot_name: str, payload: BaseModel) -> None:
     """Refuse robots whose payload points at another host: Studio starts simulations on this machine."""
+    if getattr(payload, "allow_remote", False) is True:
+        raise SimulationNotSupportedError(
+            f"Robot {robot_name!r} allows remote simulations. Studio only starts simulations on this machine."
+        )
     http_url = getattr(payload, "http_url", None)
     if not isinstance(http_url, str):
         return
