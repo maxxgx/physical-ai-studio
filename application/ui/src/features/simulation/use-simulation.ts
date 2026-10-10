@@ -53,8 +53,15 @@ export const useSimulationUpdates = () => {
             }
             queryClient.setQueryData(simulationQueryKey(), simulation);
             if (lastStatus !== undefined && simulation.status !== lastStatus) {
-                // Whether a simulated robot is online follows its simulation.
-                queryClient.invalidateQueries({ queryKey: ['get', '/api/projects/{project_id}/robots/online'] });
+                // Whether a simulated robot is online follows its simulation, and a simulation that
+                // starts on a new port moves its IP cameras (and so the environments' cameras) along.
+                for (const path of [
+                    '/api/projects/{project_id}/robots/online',
+                    '/api/projects/{project_id}/cameras',
+                    '/api/projects/{project_id}/environments/{environment_id}',
+                ]) {
+                    queryClient.invalidateQueries({ queryKey: ['get', path] });
+                }
             }
             lastStatus = simulation.status;
         };

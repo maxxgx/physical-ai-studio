@@ -21,22 +21,27 @@ export const RobotCell = ({
 }) => {
     const [current, setCurrent] = useState<Record<string, number>>();
     const simulatedTypes = useSimulatedRobotTypes();
-    useInterval(() => {
-        setCurrent(joints.current === undefined ? undefined : { ...joints.current });
-    }, 1000 / 30);
+    const environmentRobot = environment.robots?.find((robot) => robot.robot.id === robot_id)?.robot;
+    const isSimulated = environmentRobot !== undefined && simulatedTypes.has(environmentRobot.type);
+    // A simulated robot shows the simulation's own viewer, which needs no joint values.
+    useInterval(
+        () => {
+            setCurrent(joints.current === undefined ? undefined : { ...joints.current });
+        },
+        isSimulated ? null : 1000 / 30
+    );
 
     if (environment.robots === undefined) {
         return <></>;
     }
 
-    const environmentRobot = environment.robots.find((robot) => robot.robot.id === robot_id)?.robot;
     if (environmentRobot === undefined) return <></>;
 
     if (isUnavailableRobot(environmentRobot)) {
         return <UnavailableRobotViewer robotType={environmentRobot.type} />;
     }
 
-    if (simulatedTypes.has(environmentRobot.type)) {
+    if (isSimulated) {
         return <SimulationViewer robot={environmentRobot} compact />;
     }
 

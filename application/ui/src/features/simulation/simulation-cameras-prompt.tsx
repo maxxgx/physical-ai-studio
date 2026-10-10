@@ -54,7 +54,8 @@ const RobotCamerasPrompt = ({
         '/api/projects/{project_id}/environments/{environment_id}/simulation-cameras',
         {
             meta: {
-                invalidates: [
+                // Awaited: the prompt must be gone (or updated) before Add can be pressed again.
+                awaits: [
                     [
                         'get',
                         '/api/projects/{project_id}/environments/{environment_id}',
