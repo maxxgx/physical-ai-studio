@@ -61,4 +61,4 @@ async def add_simulation_cameras(
     service: RobotSimulationServiceDep,
 ) -> list[IPCamera]:
     """Add cameras of a running simulation to an environment, as IP cameras on its streams."""
-    return await service.add_cameras(project_id, environment_id, request.robot_id, request.cameras)
+    return await service.add_cameras(project_id, environment_id, request.robot_id, request.cameras, request.names)

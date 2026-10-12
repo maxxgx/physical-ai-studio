@@ -20,7 +20,6 @@ const projectSimulation = (robot_id: string, robot_name: string, started_by: 'st
     http_url: `http://127.0.0.1:${port}`,
     viewer_url: `http://127.0.0.1:${port + 1}`,
     scene: 'yahtzee',
-    real_time_factor: 0.98,
     cameras: [],
     robot_id,
     robot_name,

@@ -3,7 +3,7 @@
 
 import { useState } from 'react';
 
-import { Button, ButtonGroup, Checkbox, Flex, Heading, Text, toast, View } from '@geti-ui/ui';
+import { Button, ButtonGroup, Checkbox, Flex, Heading, Text, TextField, toast, View } from '@geti-ui/ui';
 
 import { $api } from '../../api/client';
 import { getApiErrorMessage } from '../../api/errors';
@@ -49,6 +49,8 @@ const RobotCamerasPrompt = ({
     const [isHidden, setIsHidden] = useState(() => isDismissed(dismissKey));
     const { data: simulation } = useRobotSimulation(project_id, robot.id, !isHidden);
     const [selected, setSelected] = useState<Set<string> | undefined>();
+    // Only the names the user edited; the rest are named "<robot> <camera>" by the backend.
+    const [names, setNames] = useState<Record<string, string>>({});
     const addMutation = $api.useMutation(
         'post',
         '/api/projects/{project_id}/environments/{environment_id}/simulation-cameras',
@@ -89,17 +91,23 @@ const RobotCamerasPrompt = ({
         setSelected(next);
     };
 
-    const add = () =>
+    const defaultName = (camera: string) => `${robot.name} ${camera}`;
+    const add = () => {
+        const cameras = missing.filter(({ name }) => chosen.has(name)).map(({ name }) => name);
         addMutation.mutate(
             {
                 params: { path: { project_id, environment_id: environment.id } },
                 body: {
                     robot_id: robot.id,
-                    cameras: missing.filter(({ name }) => chosen.has(name)).map(({ name }) => name),
+                    cameras,
+                    names: Object.fromEntries(
+                        cameras.flatMap((camera) => (camera in names ? [[camera, names[camera]]] : []))
+                    ),
                 },
             },
             { onError: (error) => toast.negative(getApiErrorMessage(error) ?? 'Could not add the cameras.') }
         );
+    };
 
     return (
         <View UNSAFE_className={classes.prompt} padding='size-200' marginX='size-200' marginBottom='size-200'>
@@ -131,11 +139,20 @@ const RobotCamerasPrompt = ({
                             >
                                 {camera.name}
                             </Checkbox>
+                            <TextField
+                                aria-label={`Name for ${camera.name}`}
+                                value={names[camera.name] ?? defaultName(camera.name)}
+                                onChange={(value) => setNames((current) => ({ ...current, [camera.name]: value }))}
+                                isDisabled={!chosen.has(camera.name)}
+                                width='100%'
+                            />
                             <Text UNSAFE_className={classes.detail}>{cameraDetails(camera)}</Text>
                         </Flex>
                     ))}
                 </Flex>
-                <Text UNSAFE_className={classes.detail}>Added as IP cameras on the simulation&apos;s streams.</Text>
+                <Text UNSAFE_className={classes.detail}>
+                    Added as IP cameras on the simulation&apos;s streams, under the names above.
+                </Text>
                 <ButtonGroup>
                     <Button
                         variant='secondary'

@@ -66,7 +66,6 @@ const mockSimulation = (running: boolean) =>
                 http_url: running ? SIM : null,
                 viewer_url: null,
                 scene: null,
-                real_time_factor: null,
                 cameras: running ? [camera('wrist', 'override'), camera('overview', 'scene')] : [],
             })
         )
@@ -102,7 +101,33 @@ describe('SimulationCamerasPrompt', () => {
         expect(screen.getByText('scene camera · 640×480 · 30 fps')).toBeInTheDocument();
         await user.click(screen.getByRole('button', { name: 'Add 1 camera' }));
 
-        await waitFor(() => expect(added).toEqual([{ robot_id: robot.id, cameras: ['overview'] }]));
+        await waitFor(() => expect(added).toEqual([{ robot_id: robot.id, cameras: ['overview'], names: {} }]));
+    });
+
+    it('adds a camera under the name the user gives it', async () => {
+        mockSimulation(true);
+        const added: unknown[] = [];
+        server.use(
+            http.post(
+                '/api/projects/{project_id}/environments/{environment_id}/simulation-cameras',
+                async ({ request }) => {
+                    added.push(await request.json());
+                    return HttpResponse.json([], { status: 201 });
+                }
+            )
+        );
+        const user = userEvent.setup();
+        renderPrompt();
+
+        const name = await screen.findByRole('textbox', { name: 'Name for overview' });
+        expect(name).toHaveValue(`${robot.name} overview`);
+        await user.clear(name);
+        await user.type(name, 'Top view');
+        await user.click(screen.getByRole('button', { name: 'Add 1 camera' }));
+
+        await waitFor(() =>
+            expect(added).toEqual([{ robot_id: robot.id, cameras: ['overview'], names: { overview: 'Top view' } }])
+        );
     });
 
     it('stays hidden for the browser session after Not now', async () => {

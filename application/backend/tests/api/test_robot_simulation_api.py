@@ -33,7 +33,8 @@ class StubService:
             raise self.error
         return RobotSimulation(running=True, started_by="external", owner_name="sim", scene="yahtzee")
 
-    async def add_cameras(self, project_id, environment_id, robot_id, names) -> list:
+    async def add_cameras(self, project_id, environment_id, robot_id, names, camera_names) -> list:
+        self.added = (names, camera_names)
         if self.error is not None:
             raise self.error
         return []
@@ -57,10 +58,21 @@ def test_get_returns_the_robot_simulation(stub: StubService) -> None:
 def test_add_cameras_returns_201(stub: StubService) -> None:
     response = TestClient(app).post(
         f"/api/projects/{PROJECT_ID}/environments/{ENVIRONMENT_ID}/simulation-cameras",
+        json={"robot_id": str(ROBOT_ID), "cameras": ["wrist"], "names": {"wrist": "Wrist"}},
+    )
+
+    assert response.status_code == 201
+    assert stub.added == (["wrist"], {"wrist": "Wrist"})
+
+
+def test_add_cameras_names_are_optional(stub: StubService) -> None:
+    response = TestClient(app).post(
+        f"/api/projects/{PROJECT_ID}/environments/{ENVIRONMENT_ID}/simulation-cameras",
         json={"robot_id": str(ROBOT_ID), "cameras": ["wrist"]},
     )
 
     assert response.status_code == 201
+    assert stub.added == (["wrist"], {})
 
 
 def test_add_cameras_needs_at_least_one_camera(stub: StubService) -> None:

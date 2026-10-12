@@ -18,7 +18,6 @@ const simulation = (running: boolean, started_by: 'studio' | 'external'): RobotS
     http_url: running ? 'http://127.0.0.1:8080' : null,
     viewer_url: running ? 'http://127.0.0.1:8081' : null,
     scene: null,
-    real_time_factor: null,
     cameras: [],
 });
 

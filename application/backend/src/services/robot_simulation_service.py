@@ -105,8 +105,6 @@ class RobotSimulationService:
 
         root = root if isinstance(root, dict) else {}
         health = health if isinstance(health, dict) else {}
-        timing = health.get("timing")
-        real_time_factor = timing.get("real_time_factor") if isinstance(timing, dict) else None
         viewer_url = state.viewer_url if studio else root.get("viewer_url")
         return RobotSimulation(
             running=True,
@@ -115,23 +113,34 @@ class RobotSimulationService:
             http_url=http_url,
             viewer_url=viewer_url if isinstance(viewer_url, str) else None,
             scene=_str_or_none(health.get("scene")) or _str_or_none(root.get("scene")),
-            real_time_factor=float(real_time_factor) if isinstance(real_time_factor, int | float) else None,
             cameras=_cameras(http_url, cameras),
         )
 
     async def add_cameras(
-        self, project_id: UUID, environment_id: UUID, robot_id: UUID, names: list[str]
+        self,
+        project_id: UUID,
+        environment_id: UUID,
+        robot_id: UUID,
+        names: list[str],
+        camera_names: dict[str, str] | None = None,
     ) -> list[IPCamera]:
         """Add some of a running simulation's cameras to an environment, as IP cameras on their streams.
 
-        A project camera already on a stream is reused. Returns the cameras for *names*.
+        A project camera already on a stream is reused, under its own name. A new one is named from
+        *camera_names* (by simulation camera), or ``"<robot name> <camera>"`` when that has none or a
+        blank one. Returns the cameras for *names*.
 
         Raises:
             ResourceNotFoundError: The robot or the environment does not exist.
             SimulationNotSupportedError: The robot type has no simulation.
             SimulationNotRunningError: The robot's simulation does not run.
-            SimulationInvalidRequestError: The simulation has no camera with one of the names.
+            SimulationInvalidRequestError: The simulation has no camera with one of the names, or
+                *camera_names* names a camera that is not added.
         """
+        camera_names = camera_names or {}
+        not_added = [name for name in camera_names if name not in names]
+        if not_added:
+            raise SimulationInvalidRequestError(f"Names given for cameras that are not added: {', '.join(not_added)}.")
         environment = await ProjectEnvironmentRepository(self._session, project_id, self._registry).get_by_id(
             environment_id
         )
@@ -163,7 +172,7 @@ class RobotSimulationService:
                 source = by_name[name]
                 camera = on_stream.get(source.stream_url)
                 if camera is None:
-                    camera = _ip_camera(f"{robot.name} {name}", source)
+                    camera = _ip_camera(camera_names.get(name, "").strip() or f"{robot.name} {name}", source)
                     await camera_service.create_camera(project_id, camera)
                     created.append(camera)
                 cameras.append(camera)

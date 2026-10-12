@@ -90,7 +90,6 @@ class RobotSimulation(BaseModel):
     http_url: str | None = None
     viewer_url: str | None = None
     scene: str | None = None
-    real_time_factor: float | None = None
     cameras: list[SimulationCamera] = Field(default_factory=list)
 
 
@@ -105,3 +104,10 @@ class ProjectRobotSimulation(RobotSimulation):
 class AddSimulationCamerasRequest(BaseModel):
     robot_id: UUID = Field(..., description="The simulated robot whose cameras to add")
     cameras: list[str] = Field(..., min_length=1, description="Names of the simulation's cameras to add")
+    names: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Names for the project cameras this call creates, by simulation camera; a missing or blank one "
+            "becomes '<robot name> <camera>'. A camera already on the stream keeps its name."
+        ),
+    )

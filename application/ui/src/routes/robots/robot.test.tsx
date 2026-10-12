@@ -32,7 +32,6 @@ const mockSimulatedRobot = (connection_status: 'online' | 'offline', simulation:
                 http_url: null,
                 viewer_url: null,
                 scene: null,
-                real_time_factor: null,
                 cameras: [],
             })
         ),
@@ -97,7 +96,6 @@ describe('Robot page of a simulated robot', () => {
                     http_url: 'http://127.0.0.1:8080',
                     viewer_url: 'http://127.0.0.1:8081',
                     scene: 'yahtzee',
-                    real_time_factor: 0.987,
                     cameras: [],
                 })
             )
@@ -123,7 +121,6 @@ describe('Robot page of a simulated robot', () => {
                     http_url: 'http://127.0.0.1:56209',
                     viewer_url: 'http://127.0.0.1:56210',
                     scene: 'yahtzee',
-                    real_time_factor: 1,
                     cameras: [],
                 })
             )

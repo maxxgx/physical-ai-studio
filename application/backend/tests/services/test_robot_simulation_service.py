@@ -34,7 +34,7 @@ class Payload(BaseModel):
 def sim_api(base: str, *, service: str = "sim-a") -> dict[str, Any]:
     return {
         f"{base}/": {"service": service, "scene": "yahtzee", "viewer_url": f"{base[:-1]}1"},
-        f"{base}/health": {"scene": "yahtzee", "timing": {"real_time_factor": 0.98}},
+        f"{base}/health": {"scene": "yahtzee"},
         f"{base}/cameras": [
             {
                 "name": "wrist",
@@ -99,7 +99,6 @@ async def test_an_external_simulation_that_answers_under_the_robots_name(robot: 
     assert result.http_url == EXTERNAL
     assert result.viewer_url == "http://127.0.0.1:8081"
     assert result.scene == "yahtzee"
-    assert result.real_time_factor == pytest.approx(0.98)
     assert [(c.name, c.stream_url, c.snapshot_url) for c in result.cameras] == [
         ("wrist", f"{EXTERNAL}/cameras/wrist/mjpeg", f"{EXTERNAL}/cameras/wrist/frame.jpg")
     ]
@@ -216,6 +215,26 @@ async def test_adding_cameras_creates_ip_cameras_on_the_streams(
     assert [c.camera_id for c in updated.cameras] == [environment.cameras[0].camera_id, created[0].id]
 
 
+@pytest.mark.parametrize(("given", "expected"), [("  Wrist  ", "Wrist"), (" ", "Sim arm wrist")])
+async def test_a_new_camera_takes_the_given_name_or_the_default_for_a_blank_one(
+    robot: SimpleNamespace, environment_store: dict[str, Any], given: str, expected: str
+) -> None:
+    created = await service(sim_api(EXTERNAL)).add_cameras(
+        PROJECT_ID, environment_store["environment"].id, ROBOT_ID, ["wrist"], {"wrist": given}
+    )
+
+    assert [(c.name, c.hardware_name) for c in created] == [(expected, expected)]
+
+
+async def test_a_name_for_a_camera_that_is_not_added_is_refused(
+    robot: SimpleNamespace, environment_store: dict[str, Any]
+) -> None:
+    with pytest.raises(SimulationInvalidRequestError):
+        await service(sim_api(EXTERNAL)).add_cameras(
+            PROJECT_ID, environment_store["environment"].id, ROBOT_ID, ["wrist"], {"overview": "Top"}
+        )
+
+
 async def test_adding_a_camera_the_simulation_does_not_have_is_refused(
     robot: SimpleNamespace, environment_store: dict[str, Any]
 ) -> None:
@@ -267,9 +286,9 @@ async def test_a_camera_already_on_the_stream_is_reused(
     existing = _ip_camera(f"{EXTERNAL}/cameras/wrist/mjpeg")
     environment_store["existing"] = [existing]
 
-    cameras = await service(sim_api(EXTERNAL)).add_cameras(PROJECT_ID, uuid4(), ROBOT_ID, ["wrist"])
+    cameras = await service(sim_api(EXTERNAL)).add_cameras(PROJECT_ID, uuid4(), ROBOT_ID, ["wrist"], {"wrist": "New"})
 
-    assert [camera.id for camera in cameras] == [existing.id]
+    assert [(camera.id, camera.name) for camera in cameras] == [(existing.id, existing.name)]
     assert environment_store["created"] == []
     assert environment_store["updated"].cameras[-1].camera_id == existing.id
 
