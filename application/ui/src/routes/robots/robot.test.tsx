@@ -130,7 +130,7 @@ describe('Robot page of a simulated robot', () => {
         );
         renderRobotPage();
 
-        expect(await screen.findByText('started by Studio')).toBeInTheDocument();
-        expect(screen.getByRole('button', { name: 'Stop simulation' })).toBeInTheDocument();
+        expect(await screen.findByRole('button', { name: 'Stop simulation' })).toBeInTheDocument();
+        expect(screen.queryByText(/started by/)).not.toBeInTheDocument();
     });
 });

@@ -91,10 +91,8 @@ const RunningSimulation = ({
                     <StatusLight variant='positive' UNSAFE_className={classes.viewerStatus}>
                         Simulation running
                     </StatusLight>
-                    {compact ? null : (
-                        <Text UNSAFE_className={classes.detail}>
-                            started by {startedByStudio ? 'Studio' : 'someone else (CLI)'}
-                        </Text>
+                    {compact || startedByStudio ? null : (
+                        <Text UNSAFE_className={classes.detail}>started by someone else (CLI)</Text>
                     )}
                     {simulation.scene != null ? (
                         <Text UNSAFE_className={classes.detail}>{simulation.scene}</Text>
