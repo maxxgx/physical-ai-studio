@@ -10,23 +10,8 @@ export interface FooterSimulation {
     label: string;
     scene: string | null;
     startedByStudio: boolean;
-    httpUrl: string | null;
     viewerUrl: string | null;
-    realTimeFactor: number | null;
 }
-
-const port = (url: string | null | undefined) => {
-    if (url == null) {
-        return undefined;
-    }
-    try {
-        return new URL(url).port || undefined;
-    } catch {
-        return undefined;
-    }
-};
-
-export const simulationPort = port;
 
 /**
  * The simulations to list in the footer: Studio's own (from any project) and those that run for
@@ -47,9 +32,7 @@ export const useFooterSimulations = (): FooterSimulation[] => {
         label: simulation.robot_name,
         scene: simulation.scene ?? null,
         startedByStudio: simulation.started_by === 'studio',
-        httpUrl: simulation.http_url ?? null,
         viewerUrl: simulation.viewer_url ?? null,
-        realTimeFactor: simulation.real_time_factor ?? null,
     }));
 
     if (isActiveSimulation(studio) && !rows.some(({ key }) => key === studio.robot_id)) {
@@ -58,9 +41,7 @@ export const useFooterSimulations = (): FooterSimulation[] => {
             label: (studio.robot_type ?? 'Simulation').replaceAll('_', ' '),
             scene: studio.scene ?? null,
             startedByStudio: true,
-            httpUrl: studio.http_url ?? null,
             viewerUrl: studio.viewer_url ?? null,
-            realTimeFactor: null,
         });
     }
 

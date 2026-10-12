@@ -49,13 +49,6 @@ interface SimulatedRobot {
 
 const robotTypeLabel = (type: string | null | undefined) => (type ?? 'robot').replaceAll('_', ' ');
 
-/**
- * The robot type and the labels its name does not already say,
- * e.g. "MuJoCo Unitree G1 Follower (experimental) · floating base".
- */
-const robotSummary = (displayName: string, labels: string[]) =>
-    [displayName, ...labels.filter((label) => !displayName.toLowerCase().includes(label.toLowerCase()))].join(' · ');
-
 const StartForm = ({
     robot,
     project_id,
@@ -111,7 +104,10 @@ const StartForm = ({
                 <Flex direction='column' gap='size-200'>
                     <Flex direction='column' gap='size-50'>
                         <Text UNSAFE_className={classes.robotName}>{robot.name}</Text>
-                        <Text UNSAFE_className={classes.detail}>{robotSummary(displayName, launch.labels ?? [])}</Text>
+                        {/* The type only when the user named the robot otherwise: a default name is the type. */}
+                        {robot.name !== displayName ? (
+                            <Text UNSAFE_className={classes.detail}>{displayName}</Text>
+                        ) : null}
                     </Flex>
                     <Picker
                         label='Scene'

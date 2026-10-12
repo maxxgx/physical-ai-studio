@@ -4,7 +4,7 @@
 import { Button, Flex, Heading, Link, Text, toast, View } from '@geti-ui/ui';
 
 import { getApiErrorMessage } from '../../api/errors';
-import { simulationPort, useFooterSimulations } from './use-footer-simulations';
+import { useFooterSimulations } from './use-footer-simulations';
 import { useStopSimulation } from './use-simulation';
 
 import classes from './simulation.module.css';
@@ -25,7 +25,6 @@ export const SimulationsSection = () => {
             </Heading>
             <Flex direction='column' gap='size-100'>
                 {simulations.map((simulation) => {
-                    const port = simulationPort(simulation.httpUrl);
                     return (
                         <Flex
                             key={simulation.key}
@@ -39,11 +38,7 @@ export const SimulationsSection = () => {
                                     {simulation.scene !== null ? ` · ${simulation.scene}` : ''}
                                 </Text>
                                 <Text UNSAFE_className={classes.detail}>
-                                    {simulation.startedByStudio ? 'Studio' : 'external (CLI)'}
-                                    {port !== undefined ? ` · :${port}` : ''}
-                                    {simulation.realTimeFactor !== null
-                                        ? ` · ${simulation.realTimeFactor.toFixed(2)}×`
-                                        : ''}
+                                    {simulation.startedByStudio ? 'Started by Studio' : 'Started outside Studio (CLI)'}
                                 </Text>
                             </Flex>
                             {simulation.startedByStudio ? (

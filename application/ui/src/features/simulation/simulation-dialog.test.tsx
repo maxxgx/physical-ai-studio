@@ -82,7 +82,8 @@ describe('SimulationDialog', () => {
         renderDialog();
 
         expect(await screen.findByText('Sim arm')).toBeInTheDocument();
-        expect(screen.getByText('SO101 Follower (experimental) · 1 arm')).toBeInTheDocument();
+        expect(screen.getByText('SO101 Follower (experimental)')).toBeInTheDocument();
+        expect(screen.queryByText(/1 arm/)).not.toBeInTheDocument();
         expect(screen.getByText('Seed')).not.toBeVisible();
         await user.click(screen.getByRole('button', { name: 'Start simulation' }));
 

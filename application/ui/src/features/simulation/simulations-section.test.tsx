@@ -59,8 +59,8 @@ describe('SimulationsSection', () => {
         renderSection();
 
         expect(await screen.findByText('Sim arm · yahtzee')).toBeInTheDocument();
-        expect(screen.getByText('Studio · :8181 · 0.98×')).toBeInTheDocument();
-        expect(screen.getByText('external (CLI) · :8080 · 0.98×')).toBeInTheDocument();
+        expect(screen.getByText('Started by Studio')).toBeInTheDocument();
+        expect(screen.getByText('Started outside Studio (CLI)')).toBeInTheDocument();
         expect(screen.getByRole('link', { name: 'Open ↗' })).toHaveAttribute('href', 'http://127.0.0.1:8081');
         await user.click(screen.getByRole('button', { name: 'Stop' }));
         await waitFor(() => expect(stopped).toBe(true));
@@ -74,7 +74,6 @@ describe('SimulationsSection', () => {
                     robot_id: 'elsewhere',
                     robot_type: 'MuJoCo_SO101_Follower',
                     scene: 'garment_fold',
-                    http_url: 'http://127.0.0.1:9000',
                     cameras: [],
                 })
             ),
