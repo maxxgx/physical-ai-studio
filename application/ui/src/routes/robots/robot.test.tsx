@@ -106,8 +106,8 @@ describe('Robot page of a simulated robot', () => {
 
         expect(await screen.findByTitle('Sim arm simulation viewer')).toHaveAttribute('src', 'http://127.0.0.1:8081');
         expect(screen.getByText('started by someone else (CLI)')).toBeInTheDocument();
-        expect(screen.getByText('0.99× real time')).toBeInTheDocument();
-        expect(screen.getByText(':8080 / :8081')).toBeInTheDocument();
+        expect(screen.queryByText(/real time/)).not.toBeInTheDocument();
+        expect(screen.queryByText(':8080 / :8081')).not.toBeInTheDocument();
         expect(screen.queryByRole('button', { name: 'Stop simulation' })).not.toBeInTheDocument();
         expect(screen.queryByRole('heading', { name: 'Simulation not running' })).not.toBeInTheDocument();
     });

@@ -14,17 +14,6 @@ import { useSimulation, useStopSimulation } from './use-simulation';
 
 import classes from './simulation.module.css';
 
-const port = (url: string | null | undefined) => {
-    if (url == null) {
-        return undefined;
-    }
-    try {
-        return new URL(url).port || undefined;
-    } catch {
-        return undefined;
-    }
-};
-
 /**
  * The simulation's own 3D viewer (viser) with a thin status bar, in place of the URDF view of a
  * simulated robot. Shows how to start the simulation while it does not run.
@@ -94,7 +83,6 @@ const RunningSimulation = ({
     const stopMutation = useStopSimulation(project_id);
 
     const startedByStudio = simulation.started_by === 'studio';
-    const ports = [port(simulation.http_url), port(simulation.viewer_url)].filter(Boolean).map((p) => `:${p}`);
 
     return (
         <Flex direction='column' width='100%' height='100%'>
@@ -111,14 +99,6 @@ const RunningSimulation = ({
                     {simulation.scene != null ? (
                         <Text UNSAFE_className={classes.detail}>{simulation.scene}</Text>
                     ) : null}
-                    {simulation.real_time_factor != null ? (
-                        <Text UNSAFE_className={classes.detail}>
-                            {simulation.real_time_factor.toFixed(2)}× real time
-                        </Text>
-                    ) : null}
-                    {compact || ports.length === 0 ? null : (
-                        <Text UNSAFE_className={classes.detail}>{ports.join(' / ')}</Text>
-                    )}
                     <Flex marginStart='auto' gap='size-100' alignItems='center'>
                         {simulation.viewer_url != null ? (
                             <Link href={simulation.viewer_url} target='_blank' rel='noreferrer' isQuiet>
