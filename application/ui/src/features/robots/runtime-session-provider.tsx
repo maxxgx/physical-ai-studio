@@ -75,6 +75,8 @@ type RuntimeSessionContextValue = {
     discardEpisode: MutationResult;
     readyForInference: boolean;
     readyForRecording: boolean;
+    /** The follower's simulation does not run; the session connects once it does. */
+    waitingForSimulation: boolean;
     isConnected: boolean;
 };
 
@@ -321,6 +323,7 @@ export const RuntimeSessionProvider = (props: RuntimeSessionProviderProps) => {
                 discardEpisode,
                 readyForInference: state.connected && state.model_loaded,
                 readyForRecording: state.connected && state.dataset_loaded,
+                waitingForSimulation: simulation.isWaiting,
                 isConnected: socket.readyState === 1,
             }}
         >
