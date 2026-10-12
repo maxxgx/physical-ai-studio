@@ -1,6 +1,7 @@
-import { createContext, ReactNode, RefObject, useContext, useRef, useState } from 'react';
+import { createContext, ReactNode, RefObject, useContext, useEffect, useRef, useState } from 'react';
 
 import { useMutation, UseMutationResult, useQueryClient } from '@tanstack/react-query';
+import { Options } from 'react-use-websocket';
 
 import {
     SchemaDatasetOutput,
@@ -10,6 +11,7 @@ import {
 } from '../../api/openapi-spec';
 import useWebSocketWithResponse from '../../components/websockets/use-websocket-with-response';
 import { useProjectId } from '../projects/use-project';
+import { useRobotSimulation } from '../simulation/use-robot-simulation';
 import { FollowerSource, runtimeSocketUrl } from './use-joint-state';
 
 type InferenceDevice = Pick<SchemaInferenceDeviceInfo, 'backend' | 'device'>;
@@ -93,6 +95,36 @@ const handshakeDevices = (environment: SchemaEnvironmentWithRelations) => {
 
 const EPISODE_ACK_TIMEOUT_MS = 60_000;
 
+/**
+ * Holds the session's socket closed while the follower's simulation does not run, and opens it again
+ * once a probe made after the failure finds it running (started by Studio or elsewhere). The socket's
+ * own reconnects give up after a few attempts, sooner than a simulation can take to start.
+ */
+const useWaitForSimulation = (project_id: string, follower_id: string) => {
+    const [waitingSince, setWaitingSince] = useState<number | undefined>(undefined);
+    const waiting = useRef(false);
+    const simulation = useRobotSimulation(project_id, follower_id, waitingSince !== undefined);
+    const isRunning =
+        waitingSince !== undefined && simulation.dataUpdatedAt > waitingSince && simulation.data?.running === true;
+
+    useEffect(() => {
+        if (isRunning) {
+            waiting.current = false;
+            setWaitingSince(undefined);
+        }
+    }, [isRunning]);
+
+    return {
+        /** Read by the socket's reconnect check, which runs outside React's render. */
+        waiting,
+        isWaiting: waitingSince !== undefined,
+        wait: () => {
+            waiting.current = true;
+            setWaitingSince(Date.now());
+        },
+    };
+};
+
 const useRefreshEpisodes = (dataset_id?: string) => {
     const queryClient = useQueryClient();
 
@@ -122,6 +154,7 @@ export const RuntimeSessionProvider = (props: RuntimeSessionProviderProps) => {
     const [dataset, setDataset] = useState<SchemaDatasetOutput | undefined>(props.dataset);
     const devices = handshakeDevices(props.environment);
     const invalidateEpisodesQuery = useRefreshEpisodes(dataset?.id);
+    const simulation = useWaitForSimulation(project_id, devices.follower_id);
 
     const onOpen = () => {
         socket.sendJsonMessage({
@@ -138,8 +171,8 @@ export const RuntimeSessionProvider = (props: RuntimeSessionProviderProps) => {
         }
     };
 
-    const socket = useWebSocketWithResponse(runtimeSocketUrl(project_id, devices.follower_id), {
-        shouldReconnect: () => true,
+    const socketOptions: Options = {
+        shouldReconnect: () => !simulation.waiting.current,
         reconnectAttempts: 5,
         reconnectInterval: 3000,
         onMessage: (event: WebSocketEventMap['message']) => {
@@ -161,7 +194,10 @@ export const RuntimeSessionProvider = (props: RuntimeSessionProviderProps) => {
                     episodes_recorded: next.episodes_recorded ?? 0,
                 });
             }
-            if (message.event === 'error') {
+            if (message.event === 'error' && message.error_code === 'simulation_not_running') {
+                // The follower's panel says so and offers to start it.
+                simulation.wait();
+            } else if (message.event === 'error') {
                 props.onError(typeof message.message === 'string' ? message.message : 'An unexpected error occurred.');
             }
         },
@@ -170,7 +206,12 @@ export const RuntimeSessionProvider = (props: RuntimeSessionProviderProps) => {
             setState(createRuntimeSessionState());
         },
         onOpen,
-    });
+    };
+    const socket = useWebSocketWithResponse(
+        runtimeSocketUrl(project_id, devices.follower_id),
+        socketOptions,
+        !simulation.isWaiting
+    );
 
     const loadModel = useMutation({
         meta: { skipInvalidation: true },
