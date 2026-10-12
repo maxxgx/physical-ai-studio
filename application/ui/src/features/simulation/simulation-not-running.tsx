@@ -50,13 +50,14 @@ export const SimulationNotRunning = ({
     robot,
     message,
     onStart,
-    onRetry,
+    onReconnect,
     isStarting = false,
 }: {
     robot: { name: string };
     message?: string | null;
     onStart?: () => void;
-    onRetry?: () => void;
+    /** Connects again, for after the user started the simulation by hand. */
+    onReconnect?: () => void;
     /** Studio is starting (or stopping) the simulation: offer its progress instead. */
     isStarting?: boolean;
 }) => {
@@ -85,18 +86,23 @@ export const SimulationNotRunning = ({
                             {isStarting ? 'Show progress…' : 'Start simulation…'}
                         </Button>
                     ) : null}
-                    {onRetry !== undefined ? (
-                        <Button variant='secondary' onPress={onRetry}>
-                            Retry
-                        </Button>
-                    ) : null}
                 </Flex>
                 {hint !== undefined ? (
                     <View width='100%' maxWidth='size-6000'>
                         <Disclosure isQuiet>
                             <DisclosureTitle>Or start it yourself</DisclosureTitle>
                             <DisclosurePanel>
-                                <StartCommand {...hint} />
+                                <Flex direction='column' gap='size-100'>
+                                    <StartCommand {...hint} />
+                                    {onReconnect !== undefined ? (
+                                        <Flex alignItems='center' gap='size-100'>
+                                            <Text UNSAFE_className={classes.detail}>Started it?</Text>
+                                            <Button variant='secondary' onPress={onReconnect}>
+                                                Reconnect
+                                            </Button>
+                                        </Flex>
+                                    ) : null}
+                                </Flex>
                             </DisclosurePanel>
                         </Disclosure>
                     </View>

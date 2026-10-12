@@ -74,7 +74,8 @@ describe('Robot page of a simulated robot', () => {
 
         expect(await screen.findByRole('heading', { name: 'Simulation not running' })).toBeInTheDocument();
         expect(screen.getByRole('button', { name: 'Start simulation…' })).toBeInTheDocument();
-        expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+        // It notices a simulation started elsewhere by itself: no Retry.
+        expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
     });
 
     it('offers the progress while Studio starts the simulation', async () => {

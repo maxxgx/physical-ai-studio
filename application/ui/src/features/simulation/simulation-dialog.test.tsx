@@ -26,13 +26,29 @@ const launch: RobotSimulationLaunch = {
     ],
     default_scene: 'single_pick_place',
     max_seed: 4294967295,
-    labels: ['1 arm', 'twin'],
+    labels: ['1 arm', 'experimental'],
 };
 
 const idle: Simulation = { status: 'idle', cameras: [] };
 
 const mockSimulation = (simulation: Simulation) => {
-    server.use(http.get('/api/simulation', () => HttpResponse.json(simulation)));
+    server.use(
+        http.get('/api/simulation', () => HttpResponse.json(simulation)),
+        http.get('/api/robots/catalog', () =>
+            HttpResponse.json([
+                {
+                    type: 'SO101_Follower',
+                    display_name: 'SO101 Follower (experimental)',
+                    role: 'follower',
+                    urdf_path: '',
+                    package_map: {},
+                    joint_map: {},
+                    zero_calibration: null,
+                    simulation: launch,
+                },
+            ])
+        )
+    );
 };
 
 const renderDialog = (close = vi.fn(), onRunning = vi.fn()) => {
@@ -65,8 +81,9 @@ describe('SimulationDialog', () => {
         const user = userEvent.setup();
         renderDialog();
 
-        expect(await screen.findByText('twin')).toBeInTheDocument();
-        expect(screen.getByText('1 arm')).toBeInTheDocument();
+        expect(await screen.findByText('Sim arm')).toBeInTheDocument();
+        expect(screen.getByText('SO101 Follower (experimental) · 1 arm')).toBeInTheDocument();
+        expect(screen.getByText('Seed')).not.toBeVisible();
         await user.click(screen.getByRole('button', { name: 'Start simulation' }));
 
         await waitFor(() =>
@@ -116,6 +133,16 @@ describe('SimulationDialog', () => {
         await user.click(await screen.findByRole('button', { name: 'Start simulation' }));
 
         expect(await screen.findByText(/already running outside Studio/)).toBeInTheDocument();
+    });
+
+    it('keeps the seed under Advanced', async () => {
+        mockSimulation(idle);
+        const user = userEvent.setup();
+        renderDialog();
+
+        await user.click(await screen.findByRole('button', { name: 'Advanced' }));
+
+        expect(await screen.findByRole('radio', { name: 'Fixed' })).toBeInTheDocument();
     });
 
     it('shows the download progress of a starting simulation', async () => {
@@ -226,26 +253,27 @@ describe('SimulationDialog running transition', () => {
 });
 
 describe('SimulationNotRunning', () => {
-    it('offers to start or retry and shows the start command', async () => {
+    it('offers to start, shows the start command and reconnects after a manual start', async () => {
         const onStart = vi.fn();
-        const onRetry = vi.fn();
+        const onReconnect = vi.fn();
         const user = userEvent.setup();
         render(
             <SimulationNotRunning
                 robot={robot}
                 message="No MuJoCo simulation named 'sim' is running. Start it with: uv run physicalai-mujoco start"
                 onStart={onStart}
-                onRetry={onRetry}
+                onReconnect={onReconnect}
             />
         );
 
         expect(await screen.findByRole('heading', { name: 'Simulation not running' })).toBeInTheDocument();
         await user.click(screen.getByRole('button', { name: 'Start simulation…' }));
         expect(onStart).toHaveBeenCalled();
-        await user.click(screen.getByRole('button', { name: 'Retry' }));
-        expect(onRetry).toHaveBeenCalled();
+        expect(screen.queryByRole('button', { name: 'Reconnect' })).not.toBeInTheDocument();
         await user.click(screen.getByRole('button', { name: 'Or start it yourself' }));
         expect(await screen.findByText('uv run physicalai-mujoco start')).toBeInTheDocument();
+        await user.click(screen.getByRole('button', { name: 'Reconnect' }));
+        expect(onReconnect).toHaveBeenCalled();
     });
 
     it('says where to run the command for a simulation on another host', async () => {

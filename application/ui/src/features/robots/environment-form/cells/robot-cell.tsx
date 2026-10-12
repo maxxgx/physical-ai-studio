@@ -84,7 +84,7 @@ const RobotCellContent = ({
     const isTeleoperating = state.follower_source === 'teleop';
 
     if (error && errorCode === 'simulation_not_running') {
-        return <SimulationNotRunning robot={robot} message={error} onStart={onStartSimulation} onRetry={restart} />;
+        return <SimulationNotRunning robot={robot} message={error} onStart={onStartSimulation} onReconnect={restart} />;
     }
 
     if (error) {

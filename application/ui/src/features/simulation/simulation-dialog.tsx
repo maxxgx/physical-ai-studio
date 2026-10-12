@@ -4,12 +4,14 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 
 import {
-    Badge,
     Button,
     ButtonGroup,
     Content,
     Dialog,
     DialogContainer,
+    Disclosure,
+    DisclosurePanel,
+    DisclosureTitle,
     Divider,
     Flex,
     Heading,
@@ -25,6 +27,7 @@ import {
 
 import { getApiErrorMessage } from '../../api/errors';
 import { useProjectId } from '../projects/use-project';
+import { useRobotCatalogQuery } from '../robots/robot-catalog.hooks';
 import { InlineAlert } from '../robots/setup-wizard/shared/inline-alert';
 import { rememberedScene, rememberScene, RobotSimulationLaunch, useRobotSimulationLaunch } from './robot-simulation';
 import {
@@ -45,6 +48,13 @@ interface SimulatedRobot {
 }
 
 const robotTypeLabel = (type: string | null | undefined) => (type ?? 'robot').replaceAll('_', ' ');
+
+/**
+ * The robot type and the labels its name does not already say,
+ * e.g. "MuJoCo Unitree G1 Follower (experimental) · floating base".
+ */
+const robotSummary = (displayName: string, labels: string[]) =>
+    [displayName, ...labels.filter((label) => !displayName.toLowerCase().includes(label.toLowerCase()))].join(' · ');
 
 const StartForm = ({
     robot,
@@ -67,6 +77,8 @@ const StartForm = ({
     const startMutation = useStartSimulation(project_id);
 
     const other = isActiveSimulation(simulation) && simulation.robot_id !== robot.id ? simulation : undefined;
+    const { data: catalog } = useRobotCatalogQuery();
+    const displayName = catalog.find(({ type }) => type === robot.type)?.display_name ?? robotTypeLabel(robot.type);
     const sceneDescription = launch.scenes.find(({ id }) => id === scene)?.description;
 
     const start = () => {
@@ -97,15 +109,9 @@ const StartForm = ({
             <Divider />
             <Content>
                 <Flex direction='column' gap='size-200'>
-                    <Text>Studio starts the simulation and stops it when Studio exits or when you stop it.</Text>
-                    <Flex gap='size-100' alignItems='center' wrap>
-                        <Text UNSAFE_className={classes.label}>Robot</Text>
-                        <Badge variant='info'>{robot.name}</Badge>
-                        {(launch.labels ?? []).map((label) => (
-                            <Badge key={label} variant='neutral'>
-                                {label}
-                            </Badge>
-                        ))}
+                    <Flex direction='column' gap='size-50'>
+                        <Text UNSAFE_className={classes.robotName}>{robot.name}</Text>
+                        <Text UNSAFE_className={classes.detail}>{robotSummary(displayName, launch.labels ?? [])}</Text>
                     </Flex>
                     <Picker
                         label='Scene'
@@ -119,27 +125,32 @@ const StartForm = ({
                         ))}
                     </Picker>
                     {launch.max_seed !== null ? (
-                        <Flex gap='size-200' alignItems='end'>
-                            <RadioGroup
-                                label='Seed'
-                                orientation='horizontal'
-                                value={seedMode}
-                                onChange={(value) => setSeedMode(value === 'fixed' ? 'fixed' : 'random')}
-                            >
-                                <Radio value='random'>Random</Radio>
-                                <Radio value='fixed'>Fixed</Radio>
-                            </RadioGroup>
-                            {seedMode === 'fixed' ? (
-                                <NumberField
-                                    aria-label='Seed value'
-                                    minValue={0}
-                                    maxValue={launch.max_seed}
-                                    step={1}
-                                    value={seed}
-                                    onChange={(value) => setSeed(Number.isNaN(value) ? 0 : value)}
-                                />
-                            ) : null}
-                        </Flex>
+                        <Disclosure isQuiet>
+                            <DisclosureTitle>Advanced</DisclosureTitle>
+                            <DisclosurePanel>
+                                <Flex gap='size-200' alignItems='end'>
+                                    <RadioGroup
+                                        label='Seed'
+                                        orientation='horizontal'
+                                        value={seedMode}
+                                        onChange={(value) => setSeedMode(value === 'fixed' ? 'fixed' : 'random')}
+                                    >
+                                        <Radio value='random'>Random</Radio>
+                                        <Radio value='fixed'>Fixed</Radio>
+                                    </RadioGroup>
+                                    {seedMode === 'fixed' ? (
+                                        <NumberField
+                                            aria-label='Seed value'
+                                            minValue={0}
+                                            maxValue={launch.max_seed}
+                                            step={1}
+                                            value={seed}
+                                            onChange={(value) => setSeed(Number.isNaN(value) ? 0 : value)}
+                                        />
+                                    ) : null}
+                                </Flex>
+                            </DisclosurePanel>
+                        </Disclosure>
                     ) : null}
                     {other !== undefined ? (
                         <InlineAlert variant='warning'>

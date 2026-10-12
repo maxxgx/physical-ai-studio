@@ -44,7 +44,7 @@ export const SimulationViewer = ({
     compact?: boolean;
 }) => {
     const { project_id } = useProjectId();
-    const { data: simulation, isPending, refetch } = useRobotSimulation(project_id, robot.id);
+    const { data: simulation, isPending } = useRobotSimulation(project_id, robot.id);
     const { data: studioSimulation } = useSimulation();
     // The dialog is rendered in every state below: it has to outlive the "not running" view.
     const simulationDialog = useSimulationDialog(robot);
@@ -60,14 +60,7 @@ export const SimulationViewer = ({
         const isStarting =
             studioSimulation?.robot_id === robot.id &&
             (studioSimulation.status === 'starting' || studioSimulation.status === 'stopping');
-        content = (
-            <SimulationNotRunning
-                robot={robot}
-                isStarting={isStarting}
-                onStart={simulationDialog.open}
-                onRetry={() => void refetch()}
-            />
-        );
+        content = <SimulationNotRunning robot={robot} isStarting={isStarting} onStart={simulationDialog.open} />;
     } else {
         content = (
             <RunningSimulation robot={robot} simulation={simulation} actions={actions} compact={compact}>
