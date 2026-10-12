@@ -11,6 +11,7 @@ import {
 } from '../../api/openapi-spec';
 import useWebSocketWithResponse from '../../components/websockets/use-websocket-with-response';
 import { useProjectId } from '../projects/use-project';
+import { useRobotSimulationLaunch } from '../simulation/robot-simulation';
 import { useRobotSimulation } from '../simulation/use-robot-simulation';
 import { FollowerSource, runtimeSocketUrl } from './use-joint-state';
 
@@ -98,31 +99,40 @@ const handshakeDevices = (environment: SchemaEnvironmentWithRelations) => {
 const EPISODE_ACK_TIMEOUT_MS = 60_000;
 
 /**
- * Holds the session's socket closed while the follower's simulation does not run, and opens it again
- * once a probe made after the failure finds it running (started by Studio or elsewhere). The socket's
- * own reconnects give up after a few attempts, sooner than a simulation can take to start.
+ * Keeps the session's socket closed while a simulated follower's simulation does not run, so the
+ * session (and its model or dataset) only starts once it does. The simulation is checked before the
+ * first connect and again after a failure: a probe made after that moment has to find it running.
+ * Without this the socket's own reconnects give up sooner than a simulation can take to start.
  */
-const useWaitForSimulation = (project_id: string, follower_id: string) => {
-    const [waitingSince, setWaitingSince] = useState<number | undefined>(undefined);
-    const waiting = useRef(false);
-    const simulation = useRobotSimulation(project_id, follower_id, waitingSince !== undefined);
-    const isRunning =
-        waitingSince !== undefined && simulation.dataUpdatedAt > waitingSince && simulation.data?.running === true;
+const useWaitForSimulation = (project_id: string, follower: { id: string; type: string }) => {
+    const isSimulated = useRobotSimulationLaunch(follower.type) !== null;
+    const [failedAt, setFailedAt] = useState<number | undefined>(undefined);
+    // Once open, a session is not closed for a probe: losing the simulation shows up in the session.
+    const [opened, setOpened] = useState(false);
+    const failed = useRef(false);
+    const simulation = useRobotSimulation(project_id, follower.id, isSimulated);
+    // A cached result from before this page (or before the failure) may still say running.
+    const probedAt = simulation.isFetchedAfterMount ? simulation.dataUpdatedAt : 0;
+    const isRunning = simulation.data?.running === true && probedAt > (failedAt ?? 0);
 
     useEffect(() => {
-        if (isRunning) {
-            waiting.current = false;
-            setWaitingSince(undefined);
+        if (isRunning && failedAt !== undefined) {
+            failed.current = false;
+            setFailedAt(undefined);
         }
-    }, [isRunning]);
+    }, [isRunning, failedAt]);
 
     return {
         /** Read by the socket's reconnect check, which runs outside React's render. */
-        waiting,
-        isWaiting: waitingSince !== undefined,
-        wait: () => {
-            waiting.current = true;
-            setWaitingSince(Date.now());
+        failed,
+        canConnect: !isSimulated || isRunning || (opened && failedAt === undefined),
+        /** Known not to run: offer to start it. Unknown until the first probe after mount. */
+        isWaiting: failedAt !== undefined || (isSimulated && probedAt > 0 && !isRunning),
+        open: () => setOpened(true),
+        fail: () => {
+            failed.current = true;
+            setOpened(false);
+            setFailedAt(Date.now());
         },
     };
 };
@@ -155,10 +165,12 @@ export const RuntimeSessionProvider = (props: RuntimeSessionProviderProps) => {
     const [inferenceDevice, setInferenceDevice] = useState<InferenceDevice | undefined>(props.inferenceDevice);
     const [dataset, setDataset] = useState<SchemaDatasetOutput | undefined>(props.dataset);
     const devices = handshakeDevices(props.environment);
+    const followerType = props.environment.robots?.[0]?.robot.type ?? '';
     const invalidateEpisodesQuery = useRefreshEpisodes(dataset?.id);
-    const simulation = useWaitForSimulation(project_id, devices.follower_id);
+    const simulation = useWaitForSimulation(project_id, { id: devices.follower_id, type: followerType });
 
     const onOpen = () => {
+        simulation.open();
         socket.sendJsonMessage({
             follower_id: devices.follower_id,
             leader_id: devices.leader_id,
@@ -174,7 +186,7 @@ export const RuntimeSessionProvider = (props: RuntimeSessionProviderProps) => {
     };
 
     const socketOptions: Options = {
-        shouldReconnect: () => !simulation.waiting.current,
+        shouldReconnect: () => !simulation.failed.current,
         reconnectAttempts: 5,
         reconnectInterval: 3000,
         onMessage: (event: WebSocketEventMap['message']) => {
@@ -198,7 +210,7 @@ export const RuntimeSessionProvider = (props: RuntimeSessionProviderProps) => {
             }
             if (message.event === 'error' && message.error_code === 'simulation_not_running') {
                 // The follower's panel says so and offers to start it.
-                simulation.wait();
+                simulation.fail();
             } else if (message.event === 'error') {
                 props.onError(typeof message.message === 'string' ? message.message : 'An unexpected error occurred.');
             }
@@ -212,7 +224,7 @@ export const RuntimeSessionProvider = (props: RuntimeSessionProviderProps) => {
     const socket = useWebSocketWithResponse(
         runtimeSocketUrl(project_id, devices.follower_id),
         socketOptions,
-        !simulation.isWaiting
+        simulation.canConnect
     );
 
     const loadModel = useMutation({
