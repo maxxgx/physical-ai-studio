@@ -80,19 +80,3 @@ export const rememberScene = (robotId: string, scene: string) => {
         // Remembering the scene is a convenience only.
     }
 };
-
-export interface StartCommandHint {
-    command: string;
-    /** The machine to run it on, when the robot attaches to a simulation on another host. */
-    host?: string;
-}
-
-/** The "start it yourself" command from a simulation-not-running message, if it has one. */
-export const startCommandFromMessage = (message: string | null | undefined): StartCommandHint | undefined => {
-    const match = message?.match(/Start it(?: on (\S+))? with: (.+)$/);
-    if (match === null || match === undefined) {
-        return undefined;
-    }
-
-    return { command: match[2].trim(), ...(match[1] !== undefined ? { host: match[1] } : {}) };
-};

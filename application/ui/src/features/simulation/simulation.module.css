@@ -41,21 +41,6 @@
     word-break: break-word;
 }
 
-.command {
-    display: flex;
-    align-items: center;
-    gap: var(--spectrum-global-dimension-size-100);
-    background: var(--spectrum-global-color-gray-75);
-    border-radius: var(--spectrum-global-dimension-size-50);
-    padding: var(--spectrum-global-dimension-size-100);
-}
-
-.command code {
-    flex: 1;
-    font-size: var(--spectrum-global-dimension-font-size-75);
-    word-break: break-all;
-}
-
 .chips {
     display: flex;
     flex-wrap: wrap;

@@ -3,13 +3,7 @@
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import {
-    rememberedScene,
-    rememberScene,
-    RobotSimulationLaunch,
-    robotSimulationStatus,
-    startCommandFromMessage,
-} from './robot-simulation';
+import { rememberedScene, rememberScene, RobotSimulationLaunch, robotSimulationStatus } from './robot-simulation';
 import { Simulation } from './use-simulation';
 
 const launch: RobotSimulationLaunch = {
@@ -49,29 +43,6 @@ describe('robotSimulationStatus', () => {
             'offline'
         );
         expect(robotSimulationStatus('robot-a', undefined, 'unknown')).toBe('unknown');
-    });
-});
-
-describe('startCommandFromMessage', () => {
-    it('extracts the command from a local start hint', () => {
-        expect(
-            startCommandFromMessage(
-                "No MuJoCo simulation named 'sim' is running. Start it with: uv run physicalai-mujoco start --profile so101"
-            )
-        ).toEqual({ command: 'uv run physicalai-mujoco start --profile so101' });
-    });
-
-    it('extracts the command and the host to run it on from a remote start hint', () => {
-        expect(
-            startCommandFromMessage(
-                "No MuJoCo simulation named 'sim' is running. Start it on box with: uv run x --allow-remote"
-            )
-        ).toEqual({ command: 'uv run x --allow-remote', host: 'box' });
-    });
-
-    it('returns nothing without a hint', () => {
-        expect(startCommandFromMessage("No MuJoCo simulation named 'sim' is running.")).toBeUndefined();
-        expect(startCommandFromMessage(undefined)).toBeUndefined();
     });
 });
 

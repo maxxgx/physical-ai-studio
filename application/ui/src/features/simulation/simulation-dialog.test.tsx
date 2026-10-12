@@ -254,42 +254,17 @@ describe('SimulationDialog running transition', () => {
 });
 
 describe('SimulationNotRunning', () => {
-    it('offers to start, shows the start command and reconnects after a manual start', async () => {
+    it('offers to start and to reconnect after a start outside Studio', async () => {
         const onStart = vi.fn();
         const onReconnect = vi.fn();
         const user = userEvent.setup();
-        render(
-            <SimulationNotRunning
-                robot={robot}
-                message="No MuJoCo simulation named 'sim' is running. Start it with: uv run physicalai-mujoco start"
-                onStart={onStart}
-                onReconnect={onReconnect}
-            />
-        );
+        render(<SimulationNotRunning robot={robot} onStart={onStart} onReconnect={onReconnect} />);
 
         expect(await screen.findByRole('heading', { name: 'Simulation not running' })).toBeInTheDocument();
         await user.click(screen.getByRole('button', { name: 'Start simulation…' }));
         expect(onStart).toHaveBeenCalled();
-        expect(screen.queryByRole('button', { name: 'Reconnect' })).not.toBeInTheDocument();
-        await user.click(screen.getByRole('button', { name: 'Or start it yourself' }));
-        expect(await screen.findByText('uv run physicalai-mujoco start')).toBeInTheDocument();
         await user.click(screen.getByRole('button', { name: 'Reconnect' }));
         expect(onReconnect).toHaveBeenCalled();
-    });
-
-    it('says where to run the command for a simulation on another host', async () => {
-        render(
-            <SimulationNotRunning
-                robot={robot}
-                message="No MuJoCo simulation named 'sim' is running. Start it on box with: uv run x --allow-remote"
-            />
-        );
-        const user = userEvent.setup();
-
-        await user.click(await screen.findByRole('button', { name: 'Or start it yourself' }));
-
-        expect(await screen.findByText('Run it on box:')).toBeInTheDocument();
-        expect(screen.getByText('uv run x --allow-remote')).toBeInTheDocument();
     });
 
     it('offers the progress of a simulation that is starting', async () => {
@@ -304,6 +279,6 @@ describe('SimulationNotRunning', () => {
 
         expect(await screen.findByRole('heading', { name: 'Simulation not running' })).toBeInTheDocument();
         expect(screen.queryByRole('button', { name: 'Start simulation…' })).not.toBeInTheDocument();
-        expect(screen.queryByText('Or start it yourself')).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Reconnect' })).not.toBeInTheDocument();
     });
 });
