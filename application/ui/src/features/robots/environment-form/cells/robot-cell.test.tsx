@@ -33,13 +33,16 @@ const ROBOT_ID = 'robot-1';
 describe('RobotCell of a simulated follower', () => {
     it('shows the not-running panel and reconnects once Studio runs the simulation', async () => {
         server.use(
-            http.get('/api/projects/{project_id}/robots/{robot_id}', () =>
-                HttpResponse.json({
-                    id: ROBOT_ID,
-                    name: 'Sim arm',
-                    type: 'SO101_Follower',
-                    payload: { connection_string: '', serial_number: '' },
-                })
+            // Cast the whole response: the robot union has more than 25 members, past what TypeScript relates member by member.
+            http.get(
+                '/api/projects/{project_id}/robots/{robot_id}',
+                () =>
+                    HttpResponse.json({
+                        id: ROBOT_ID,
+                        name: 'Sim arm',
+                        type: 'SO101_Follower',
+                        payload: { connection_string: '', serial_number: '' },
+                    }) as never
             ),
             http.get('/api/simulation', () => HttpResponse.json({ status: 'idle', cameras: [] }))
         );

@@ -36,7 +36,8 @@ const mockSimulatedRobot = (connection_status: 'online' | 'offline', simulation:
             })
         ),
         // After /online: `{robot_id}` would match it too.
-        http.get('/api/projects/{project_id}/robots/{robot_id}', () => HttpResponse.json(robot)),
+        // Cast the whole response: the robot union has more than 25 members, past what TypeScript relates member by member.
+        http.get('/api/projects/{project_id}/robots/{robot_id}', () => HttpResponse.json(robot) as never),
         http.get('/api/simulation', () => HttpResponse.json({ cameras: [], ...simulation } as never)),
         http.get('/api/robots/catalog', () =>
             HttpResponse.json([

@@ -450,6 +450,11 @@ EXPOSE 8000
 FROM runtime-base AS physical-ai-studio-cpu
 
 ARG GIT_SHA=unknown
+ARG GIT_COMMIT_DATE=unknown
+ARG GIT_TAG=
+ENV STUDIO_GIT_SHA="${GIT_SHA}" \
+    STUDIO_GIT_COMMIT_DATE="${GIT_COMMIT_DATE}" \
+    STUDIO_GIT_TAG="${GIT_TAG}"
 LABEL org.opencontainers.image.source="https://github.com/open-edge-platform/physical-ai-studio" \
       org.opencontainers.image.description="Physical AI Studio is an end-to-end framework for teaching robots to perform tasks through imitation learning from human demonstrations" \
       org.opencontainers.image.revision="${GIT_SHA}"
@@ -511,6 +516,11 @@ SHELL ["/bin/sh", "-c"]
 FROM runtime-xpu AS physical-ai-studio-xpu
 
 ARG GIT_SHA=unknown
+ARG GIT_COMMIT_DATE=unknown
+ARG GIT_TAG=
+ENV STUDIO_GIT_SHA="${GIT_SHA}" \
+    STUDIO_GIT_COMMIT_DATE="${GIT_COMMIT_DATE}" \
+    STUDIO_GIT_TAG="${GIT_TAG}"
 LABEL org.opencontainers.image.source="https://github.com/open-edge-platform/physical-ai-studio" \
       org.opencontainers.image.description="Physical AI Studio is an end-to-end framework for teaching robots to perform tasks through imitation learning from human demonstrations" \
       org.opencontainers.image.revision="${GIT_SHA}"
@@ -570,6 +580,11 @@ ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics
 FROM runtime-cuda AS physical-ai-studio-cuda
 
 ARG GIT_SHA=unknown
+ARG GIT_COMMIT_DATE=unknown
+ARG GIT_TAG=
+ENV STUDIO_GIT_SHA="${GIT_SHA}" \
+    STUDIO_GIT_COMMIT_DATE="${GIT_COMMIT_DATE}" \
+    STUDIO_GIT_TAG="${GIT_TAG}"
 LABEL org.opencontainers.image.source="https://github.com/open-edge-platform/physical-ai-studio" \
       org.opencontainers.image.description="Physical AI Studio is an end-to-end framework for teaching robots to perform tasks through imitation learning from human demonstrations" \
       org.opencontainers.image.revision="${GIT_SHA}"
@@ -598,6 +613,11 @@ CMD ["./run.sh"]
 
 FROM runtime-base AS physical-ai-studio-cpu-redistributable
 ARG GIT_SHA=unknown
+ARG GIT_COMMIT_DATE=unknown
+ARG GIT_TAG=
+ENV STUDIO_GIT_SHA="${GIT_SHA}" \
+    STUDIO_GIT_COMMIT_DATE="${GIT_COMMIT_DATE}" \
+    STUDIO_GIT_TAG="${GIT_TAG}"
 LABEL org.opencontainers.image.source="https://github.com/open-edge-platform/physical-ai-studio" \
       org.opencontainers.image.description="Physical AI Studio is an end-to-end framework for teaching robots to perform tasks through imitation learning from human demonstrations" \
       org.opencontainers.image.revision="${GIT_SHA}"
@@ -620,6 +640,11 @@ CMD ["./run.sh"]
 
 FROM runtime-xpu AS physical-ai-studio-xpu-redistributable
 ARG GIT_SHA=unknown
+ARG GIT_COMMIT_DATE=unknown
+ARG GIT_TAG=
+ENV STUDIO_GIT_SHA="${GIT_SHA}" \
+    STUDIO_GIT_COMMIT_DATE="${GIT_COMMIT_DATE}" \
+    STUDIO_GIT_TAG="${GIT_TAG}"
 LABEL org.opencontainers.image.source="https://github.com/open-edge-platform/physical-ai-studio" \
       org.opencontainers.image.description="Physical AI Studio is an end-to-end framework for teaching robots to perform tasks through imitation learning from human demonstrations" \
       org.opencontainers.image.revision="${GIT_SHA}"
@@ -642,6 +667,11 @@ CMD ["./run.sh"]
 
 FROM runtime-cuda AS physical-ai-studio-cuda-redistributable
 ARG GIT_SHA=unknown
+ARG GIT_COMMIT_DATE=unknown
+ARG GIT_TAG=
+ENV STUDIO_GIT_SHA="${GIT_SHA}" \
+    STUDIO_GIT_COMMIT_DATE="${GIT_COMMIT_DATE}" \
+    STUDIO_GIT_TAG="${GIT_TAG}"
 LABEL org.opencontainers.image.source="https://github.com/open-edge-platform/physical-ai-studio" \
       org.opencontainers.image.description="Physical AI Studio is an end-to-end framework for teaching robots to perform tasks through imitation learning from human demonstrations" \
       org.opencontainers.image.revision="${GIT_SHA}"

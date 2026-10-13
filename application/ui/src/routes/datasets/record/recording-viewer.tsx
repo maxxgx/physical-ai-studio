@@ -21,7 +21,7 @@ import { RobotControlView } from '../../../features/robots/robot-control/robot-c
 import { RobotModelsProvider } from '../../../features/robots/robot-models-context';
 import { useRuntimeSession } from '../../../features/robots/runtime-session-provider';
 import { SessionSimulationNotRunning } from '../../../features/simulation/session-simulation-not-running';
-import { paths } from '../../../router';
+import { paths } from '../../../paths';
 
 import classes from './recording-viewer.module.css';
 

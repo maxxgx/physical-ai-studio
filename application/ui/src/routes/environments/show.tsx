@@ -5,7 +5,7 @@ import { Preview } from '../../features/robots/environment-form/preview';
 import { EnvironmentForm, EnvironmentFormProvider } from '../../features/robots/environment-form/provider';
 import { useEnvironment } from '../../features/robots/use-environment';
 import { SimulationCamerasPrompt } from '../../features/simulation/simulation-cameras-prompt';
-import { paths } from '../../router';
+import { paths } from '../../paths';
 
 const Header = () => {
     const { project_id } = useProjectId();
