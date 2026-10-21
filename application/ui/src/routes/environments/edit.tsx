@@ -7,7 +7,6 @@ import {
 } from '../../features/robots/environment-form/provider';
 import { UpdateEnvironmentForm } from '../../features/robots/environment-form/update-form';
 import { useEnvironment } from '../../features/robots/use-environment';
-import { SimulationCamerasPrompt } from '../../features/simulation/simulation-cameras-prompt';
 
 export const Edit = () => {
     const environment = useEnvironment();
@@ -31,19 +30,9 @@ export const Edit = () => {
     };
 
     return (
-        // Keyed by the cameras: the form state is built once, and cameras added from the
-        // simulation prompt need new preview panels and a session that opens them.
-        <EnvironmentFormProvider
-            key={environmentForm.cameras.map(({ camera_id }) => camera_id).join()}
-            environment={environmentForm}
-        >
+        <EnvironmentFormProvider environment={environmentForm}>
             <FormPreviewLayout
-                form={
-                    <>
-                        <SimulationCamerasPrompt environment={environment} />
-                        <UpdateEnvironmentForm />
-                    </>
-                }
+                form={<UpdateEnvironmentForm />}
                 preview={<Preview />}
                 previewProps={{ backgroundColor: 'gray-50' }}
             />
