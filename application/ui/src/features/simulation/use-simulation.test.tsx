@@ -1,9 +1,9 @@
 // Copyright (C) 2026 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
+import { afterEach, describe, expect, it, rs } from '@rstest/core';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { act, renderHook } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { $api } from '../../api/client';
 import { createQueryClient } from '../../query-client/query-client';
@@ -50,12 +50,12 @@ const renderUpdates = () => {
 describe('useSimulationUpdates', () => {
     afterEach(() => {
         FakeEventSource.instances = [];
-        vi.unstubAllGlobals();
-        vi.useRealTimers();
+        rs.unstubAllGlobals();
+        rs.useRealTimers();
     });
 
     it('writes every event into the simulation query', () => {
-        vi.stubGlobal('EventSource', FakeEventSource);
+        rs.stubGlobal('EventSource', FakeEventSource);
         const { queryClient, events } = renderUpdates();
 
         act(() => events().emit({ status: 'running', robot_id: 'robot-1' }));
@@ -68,9 +68,9 @@ describe('useSimulationUpdates', () => {
     });
 
     it('refreshes the robots online status when the simulation status changes', () => {
-        vi.stubGlobal('EventSource', FakeEventSource);
+        rs.stubGlobal('EventSource', FakeEventSource);
         const { queryClient, events } = renderUpdates();
-        const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+        const invalidate = rs.spyOn(queryClient, 'invalidateQueries');
 
         act(() => events().emit({ status: 'starting' }));
         act(() => events().emit({ status: 'starting', phase: 'load' }));
@@ -81,14 +81,14 @@ describe('useSimulationUpdates', () => {
     });
 
     it('opens a new stream after the browser gave up on one, and closes it on unmount', () => {
-        vi.useFakeTimers();
-        vi.stubGlobal('EventSource', FakeEventSource);
+        rs.useFakeTimers();
+        rs.stubGlobal('EventSource', FakeEventSource);
         const { view, events } = renderUpdates();
         const first = events();
 
         first.readyState = FakeEventSource.CLOSED;
         act(() => first.onerror?.());
-        act(() => vi.advanceTimersByTime(3_000));
+        act(() => rs.advanceTimersByTime(3_000));
 
         expect(FakeEventSource.instances).toHaveLength(2);
         view.unmount();

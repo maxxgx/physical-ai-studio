@@ -1,9 +1,9 @@
 // Copyright (C) 2026 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
+import { describe, expect, it, rs } from '@rstest/core';
 import { act, screen, waitFor } from '@testing-library/react';
 import { HttpResponse } from 'msw';
-import { describe, expect, it, vi } from 'vitest';
 
 import { $api } from '../../../../api/client';
 import { http } from '../../../../api/utils';
@@ -12,19 +12,19 @@ import { createQueryClient } from '../../../../query-client/query-client';
 import { render } from '../../../../test-utils/render';
 import { RobotCell } from './robot-cell';
 
-const restart = vi.fn();
+const restart = rs.fn();
 
-vi.mock('../../use-joint-state', () => ({
+rs.mock('../../use-joint-state', () => ({
     useJointState: () => ({
         joints: [],
         state: { connected: false, has_leader: false, follower_source: 'hold' },
         error: "No MuJoCo simulation named 'sim' is running. Start it with: uv run physicalai-mujoco start",
         errorCode: 'simulation_not_running',
         warning: null,
-        setFollowerSource: vi.fn(),
+        setFollowerSource: rs.fn(),
         restart,
     }),
-    useSynchronizeModelJoints: vi.fn(),
+    useSynchronizeModelJoints: rs.fn(),
 }));
 
 const PROJECT_ID = 'project-1';

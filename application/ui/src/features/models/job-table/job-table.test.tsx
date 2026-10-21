@@ -1,7 +1,7 @@
+import { rs } from '@rstest/core';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse } from 'msw';
-import { vi } from 'vitest';
 
 import { SchemaTrainJob } from '../../../api/openapi-spec';
 import { http } from '../../../api/utils';
@@ -55,7 +55,7 @@ const environment = getMockedEnvironment();
 
 const renderTrainingRow = (
     trainJobOverride: Partial<SchemaTrainJob> = {},
-    { onInterrupt = vi.fn(), onViewLogs = vi.fn() }: { onInterrupt?: () => void; onViewLogs?: () => void } = {}
+    { onInterrupt = rs.fn(), onViewLogs = rs.fn() }: { onInterrupt?: () => void; onViewLogs?: () => void } = {}
 ) => {
     const trainJob: SchemaTrainJob = { ...localJob, ...trainJobOverride };
     return render(<TrainingRow trainJob={trainJob} onInterrupt={onInterrupt} onViewLogs={onViewLogs} />);
@@ -63,11 +63,11 @@ const renderTrainingRow = (
 
 describe('TrainingRow', () => {
     beforeAll(() => {
-        vi.stubGlobal('EventSource', ImmediatelyClosingEventSource);
+        rs.stubGlobal('EventSource', ImmediatelyClosingEventSource);
     });
 
     afterAll(() => {
-        vi.unstubAllGlobals();
+        rs.unstubAllGlobals();
     });
 
     beforeEach(() => {
@@ -375,8 +375,8 @@ describe('TrainingRow', () => {
 
         render(
             <>
-                <TrainingRow trainJob={localJob} onInterrupt={vi.fn()} onViewLogs={vi.fn()} />
-                <TrainingRow trainJob={secondJob} onInterrupt={vi.fn()} onViewLogs={vi.fn()} />
+                <TrainingRow trainJob={localJob} onInterrupt={rs.fn()} onViewLogs={rs.fn()} />
+                <TrainingRow trainJob={secondJob} onInterrupt={rs.fn()} onViewLogs={rs.fn()} />
             </>
         );
 
@@ -409,9 +409,38 @@ describe('TrainingRow', () => {
         expect(screen.getByRole('menuitem', { name: 'Delete' }).closest('[aria-disabled]')).toBeNull();
     });
 
-    it('renders the Stop button only when status is running', () => {
-        renderTrainingRow({ status: 'running' });
-        expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument();
+    it.each(['running', 'pending'] as const)('allows stopping a %s job', async (status) => {
+        const user = userEvent.setup();
+        const onInterrupt = rs.fn();
+        renderTrainingRow({ status }, { onInterrupt });
+        await user.click(screen.getByRole('button', { name: 'Stop' }));
+        await user.click(screen.getByRole('button', { name: 'Stop' }));
+        expect(onInterrupt).toHaveBeenCalledOnce();
+    });
+
+    it('warns that stopping an unreachable remote job may not stop the remote work', async () => {
+        const user = userEvent.setup();
+        renderTrainingRow({
+            status: 'running',
+            payload: getMockedTrainJobPayload({ training_target: 'remote', remote_trainer_id: remoteTrainer.id }),
+        });
+        await user.click(screen.getByRole('button', { name: 'Stop' }));
+        expect(screen.getByText(/remote work may continue/i)).toBeInTheDocument();
+    });
+
+    it('warns that a pending remote reattachment may already be running', async () => {
+        const user = userEvent.setup();
+        renderTrainingRow({
+            status: 'pending',
+            payload: getMockedTrainJobPayload({
+                training_target: 'remote',
+                remote_trainer_id: remoteTrainer.id,
+                remote_job_id: '86cf47a8-7b18-4236-98b4-2980eafcfd2b',
+            }),
+        });
+        await user.click(screen.getByRole('button', { name: 'Stop' }));
+        expect(screen.getByText(/remote work may continue/i)).toBeInTheDocument();
+        expect(screen.queryByText('This job will not start.')).not.toBeInTheDocument();
     });
 
     it('renders no Stop button when status is not running', () => {

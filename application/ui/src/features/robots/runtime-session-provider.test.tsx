@@ -1,9 +1,9 @@
 // Copyright (C) 2026 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
+import { beforeEach, describe, expect, it, rs } from '@rstest/core';
 import { act, screen } from '@testing-library/react';
 import { Options } from 'react-use-websocket';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import useWebSocketWithResponse from '../../components/websockets/use-websocket-with-response';
 import { getMockedEnvironment } from '../../test-utils/mocks/mock-environment';
@@ -12,9 +12,9 @@ import { useRobotSimulationLaunch } from '../simulation/robot-simulation';
 import { useRobotSimulation } from '../simulation/use-robot-simulation';
 import { RuntimeSessionProvider, useRuntimeSession } from './runtime-session-provider';
 
-vi.mock('../../components/websockets/use-websocket-with-response', () => ({ default: vi.fn() }));
-vi.mock('../simulation/use-robot-simulation', () => ({ useRobotSimulation: vi.fn() }));
-vi.mock('../simulation/robot-simulation', () => ({ useRobotSimulationLaunch: vi.fn() }));
+rs.mock('../../components/websockets/use-websocket-with-response', () => ({ default: rs.fn() }));
+rs.mock('../simulation/use-robot-simulation', () => ({ useRobotSimulation: rs.fn() }));
+rs.mock('../simulation/robot-simulation', () => ({ useRobotSimulationLaunch: rs.fn() }));
 
 const environment = getMockedEnvironment({
     robots: [
@@ -26,7 +26,7 @@ const environment = getMockedEnvironment({
 });
 
 const lastSocket = () => {
-    const calls = vi.mocked(useWebSocketWithResponse).mock.calls;
+    const calls = rs.mocked(useWebSocketWithResponse).mock.calls;
     const [, options, connect] = calls[calls.length - 1];
     return { options: options as Options, connect };
 };
@@ -38,7 +38,7 @@ const open = () => act(() => lastSocket().options.onOpen?.({} as Event));
 
 /** The robot simulation probe as `useRobotSimulation` reports it; `at` is when it was made. */
 const probe = (running: boolean | undefined, at = Date.now()) =>
-    vi.mocked(useRobotSimulation).mockReturnValue({
+    rs.mocked(useRobotSimulation).mockReturnValue({
         data: running === undefined ? undefined : { running },
         dataUpdatedAt: running === undefined ? 0 : at,
         isFetchedAfterMount: running !== undefined,
@@ -47,7 +47,7 @@ const probe = (running: boolean | undefined, at = Date.now()) =>
 const Waiting = () => <div>{useRuntimeSession().waitingForSimulation ? 'waiting' : 'not waiting'}</div>;
 
 const renderProvider = async () => {
-    const onError = vi.fn();
+    const onError = rs.fn();
     const view = render(
         <RuntimeSessionProvider environment={environment} onError={onError}>
             <Waiting />
@@ -60,12 +60,12 @@ const renderProvider = async () => {
 
 describe('RuntimeSessionProvider', () => {
     beforeEach(() => {
-        vi.mocked(useWebSocketWithResponse).mockReturnValue({
-            sendJsonMessage: vi.fn(),
-            sendJsonMessageAndWait: vi.fn(),
+        rs.mocked(useWebSocketWithResponse).mockReturnValue({
+            sendJsonMessage: rs.fn(),
+            sendJsonMessageAndWait: rs.fn(),
             readyState: 1,
         } as never);
-        vi.mocked(useRobotSimulationLaunch).mockReturnValue({} as never);
+        rs.mocked(useRobotSimulationLaunch).mockReturnValue({} as never);
         probe(undefined);
     });
 
@@ -86,7 +86,7 @@ describe('RuntimeSessionProvider', () => {
     });
 
     it('does not trust a cached probe from before the page opened', async () => {
-        vi.mocked(useRobotSimulation).mockReturnValue({
+        rs.mocked(useRobotSimulation).mockReturnValue({
             data: { running: true },
             dataUpdatedAt: 1,
             isFetchedAfterMount: false,
@@ -127,10 +127,10 @@ describe('RuntimeSessionProvider', () => {
     });
 
     it('connects a real follower at once and reports its errors', async () => {
-        vi.mocked(useRobotSimulationLaunch).mockReturnValue(null);
+        rs.mocked(useRobotSimulationLaunch).mockReturnValue(null);
         const { onError } = await renderProvider();
         expect(lastSocket().connect).toBe(true);
-        expect(vi.mocked(useRobotSimulation)).toHaveBeenLastCalledWith('project-1', 'follower-1', false);
+        expect(rs.mocked(useRobotSimulation)).toHaveBeenLastCalledWith('project-1', 'follower-1', false);
 
         await receive({ event: 'error', message: 'Robot unplugged', error_code: 'robot_connection_failed' });
 

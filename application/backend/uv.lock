@@ -60,16 +60,19 @@ exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for 
 exclude-newer-span = "P7D"
 
 [options.exclude-newer-package]
-openvino-tokenizers = false
-pynokhwa = false
+physicalai-mujoco-plugin = false
+physicalai-trossen-plugin = false
 physicalai-bimanual-so101-plugin = false
+openvino-tokenizers = false
 markupsafe = false
 openvino = false
 lightning = false
 physicalai-rebot-b601-plugin = false
+pynokhwa = false
 pyrealsense2 = { timestamp = "0001-01-01T00:00:00Z", span = "P1D" }
 physicalai-lerobot-plugin = false
 physicalai-studio-plugin = false
+physicalai-so101-plugin = false
 physicalai-stararm-plugin = false
 
 [manifest]
@@ -3120,8 +3123,8 @@ wheels = [
 
 [[package]]
 name = "physicalai"
-version = "0.2.1.dev71+gf9fd691"
-source = { git = "https://github.com/openvinotoolkit/physicalai.git?branch=max%2Fmujoco-generic-robots#f9fd6915399fc7e4b9909309983f2044702ba035" }
+version = "0.3.1.dev22+g0ca5b8e"
+source = { git = "https://github.com/openvinotoolkit/physicalai.git?rev=0ca5b8e06c132aa2c83aa7a92bc6dfb79a7b231f#0ca5b8e06c132aa2c83aa7a92bc6dfb79a7b231f" }
 dependencies = [
     { name = "huggingface-hub" },
     { name = "jsonargparse", extra = ["shtab", "signatures"] },
@@ -3151,10 +3154,6 @@ capture = [
     { name = "pyrealsense2", marker = "sys_platform != 'darwin' or (extra == 'extra-17-physicalai-studio-cpu' and extra == 'extra-17-physicalai-studio-cuda') or (extra == 'extra-17-physicalai-studio-cpu' and extra == 'extra-17-physicalai-studio-xpu') or (extra == 'extra-17-physicalai-studio-cuda' and extra == 'extra-17-physicalai-studio-xpu')" },
     { name = "pyrealsense2-macosx", marker = "sys_platform == 'darwin' or (extra == 'extra-17-physicalai-studio-cpu' and extra == 'extra-17-physicalai-studio-cuda') or (extra == 'extra-17-physicalai-studio-cpu' and extra == 'extra-17-physicalai-studio-xpu') or (extra == 'extra-17-physicalai-studio-cuda' and extra == 'extra-17-physicalai-studio-xpu')" },
 ]
-robots = [
-    { name = "feetech-servo-sdk" },
-    { name = "trossen-arm" },
-]
 transport = [
     { name = "eclipse-zenoh" },
     { name = "iceoryx2" },
@@ -3163,8 +3162,8 @@ transport = [
 
 [[package]]
 name = "physicalai-mujoco-plugin"
-version = "0.3.2.dev237+gf9fd69153"
-source = { git = "https://github.com/openvinotoolkit/physicalai.git?subdirectory=packages%2Fphysicalai-mujoco-plugin&branch=max%2Fmujoco-generic-robots#f9fd6915399fc7e4b9909309983f2044702ba035" }
+version = "0.4.0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "defusedxml" },
     { name = "fastapi" },
@@ -3179,6 +3178,27 @@ dependencies = [
     { name = "pydantic" },
     { name = "uvicorn" },
     { name = "websockets" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/42/9a/e20545865bcffc368a10fa688b27ae4eef730ec32270145f03e8d0cd324f/physicalai_mujoco_plugin-0.4.0.tar.gz", hash = "sha256:1d4f1f802f8cd68debc33f9b266eda010bf2eb2e227858efebd66e31a10530a3", size = 6810599, upload-time = "2026-10-20T14:43:54.301Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/94/7f/90d569e11dbe7d1a5c6f5bc88d33bc4acc74b6496bd8d6ddcb599b8790e3/physicalai_mujoco_plugin-0.4.0-py3-none-any.whl", hash = "sha256:b5687b1ca1217125d28d0b4fe3bd53317a6ef7f8b3ff05a6a80bbf751fe54061", size = 6822613, upload-time = "2026-10-20T14:43:51.826Z" },
+]
+
+[[package]]
+name = "physicalai-so101-plugin"
+version = "0.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "feetech-servo-sdk" },
+    { name = "loguru" },
+    { name = "physicalai" },
+    { name = "physicalai-studio-plugin" },
+    { name = "pydantic" },
+    { name = "pyserial" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/12/ef/214746fe1450ec271b6ef250f40641eac821177afeffeb56a6269d8f0fed/physicalai_so101_plugin-0.2.0.tar.gz", hash = "sha256:379327928778665806975ba26599f8d4e272208a75728447d2ecf489e992158c", size = 11345169, upload-time = "2026-10-19T09:05:18.536Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c8/64/2cf9bcbbb7aa5f7777221e613f93a72e48cd6051e38eba5cef673d144a42/physicalai_so101_plugin-0.2.0-py3-none-any.whl", hash = "sha256:b3b1dd943fac1c6158f65857ff20ccac918d11eb330194f7445a2b8e309a625c", size = 11353408, upload-time = "2026-10-19T09:05:15.709Z" },
 ]
 
 [[package]]
@@ -3204,10 +3224,12 @@ dependencies = [
     { name = "numpy" },
     { name = "omegaconf" },
     { name = "opencv-python" },
-    { name = "physicalai", extra = ["capture", "robots", "transport"] },
+    { name = "physicalai", extra = ["capture", "transport"] },
     { name = "physicalai-mujoco-plugin" },
+    { name = "physicalai-so101-plugin" },
     { name = "physicalai-studio-plugin" },
-    { name = "physicalai-train", extra = ["pi05", "rldx1", "smolvla"] },
+    { name = "physicalai-train", extra = ["molmoact2", "pi05", "rldx1", "smolvla", "xr0"] },
+    { name = "physicalai-trossen-plugin", marker = "sys_platform == 'darwin' or sys_platform == 'linux' or (extra == 'extra-17-physicalai-studio-cpu' and extra == 'extra-17-physicalai-studio-cuda') or (extra == 'extra-17-physicalai-studio-cpu' and extra == 'extra-17-physicalai-studio-xpu') or (extra == 'extra-17-physicalai-studio-cuda' and extra == 'extra-17-physicalai-studio-xpu')" },
     { name = "psutil" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
@@ -3286,12 +3308,14 @@ requires-dist = [
     { name = "numpy" },
     { name = "omegaconf", specifier = ">=2.3.0" },
     { name = "opencv-python" },
-    { name = "physicalai", extras = ["robots", "capture", "transport"], git = "https://github.com/openvinotoolkit/physicalai.git?branch=max%2Fmujoco-generic-robots" },
-    { name = "physicalai-mujoco-plugin", git = "https://github.com/openvinotoolkit/physicalai.git?subdirectory=packages%2Fphysicalai-mujoco-plugin&branch=max%2Fmujoco-generic-robots" },
-    { name = "physicalai-studio-plugin", git = "https://github.com/openvinotoolkit/physicalai.git?subdirectory=packages%2Fphysicalai-studio-plugin&branch=max%2Fmujoco-generic-robots" },
+    { name = "physicalai", extras = ["capture", "transport"], git = "https://github.com/openvinotoolkit/physicalai.git?rev=0ca5b8e06c132aa2c83aa7a92bc6dfb79a7b231f" },
+    { name = "physicalai-mujoco-plugin", specifier = ">=0.4.0" },
+    { name = "physicalai-so101-plugin", specifier = "~=0.2.0" },
+    { name = "physicalai-studio-plugin", specifier = ">=0.4.0" },
     { name = "physicalai-train", extras = ["executorch"], marker = "extra == 'cpu'", editable = "../../library" },
     { name = "physicalai-train", extras = ["executorch"], marker = "extra == 'cuda'", editable = "../../library" },
-    { name = "physicalai-train", extras = ["pi05", "smolvla", "rldx1"], editable = "../../library" },
+    { name = "physicalai-train", extras = ["molmoact2", "pi05", "rldx1", "smolvla", "xr0"], editable = "../../library" },
+    { name = "physicalai-trossen-plugin", marker = "sys_platform == 'darwin' or sys_platform == 'linux'", specifier = "~=0.2.0" },
     { name = "psutil", specifier = "~=7.2" },
     { name = "pydantic", specifier = ">=2.12,<2.13" },
     { name = "pydantic-settings", specifier = ">=2.10.1" },
@@ -3337,11 +3361,15 @@ lint = [
 
 [[package]]
 name = "physicalai-studio-plugin"
-version = "0.3.1.dev40+gf9fd691"
-source = { git = "https://github.com/openvinotoolkit/physicalai.git?subdirectory=packages%2Fphysicalai-studio-plugin&branch=max%2Fmujoco-generic-robots#f9fd6915399fc7e4b9909309983f2044702ba035" }
+version = "0.4.0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "physicalai" },
     { name = "pydantic" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d0/c5/ef3a4956d5e0be1a8b0a7a4a34b64f2a702017084b520be701ff3ae3145d/physicalai_studio_plugin-0.4.0.tar.gz", hash = "sha256:777ba1a8ebd461102726def5270c687949223c4e544fb74f9df17c60ca4d52ef", size = 19882, upload-time = "2026-10-20T09:22:05.279Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/59/9a/a712c1b193ef356f885bc9a630ffa10f608154913da20af63972076cf649/physicalai_studio_plugin-0.4.0-py3-none-any.whl", hash = "sha256:c74859b49d985c592a1b5169c613d1f343b8191673b5883a08f8ad310161b0ba", size = 13715, upload-time = "2026-10-20T09:22:04.204Z" },
 ]
 
 [[package]]
@@ -3370,6 +3398,11 @@ dependencies = [
 executorch = [
     { name = "executorch" },
 ]
+molmoact2 = [
+    { name = "peft" },
+    { name = "safetensors" },
+    { name = "transformers" },
+]
 pi05 = [
     { name = "pillow" },
     { name = "safetensors" },
@@ -3389,13 +3422,18 @@ smolvla = [
     { name = "safetensors" },
     { name = "transformers" },
 ]
+xr0 = [
+    { name = "pillow" },
+    { name = "safetensors" },
+    { name = "transformers" },
+]
 
 [package.metadata]
 requires-dist = [
     { name = "diffusers", marker = "extra == 'cosmos3'", specifier = ">=0.40.0" },
     { name = "diffusers", marker = "extra == 'diffusion'", specifier = ">=0.38.0" },
     { name = "diffusers", marker = "extra == 'rldx1'", specifier = ">=0.38.0" },
-    { name = "diffusers", marker = "extra == 'tests'", specifier = ">=0.38.0" },
+    { name = "diffusers", marker = "extra == 'tests'", specifier = ">=0.40.0" },
     { name = "executorch", marker = "extra == 'executorch'", specifier = ">=1.1.0" },
     { name = "executorch", marker = "extra == 'executorch-openvino'", specifier = ">=1.1.0" },
     { name = "gym-pusht", specifier = ">=0.1.5" },
@@ -3417,7 +3455,7 @@ requires-dist = [
     { name = "peft", marker = "extra == 'cosmos3'", specifier = ">=0.13.0,<1.0.0" },
     { name = "peft", marker = "extra == 'molmoact2'", specifier = ">=0.13.0,<1.0.0" },
     { name = "peft", marker = "extra == 'rldx1'", specifier = ">=0.13.0,<1.0.0" },
-    { name = "physicalai", git = "https://github.com/openvinotoolkit/physicalai.git?branch=max%2Fmujoco-generic-robots" },
+    { name = "physicalai", git = "https://github.com/openvinotoolkit/physicalai.git?rev=0ca5b8e06c132aa2c83aa7a92bc6dfb79a7b231f" },
     { name = "physicalai-train", extras = ["cosmos3"], marker = "extra == 'policies'" },
     { name = "physicalai-train", extras = ["diffusion"], marker = "extra == 'policies'" },
     { name = "physicalai-train", extras = ["libero"], marker = "extra == 'all'" },
@@ -3454,7 +3492,7 @@ requires-dist = [
     { name = "torchvision", marker = "extra == 'cpu'", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "physicalai-train", extra = "cpu" } },
     { name = "torchvision", marker = "extra == 'cu128'", index = "https://download.pytorch.org/whl/cu128", conflict = { package = "physicalai-train", extra = "cu128" } },
     { name = "torchvision", marker = "extra == 'xpu'", index = "https://download.pytorch.org/whl/xpu", conflict = { package = "physicalai-train", extra = "xpu" } },
-    { name = "transformers", marker = "extra == 'cosmos3'", specifier = ">=5.15.1" },
+    { name = "transformers", marker = "extra == 'cosmos3'", specifier = ">=5.15.1,<5.16.0" },
     { name = "transformers", marker = "extra == 'molmoact2'", specifier = ">=5.15.1,<5.16.0" },
     { name = "transformers", marker = "extra == 'pi05'", specifier = ">=5.15.1,<5.16.0" },
     { name = "transformers", marker = "extra == 'rldx1'", specifier = ">=5.15.1,<5.16.0" },
@@ -3466,11 +3504,28 @@ provides-extras = ["cpu", "cu128", "xpu", "tests", "loggers", "libero", "diffusi
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "diffusers", specifier = ">=0.38.0" },
+    { name = "diffusers", specifier = ">=0.40.0" },
     { name = "mypy", specifier = "==2.3.1" },
     { name = "peft", specifier = ">=0.13.0,<1.0.0" },
     { name = "pyrefly", specifier = "==1.3.0" },
     { name = "ruff", specifier = "==0.16.7" },
+]
+
+[[package]]
+name = "physicalai-trossen-plugin"
+version = "0.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "loguru", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'extra-17-physicalai-studio-cpu' and extra == 'extra-17-physicalai-studio-cuda') or (sys_platform == 'emscripten' and extra == 'extra-17-physicalai-studio-cpu' and extra == 'extra-17-physicalai-studio-xpu') or (sys_platform == 'emscripten' and extra == 'extra-17-physicalai-studio-cuda' and extra == 'extra-17-physicalai-studio-xpu') or (sys_platform == 'win32' and extra == 'extra-17-physicalai-studio-cpu' and extra == 'extra-17-physicalai-studio-cuda') or (sys_platform == 'win32' and extra == 'extra-17-physicalai-studio-cpu' and extra == 'extra-17-physicalai-studio-xpu') or (sys_platform == 'win32' and extra == 'extra-17-physicalai-studio-cuda' and extra == 'extra-17-physicalai-studio-xpu')" },
+    { name = "numpy", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'extra-17-physicalai-studio-cpu' and extra == 'extra-17-physicalai-studio-cuda') or (sys_platform == 'emscripten' and extra == 'extra-17-physicalai-studio-cpu' and extra == 'extra-17-physicalai-studio-xpu') or (sys_platform == 'emscripten' and extra == 'extra-17-physicalai-studio-cuda' and extra == 'extra-17-physicalai-studio-xpu') or (sys_platform == 'win32' and extra == 'extra-17-physicalai-studio-cpu' and extra == 'extra-17-physicalai-studio-cuda') or (sys_platform == 'win32' and extra == 'extra-17-physicalai-studio-cpu' and extra == 'extra-17-physicalai-studio-xpu') or (sys_platform == 'win32' and extra == 'extra-17-physicalai-studio-cuda' and extra == 'extra-17-physicalai-studio-xpu')" },
+    { name = "physicalai", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'extra-17-physicalai-studio-cpu' and extra == 'extra-17-physicalai-studio-cuda') or (sys_platform == 'emscripten' and extra == 'extra-17-physicalai-studio-cpu' and extra == 'extra-17-physicalai-studio-xpu') or (sys_platform == 'emscripten' and extra == 'extra-17-physicalai-studio-cuda' and extra == 'extra-17-physicalai-studio-xpu') or (sys_platform == 'win32' and extra == 'extra-17-physicalai-studio-cpu' and extra == 'extra-17-physicalai-studio-cuda') or (sys_platform == 'win32' and extra == 'extra-17-physicalai-studio-cpu' and extra == 'extra-17-physicalai-studio-xpu') or (sys_platform == 'win32' and extra == 'extra-17-physicalai-studio-cuda' and extra == 'extra-17-physicalai-studio-xpu')" },
+    { name = "physicalai-studio-plugin", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'extra-17-physicalai-studio-cpu' and extra == 'extra-17-physicalai-studio-cuda') or (sys_platform == 'emscripten' and extra == 'extra-17-physicalai-studio-cpu' and extra == 'extra-17-physicalai-studio-xpu') or (sys_platform == 'emscripten' and extra == 'extra-17-physicalai-studio-cuda' and extra == 'extra-17-physicalai-studio-xpu') or (sys_platform == 'win32' and extra == 'extra-17-physicalai-studio-cpu' and extra == 'extra-17-physicalai-studio-cuda') or (sys_platform == 'win32' and extra == 'extra-17-physicalai-studio-cpu' and extra == 'extra-17-physicalai-studio-xpu') or (sys_platform == 'win32' and extra == 'extra-17-physicalai-studio-cuda' and extra == 'extra-17-physicalai-studio-xpu')" },
+    { name = "pydantic", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'extra-17-physicalai-studio-cpu' and extra == 'extra-17-physicalai-studio-cuda') or (sys_platform == 'emscripten' and extra == 'extra-17-physicalai-studio-cpu' and extra == 'extra-17-physicalai-studio-xpu') or (sys_platform == 'emscripten' and extra == 'extra-17-physicalai-studio-cuda' and extra == 'extra-17-physicalai-studio-xpu') or (sys_platform == 'win32' and extra == 'extra-17-physicalai-studio-cpu' and extra == 'extra-17-physicalai-studio-cuda') or (sys_platform == 'win32' and extra == 'extra-17-physicalai-studio-cpu' and extra == 'extra-17-physicalai-studio-xpu') or (sys_platform == 'win32' and extra == 'extra-17-physicalai-studio-cuda' and extra == 'extra-17-physicalai-studio-xpu')" },
+    { name = "trossen-arm", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'extra-17-physicalai-studio-cpu' and extra == 'extra-17-physicalai-studio-cuda') or (sys_platform == 'emscripten' and extra == 'extra-17-physicalai-studio-cpu' and extra == 'extra-17-physicalai-studio-xpu') or (sys_platform == 'emscripten' and extra == 'extra-17-physicalai-studio-cuda' and extra == 'extra-17-physicalai-studio-xpu') or (sys_platform == 'win32' and extra == 'extra-17-physicalai-studio-cpu' and extra == 'extra-17-physicalai-studio-cuda') or (sys_platform == 'win32' and extra == 'extra-17-physicalai-studio-cpu' and extra == 'extra-17-physicalai-studio-xpu') or (sys_platform == 'win32' and extra == 'extra-17-physicalai-studio-cuda' and extra == 'extra-17-physicalai-studio-xpu')" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a7/2f/5d1b2cb598b6454493b2efcb95cef523e869187a628b173f99ab1c5b9b88/physicalai_trossen_plugin-0.2.0.tar.gz", hash = "sha256:ab680926699efdb28b655d9393fb87ce7851e8f000afc9e055aee77c96e58c96", size = 2526445, upload-time = "2026-10-19T08:57:13.664Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/56/c1/9e85ff7cebde2c688599308d986ceadf01cf1ed587fc89a599f1af2d8e82/physicalai_trossen_plugin-0.2.0-py3-none-any.whl", hash = "sha256:ee29f139be07f1739a1491ab958fcaf6e3a84bf0e6aa4572c0659ba1b6849766", size = 2517751, upload-time = "2026-10-19T08:57:11.911Z" },
 ]
 
 [[package]]
@@ -5394,7 +5449,7 @@ name = "trossen-arm"
 version = "1.11.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "numpy" },
+    { name = "numpy", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'extra-17-physicalai-studio-cpu' and extra == 'extra-17-physicalai-studio-cuda') or (sys_platform == 'emscripten' and extra == 'extra-17-physicalai-studio-cpu' and extra == 'extra-17-physicalai-studio-xpu') or (sys_platform == 'emscripten' and extra == 'extra-17-physicalai-studio-cuda' and extra == 'extra-17-physicalai-studio-xpu') or (sys_platform == 'win32' and extra == 'extra-17-physicalai-studio-cpu' and extra == 'extra-17-physicalai-studio-cuda') or (sys_platform == 'win32' and extra == 'extra-17-physicalai-studio-cpu' and extra == 'extra-17-physicalai-studio-xpu') or (sys_platform == 'win32' and extra == 'extra-17-physicalai-studio-cuda' and extra == 'extra-17-physicalai-studio-xpu')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/2e/37/1a61b635b944a619726c614aa146fdd67ac8096fc36bd9c7428dc366f2db/trossen_arm-1.11.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:835c2e547d5239e15963df3659f4f26ae772e25df524e9f99849dda23ca7b4a9", size = 753053, upload-time = "2026-07-01T23:47:22.99Z" },

@@ -1,10 +1,10 @@
 // Copyright (C) 2026 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
+import { afterEach, describe, expect, it, rs } from '@rstest/core';
 import { act, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse } from 'msw';
-import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { $api } from '../../api/client';
 import { http } from '../../api/utils';
@@ -51,7 +51,7 @@ const mockSimulation = (simulation: Simulation) => {
     );
 };
 
-const renderDialog = (close = vi.fn(), onRunning = vi.fn()) => {
+const renderDialog = (close = rs.fn(), onRunning = rs.fn()) => {
     render(
         <SimulationDialog robot={robot} project_id={PROJECT_ID} launch={launch} close={close} onRunning={onRunning} />,
         { route: `/projects/${PROJECT_ID}/robots`, path: '/projects/:project_id/robots' }
@@ -63,7 +63,7 @@ const renderDialog = (close = vi.fn(), onRunning = vi.fn()) => {
 describe('SimulationDialog', () => {
     afterEach(() => {
         window.localStorage.clear();
-        vi.restoreAllMocks();
+        rs.restoreAllMocks();
     });
 
     it('shows the robot labels and starts the chosen scene with a random seed', async () => {
@@ -226,13 +226,13 @@ describe('SimulationDialog running transition', () => {
         const starting: Simulation = { ...idle, status: 'starting', robot_id: robot.id, phase: 'load' };
         mockSimulation(starting);
         const queryClient = createQueryClient();
-        const onRunning = vi.fn();
+        const onRunning = rs.fn();
         render(
             <SimulationDialog
                 robot={robot}
                 project_id={PROJECT_ID}
                 launch={launch}
-                close={vi.fn()}
+                close={rs.fn()}
                 onRunning={onRunning}
             />,
             { route: `/projects/${PROJECT_ID}/robots`, path: '/projects/:project_id/robots', queryClient }
@@ -255,8 +255,8 @@ describe('SimulationDialog running transition', () => {
 
 describe('SimulationNotRunning', () => {
     it('offers to start and to reconnect after a start outside Studio', async () => {
-        const onStart = vi.fn();
-        const onReconnect = vi.fn();
+        const onStart = rs.fn();
+        const onReconnect = rs.fn();
         const user = userEvent.setup();
         render(<SimulationNotRunning robot={robot} onStart={onStart} onReconnect={onReconnect} />);
 
@@ -268,7 +268,7 @@ describe('SimulationNotRunning', () => {
     });
 
     it('offers the progress of a simulation that is starting', async () => {
-        render(<SimulationNotRunning robot={robot} isStarting onStart={vi.fn()} />);
+        render(<SimulationNotRunning robot={robot} isStarting onStart={rs.fn()} />);
 
         expect(await screen.findByRole('heading', { name: 'Simulation starting' })).toBeInTheDocument();
         expect(screen.getByRole('button', { name: 'Show progress…' })).toBeInTheDocument();

@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from '@rstest/core';
 
 import { rememberedScene, rememberScene, RobotSimulationLaunch, robotSimulationStatus } from './robot-simulation';
 import { Simulation } from './use-simulation';

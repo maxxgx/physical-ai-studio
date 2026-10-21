@@ -1,8 +1,8 @@
 import { createRef, ReactNode } from 'react';
 
+import { rs } from '@rstest/core';
 import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { SchemaModel } from '../../../api/openapi-spec';
 import { getMockedEnvironment } from '../../../test-utils/mocks/mock-environment';
@@ -10,11 +10,11 @@ import { render } from '../../../test-utils/render';
 import { useRuntimeSession } from '../../robots/runtime-session-provider';
 import { InferenceViewer } from './inference-viewer';
 
-vi.mock('../../robots/runtime-session-provider', () => ({
-    useRuntimeSession: vi.fn(),
+rs.mock('../../robots/runtime-session-provider', () => ({
+    useRuntimeSession: rs.fn(),
 }));
 
-vi.mock('../../simulation/session-simulation-not-running', () => ({
+rs.mock('../../simulation/session-simulation-not-running', () => ({
     SessionSimulationNotRunning: ({ robot, children }: { robot: { name: string }; children: ReactNode }) => (
         <div>
             {robot.name} simulation not running{children}
@@ -22,7 +22,7 @@ vi.mock('../../simulation/session-simulation-not-running', () => ({
     ),
 }));
 
-vi.mock('../../robots/robot-control/robot-control-view', () => ({
+rs.mock('../../robots/robot-control/robot-control-view', () => ({
     RobotControlView: () => <div>robot-control</div>,
 }));
 
@@ -64,7 +64,7 @@ const environmentWithLeader = getMockedEnvironment({
 });
 
 const mutation = () => ({
-    mutate: vi.fn(),
+    mutate: rs.fn(),
     isPending: false,
 });
 
@@ -83,7 +83,7 @@ const mockSession = ({
     const stopTask = mutation();
     const setFollowerSource = mutation();
 
-    vi.mocked(useRuntimeSession).mockReturnValue({
+    rs.mocked(useRuntimeSession).mockReturnValue({
         model,
         readyForInference,
         waitingForSimulation,
@@ -116,7 +116,7 @@ const renderViewer = (tasks: string[] = ['pick the cube']) =>
 
 describe('InferenceViewer', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
+        rs.clearAllMocks();
     });
 
     it('offers to start the follower simulation while the session waits for it', async () => {
@@ -213,7 +213,7 @@ describe('InferenceViewer task prompt', () => {
     const originalScreenWidth = window.screen.width;
 
     beforeEach(() => {
-        vi.clearAllMocks();
+        rs.clearAllMocks();
         // React Spectrum renders the mobile combo box on narrow screens; jsdom reports width 0.
         Object.defineProperty(window.screen, 'width', { value: 1920, configurable: true });
     });

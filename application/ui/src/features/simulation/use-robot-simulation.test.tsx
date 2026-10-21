@@ -1,10 +1,10 @@
 // Copyright (C) 2026 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
+import { describe, expect, it } from '@rstest/core';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { HttpResponse } from 'msw';
-import { describe, expect, it } from 'vitest';
 
 import { http } from '../../api/utils';
 import { server } from '../../msw-node-setup';

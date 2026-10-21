@@ -4,7 +4,6 @@ import { useProjectId } from '../../features/projects/use-project';
 import { Preview } from '../../features/robots/environment-form/preview';
 import { EnvironmentForm, EnvironmentFormProvider } from '../../features/robots/environment-form/provider';
 import { useEnvironment } from '../../features/robots/use-environment';
-import { SimulationCamerasPrompt } from '../../features/simulation/simulation-cameras-prompt';
 import { paths } from '../../paths';
 
 const Header = () => {
@@ -53,15 +52,9 @@ export const EnvironmentShow = () => {
             }) ?? [],
     };
     return (
-        // Keyed by the cameras: the form state is built once, and cameras added from the
-        // simulation prompt need new preview panels and a session that opens them.
-        <EnvironmentFormProvider
-            key={environmentForm.cameras.map(({ camera_id }) => camera_id).join()}
-            environment={environmentForm}
-        >
+        <EnvironmentFormProvider environment={environmentForm}>
             <Flex height='100%' direction={'column'}>
                 <Header />
-                <SimulationCamerasPrompt environment={environment} />
                 <Preview />
             </Flex>
         </EnvironmentFormProvider>

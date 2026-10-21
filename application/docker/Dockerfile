@@ -338,20 +338,6 @@ RUN set -eu; \
         -delete 2>/dev/null || true
 
 # ===========================================================================
-# Stage 4d: Robot assets builder
-#
-# Sync backend-owned robot assets once so all runtime targets can copy the
-# exact same files before the backend wheel install step.
-# ===========================================================================
-FROM builder-base AS robot-assets
-
-COPY --link --from=app-source /app/application/backend/src /app/application/backend/src
-
-RUN PYTHONPATH=/app/application/backend/src \
-    /app/application/backend/.venv/bin/python -c \
-    "from robots.catalog.sync_robot_assets import sync_robot_assets; sync_robot_assets()"
-
-# ===========================================================================
 # Stage 5: Runtime base — shared across all hardware targets
 #
 # Provides the non-root user, common runtime libraries, environment
@@ -466,8 +452,6 @@ ARG APP_GID=1000
 COPY --link --from=builder-cpu --chown=${APP_UID}:${APP_GID} \
     /app/application/backend/.venv /app/application/backend/.venv
 COPY --link --from=app-source --chown=${APP_UID}:${APP_GID} /app /app
-COPY --link --from=robot-assets --chown=${APP_UID}:${APP_GID} \
-    /app/application/backend/src/static/robot-assets /app/application/backend/src/static/robot-assets
 RUN uv pip install --python /app/application/backend/.venv/bin/python --no-deps /app/application/backend
 
 # Replace PyAV with the wheel built against the custom LGPL FFmpeg.
@@ -532,8 +516,6 @@ ARG APP_GID=1000
 COPY --link --from=builder-xpu --chown=${APP_UID}:${APP_GID} \
     /app/application/backend/.venv /app/application/backend/.venv
 COPY --link --from=app-source --chown=${APP_UID}:${APP_GID} /app /app
-COPY --link --from=robot-assets --chown=${APP_UID}:${APP_GID} \
-    /app/application/backend/src/static/robot-assets /app/application/backend/src/static/robot-assets
 RUN uv pip install --python /app/application/backend/.venv/bin/python --no-deps /app/application/backend
 
 # Replace PyAV with the wheel built against the custom LGPL FFmpeg.
@@ -596,8 +578,6 @@ ARG APP_GID=1000
 COPY --link --from=builder-cuda --chown=${APP_UID}:${APP_GID} \
     /app/application/backend/.venv /app/application/backend/.venv
 COPY --link --from=app-source --chown=${APP_UID}:${APP_GID} /app /app
-COPY --link --from=robot-assets --chown=${APP_UID}:${APP_GID} \
-    /app/application/backend/src/static/robot-assets /app/application/backend/src/static/robot-assets
 RUN uv pip install --python /app/application/backend/.venv/bin/python --no-deps /app/application/backend
 
 # Replace PyAV with the wheel built against the custom LGPL FFmpeg.
@@ -626,8 +606,6 @@ ARG APP_GID=1000
 COPY --link --from=builder-cpu-redistributable --chown=${APP_UID}:${APP_GID} \
     /app/application/backend/.venv /app/application/backend/.venv
 COPY --link --from=app-source --chown=${APP_UID}:${APP_GID} /app /app
-COPY --link --from=robot-assets --chown=${APP_UID}:${APP_GID} \
-    /app/application/backend/src/static/robot-assets /app/application/backend/src/static/robot-assets
 RUN uv pip install --python /app/application/backend/.venv/bin/python --no-deps /app/application/backend
 RUN --mount=type=bind,from=ffmpeg-builder,source=/dist,target=/dist,ro \
     uv pip install --python /app/application/backend/.venv/bin/python \
@@ -653,8 +631,6 @@ ARG APP_GID=1000
 COPY --link --from=builder-xpu-redistributable --chown=${APP_UID}:${APP_GID} \
     /app/application/backend/.venv /app/application/backend/.venv
 COPY --link --from=app-source --chown=${APP_UID}:${APP_GID} /app /app
-COPY --link --from=robot-assets --chown=${APP_UID}:${APP_GID} \
-    /app/application/backend/src/static/robot-assets /app/application/backend/src/static/robot-assets
 RUN uv pip install --python /app/application/backend/.venv/bin/python --no-deps /app/application/backend
 RUN --mount=type=bind,from=ffmpeg-builder,source=/dist,target=/dist,ro \
     uv pip install --python /app/application/backend/.venv/bin/python \
@@ -680,8 +656,6 @@ ARG APP_GID=1000
 COPY --link --from=builder-cuda-redistributable --chown=${APP_UID}:${APP_GID} \
     /app/application/backend/.venv /app/application/backend/.venv
 COPY --link --from=app-source --chown=${APP_UID}:${APP_GID} /app /app
-COPY --link --from=robot-assets --chown=${APP_UID}:${APP_GID} \
-    /app/application/backend/src/static/robot-assets /app/application/backend/src/static/robot-assets
 RUN uv pip install --python /app/application/backend/.venv/bin/python --no-deps /app/application/backend
 RUN --mount=type=bind,from=ffmpeg-builder,source=/dist,target=/dist,ro \
     uv pip install --python /app/application/backend/.venv/bin/python \

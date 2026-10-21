@@ -1,10 +1,10 @@
 // Copyright (C) 2026 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
+import { afterEach, describe, expect, it } from '@rstest/core';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse } from 'msw';
-import { afterEach, describe, expect, it } from 'vitest';
 
 import { SchemaEnvironmentWithRelations } from '../../api/openapi-spec';
 import { http } from '../../api/utils';

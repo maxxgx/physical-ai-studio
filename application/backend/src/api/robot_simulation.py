@@ -8,21 +8,14 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, status
 
-from api.dependencies import (
-    AsyncSessionDep,
-    RobotCatalogServiceDep,
-    SimulationManagerDep,
-    get_environment_id,
-    get_project_id,
-    get_robot_id,
-)
+from api.dependencies import AsyncSessionDep, RobotCatalogServiceDep, SimulationManagerDep
 from schemas.project_camera import IPCamera
 from schemas.simulation import AddSimulationCamerasRequest, ProjectRobotSimulation, RobotSimulation
 from services.robot_simulation_service import RobotSimulationService
 
 router = APIRouter(prefix="/api/projects/{project_id}", tags=["Simulation"])
 
-ProjectID = Annotated[UUID, Depends(get_project_id)]
+ProjectID = UUID
 
 
 def get_robot_simulation_service(
@@ -38,7 +31,7 @@ RobotSimulationServiceDep = Annotated[RobotSimulationService, Depends(get_robot_
 @router.get("/robots/{robot_id}/simulation")
 async def get_robot_simulation(
     project_id: ProjectID,
-    robot_id: Annotated[UUID, Depends(get_robot_id)],
+    robot_id: UUID,
     service: RobotSimulationServiceDep,
 ) -> RobotSimulation:
     """Whether the robot's simulation runs, who started it, and its viewer, speed and cameras."""
@@ -56,7 +49,7 @@ async def list_project_simulations(
 @router.post("/environments/{environment_id}/simulation-cameras", status_code=status.HTTP_201_CREATED)
 async def add_simulation_cameras(
     project_id: ProjectID,
-    environment_id: Annotated[UUID, Depends(get_environment_id)],
+    environment_id: UUID,
     request: AddSimulationCamerasRequest,
     service: RobotSimulationServiceDep,
 ) -> list[IPCamera]:
