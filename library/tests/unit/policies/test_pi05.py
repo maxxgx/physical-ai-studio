@@ -393,6 +393,36 @@ class TestModelUtilities:
         assert len(images) == 2
         assert len(masks) == 2
 
+    def test_preprocess_images_follows_camera_order_not_dict_order(self) -> None:
+        """Test cameras land in their training slots even when the batch lists them differently."""
+        from physicalai.policies.pi05.preprocessor import Pi05Preprocessor
+
+        prep = Pi05Preprocessor(image_resolution=(32, 32), camera_order=["overview", "wrist"])
+        batch = {
+            STATE: torch.randn(1, 4),
+            f"{IMAGES}.wrist": torch.ones(1, 3, 32, 32),
+            f"{IMAGES}.overview": torch.zeros(1, 3, 32, 32),
+        }
+        images, _ = prep._preprocess_images(batch)
+
+        assert torch.all(images[0] == -1.0)  # overview
+        assert torch.all(images[1] == 1.0)  # wrist
+
+    def test_preprocess_images_keeps_batch_order_for_unknown_cameras(self) -> None:
+        """Test batches whose cameras have other names than the training ones keep their order."""
+        from physicalai.policies.pi05.preprocessor import Pi05Preprocessor
+
+        prep = Pi05Preprocessor(image_resolution=(32, 32), camera_order=["overview", "wrist"])
+        batch = {
+            STATE: torch.randn(1, 4),
+            f"{IMAGES}.gripper": torch.ones(1, 3, 32, 32),
+            f"{IMAGES}.top": torch.zeros(1, 3, 32, 32),
+        }
+        images, _ = prep._preprocess_images(batch)
+
+        assert torch.all(images[0] == 1.0)
+        assert torch.all(images[1] == -1.0)
+
     def test_resize_with_pad_unsupported_dtype(self) -> None:
         """Test resize_with_pad raises error for unsupported dtype."""
         from physicalai.policies.pi05.preprocessor import _resize_with_pad_torch
@@ -742,6 +772,20 @@ class TestPi05Preprocessor:
         preprocessor, _ = make_pi05_preprocessors(stats=stats)
         # The normalizer should have "state" mapped (not "observation.state")
         assert hasattr(preprocessor, "_state_action_normalizer")
+
+    def test_make_preprocessors_takes_camera_order_from_stats(self) -> None:
+        """Test the training camera order comes from the VISUAL stats, dataset and HF names alike."""
+        from physicalai.policies.pi05.preprocessor import make_pi05_preprocessors
+
+        visual = {"type": "VISUAL", "shape": (3, 480, 640), "mean": [0.0] * 3, "std": [1.0] * 3}
+        stats = {
+            "observation.wrist": {**visual, "name": "wrist"},
+            "observation.images.overview": {**visual, "name": "observation.images.overview"},
+        }
+
+        preprocessor, _ = make_pi05_preprocessors(stats=stats)
+
+        assert preprocessor.camera_order == ["wrist", "overview"]
 
 
 # ============================================================================ #
