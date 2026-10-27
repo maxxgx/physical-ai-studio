@@ -14,6 +14,10 @@ black bucket", picks the named object (resistor, 9 V battery or CPU) and drops i
 (red, black or blue). The policy sees an overview camera, a wrist camera and the 8-D joint state at
 30 Hz. An episode succeeds when the object lands in the named bucket within 30 s.
 
+| Trained policy (overview and wrist camera)                                 | IK demonstrator recording data                                       | DAgger: the demonstrator takes over                                                        |
+| -------------------------------------------------------------------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| ![pi05 puts the 9 V battery in the black bucket](media/policy_success.gif) | ![The IK demonstrator recording episodes](media/ik_demonstrator.gif) | ![The demonstrator recovers from where the policy left the arm](media/dagger_recovery.gif) |
+
 ## Results
 
 Success on held-out layouts, cameras in their training slots, same 1,589 episodes unless noted.
@@ -83,12 +87,12 @@ Not verified:
 
 ## Data
 
-Two LeRobot v3.0 datasets, in private Hugging Face dataset repos (ask Max for access):
+Two public LeRobot v3.0 datasets on Hugging Face:
 
-| Dataset                       | Episodes | Frames | Contents                                                                                    |
-| ----------------------------- | -------- | ------ | ------------------------------------------------------------------------------------------- |
-| `iMaxxgx/bucket_sort_gen_all` | 1,199    | 431k   | IK demonstrator, commanded actions, randomized speed, grasp offset, yaw and gripper opening |
-| `iMaxxgx/bucket_sort_gen_dag` | 1,589    | 561k   | `gen_all` plus 390 DAgger recovery episodes                                                 |
+| Dataset                                                                                      | Episodes | Frames | Contents                                                                                    |
+| -------------------------------------------------------------------------------------------- | -------- | ------ | ------------------------------------------------------------------------------------------- |
+| [`iMaxxgx/bucket_sort_gen_all`](https://huggingface.co/datasets/iMaxxgx/bucket_sort_gen_all) | 1,199    | 431k   | IK demonstrator, commanded actions, randomized speed, grasp offset, yaw and gripper opening |
+| [`iMaxxgx/bucket_sort_gen_dag`](https://huggingface.co/datasets/iMaxxgx/bucket_sort_gen_dag) | 1,589    | 561k   | `gen_all` plus 390 DAgger recovery episodes                                                 |
 
 ```bash
 hf download iMaxxgx/bucket_sort_gen_dag --repo-type dataset --local-dir $WORK/data/gen_dag
