@@ -146,11 +146,6 @@ class Pi05Preprocessor(torch.nn.Module):
         max_token_len: Maximum tokenized prompt length.
         tokenizer_name: HuggingFace tokenizer name for PaliGemma.
         empty_cameras: Number of empty camera slots to add as -1-filled images.
-        camera_order: Camera names in the order the model was trained on. Batch
-            images are placed in this order by name, so a batch whose dict lists
-            the cameras differently still feeds each camera to its own slot.
-            When ``None``, or when the batch cameras have other names, the batch
-            order is used.
     """
 
     def __init__(
@@ -162,7 +157,6 @@ class Pi05Preprocessor(torch.nn.Module):
         tokenizer_name: str = "google/paligemma-3b-pt-224",
         empty_cameras: int = 0,
         normalization_mode: str = "QUANTILES",
-        camera_order: list[str] | None = None,
     ) -> None:
         """Initialize Pi05Preprocessor."""
         super().__init__()
@@ -174,8 +168,6 @@ class Pi05Preprocessor(torch.nn.Module):
         self._tokenizer = None
         self.empty_cameras = empty_cameras
         self.normalization_mode = normalization_mode
-        self.camera_order = list(camera_order) if camera_order else None
-        self._warned_camera_mismatch = False
 
         norm_map = _norm_map_for_mode(normalization_mode)
         if features is not None:
@@ -253,31 +245,6 @@ class Pi05Preprocessor(torch.nn.Module):
 
         return batch
 
-    def _order_camera_keys(self, batch_img_keys: list[str]) -> list[str]:
-        """Put batch image keys in the training camera order, matched by camera name.
-
-        PaliGemma sees the cameras as a sequence of image slots, so a camera fed to
-        another camera's slot is silently misread. Dict order is not a reliable
-        signal: a dataset and a runtime can list the same cameras differently.
-
-        Returns:
-            The batch image keys, reordered to ``camera_order`` when the batch has
-            exactly those cameras; otherwise unchanged.
-        """
-        if not self.camera_order:
-            return batch_img_keys
-        by_name = {key.removeprefix(f"{IMAGES}."): key for key in batch_img_keys}
-        if set(by_name) == set(self.camera_order):
-            return [by_name[name] for name in self.camera_order]
-        if not self._warned_camera_mismatch:
-            logger.warning(
-                "Batch cameras %s do not match the training cameras %s; using the batch order.",
-                sorted(by_name),
-                self.camera_order,
-            )
-            self._warned_camera_mismatch = True
-        return batch_img_keys
-
     def _preprocess_images(self, batch: dict[str, Any]) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
         """Process images for Pi05 model.
 
@@ -291,7 +258,7 @@ class Pi05Preprocessor(torch.nn.Module):
         img_masks = []
 
         batch_img_keys = Observation.get_flattened_keys(batch, IMAGES)
-        batch_img_keys = self._order_camera_keys([key for key in batch_img_keys if "is_pad" not in key])
+        batch_img_keys = [key for key in batch_img_keys if "is_pad" not in key]
 
         device = batch[STATE].device if STATE in batch else torch.device("cpu")
 
@@ -428,14 +395,8 @@ def make_pi05_preprocessors(
         Tuple of (preprocessor, postprocessor).
     """
     features: dict[str, Feature] = {}
-    camera_order: list[str] = []
     if stats is not None:
         for key, stat in stats.items():
-            if str(stat.get("type", "")) == FeatureType.VISUAL:
-                # Dataset stats list the cameras in the order the training batches carry them.
-                name = str(stat.get("name") or key)
-                camera_order.append(name.removeprefix("observation.").removeprefix(f"{IMAGES}."))
-                continue
             if ACTION in key:
                 feature_type = FeatureType.ACTION
             elif STATE in key:
@@ -474,7 +435,6 @@ def make_pi05_preprocessors(
         max_token_len=max_token_len,
         empty_cameras=empty_cameras,
         normalization_mode=normalization_mode,
-        camera_order=camera_order or None,
     )
 
     postprocessor = Pi05Postprocessor(

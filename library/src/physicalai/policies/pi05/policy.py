@@ -272,6 +272,7 @@ class Pi05(PeftPolicyMixin, SnapFlowPolicyMixin, RTCPolicyMixin, ExportablePolic
         self._postprocessor: Pi05Postprocessor | None = None
 
         self._dataset_stats = dataset_stats
+        self._warned_camera_order = False
 
         if self.config.use_lora and pretrained_name_or_path is None and weight_file is None:
             logger.warning(
@@ -684,11 +685,40 @@ class Pi05(PeftPolicyMixin, SnapFlowPolicyMixin, RTCPolicyMixin, ExportablePolic
             msg = "Model is not initialized"
             raise ValueError(msg)
 
+        self._check_camera_order(batch)
         processed_batch = self._preprocessor(batch.to(self.device).to_dict())
         self._validate_rtc_inputs(processed_batch)
         actions = self.model.predict_action_chunk(processed_batch)
 
         return self._postprocessor({ACTION: actions})[ACTION]
+
+    def _check_camera_order(self, batch: Observation) -> None:
+        """Warn once when a batch lists the training cameras in another order.
+
+        The preprocessor fills camera slots in batch order, so the same cameras
+        in a different order than training silently swap. Only names and
+        ``inputs_schema`` are used, so other policies can share this check.
+        """
+        if self._warned_camera_order or not isinstance(batch.images, dict):
+            return
+        trained = [
+            feature.name.removeprefix(f"{IMAGES}.")
+            for feature in self.inputs_schema or []
+            if feature.ftype == InferenceFeatureType.VISUAL
+        ]
+        names = [
+            str(key).removeprefix("observation.").removeprefix(f"{IMAGES}.")
+            for key in batch.images
+            if "is_pad" not in str(key)
+        ]
+        if len(names) > 1 and names != trained and set(names) == set(trained):
+            logger.warning(
+                "Cameras arrive in order %s but the policy was trained on %s; the images will be swapped. "
+                "Pass the cameras in training order.",
+                names,
+                trained,
+            )
+            self._warned_camera_order = True
 
     def training_step(self, batch: Observation, batch_idx: int) -> torch.Tensor:
         """Lightning training step.

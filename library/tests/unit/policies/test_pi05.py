@@ -11,7 +11,7 @@ from __future__ import annotations
 import pytest
 import torch
 from physicalai.config import Config
-from physicalai.data.observation import IMAGES, STATE
+from physicalai.data.observation import IMAGES, STATE, Observation
 from physicalai.policies.pi05 import Pi05, Pi05Config, Pi05Model
 from physicalai.policies.pi05.pretrained_utils import (
     fix_state_dict_keys,
@@ -393,36 +393,6 @@ class TestModelUtilities:
         assert len(images) == 2
         assert len(masks) == 2
 
-    def test_preprocess_images_follows_camera_order_not_dict_order(self) -> None:
-        """Test cameras land in their training slots even when the batch lists them differently."""
-        from physicalai.policies.pi05.preprocessor import Pi05Preprocessor
-
-        prep = Pi05Preprocessor(image_resolution=(32, 32), camera_order=["overview", "wrist"])
-        batch = {
-            STATE: torch.randn(1, 4),
-            f"{IMAGES}.wrist": torch.ones(1, 3, 32, 32),
-            f"{IMAGES}.overview": torch.zeros(1, 3, 32, 32),
-        }
-        images, _ = prep._preprocess_images(batch)
-
-        assert torch.all(images[0] == -1.0)  # overview
-        assert torch.all(images[1] == 1.0)  # wrist
-
-    def test_preprocess_images_keeps_batch_order_for_unknown_cameras(self) -> None:
-        """Test batches whose cameras have other names than the training ones keep their order."""
-        from physicalai.policies.pi05.preprocessor import Pi05Preprocessor
-
-        prep = Pi05Preprocessor(image_resolution=(32, 32), camera_order=["overview", "wrist"])
-        batch = {
-            STATE: torch.randn(1, 4),
-            f"{IMAGES}.gripper": torch.ones(1, 3, 32, 32),
-            f"{IMAGES}.top": torch.zeros(1, 3, 32, 32),
-        }
-        images, _ = prep._preprocess_images(batch)
-
-        assert torch.all(images[0] == 1.0)
-        assert torch.all(images[1] == -1.0)
-
     def test_resize_with_pad_unsupported_dtype(self) -> None:
         """Test resize_with_pad raises error for unsupported dtype."""
         from physicalai.policies.pi05.preprocessor import _resize_with_pad_torch
@@ -773,20 +743,6 @@ class TestPi05Preprocessor:
         # The normalizer should have "state" mapped (not "observation.state")
         assert hasattr(preprocessor, "_state_action_normalizer")
 
-    def test_make_preprocessors_takes_camera_order_from_stats(self) -> None:
-        """Test the training camera order comes from the VISUAL stats, dataset and HF names alike."""
-        from physicalai.policies.pi05.preprocessor import make_pi05_preprocessors
-
-        visual = {"type": "VISUAL", "shape": (3, 480, 640), "mean": [0.0] * 3, "std": [1.0] * 3}
-        stats = {
-            "observation.wrist": {**visual, "name": "wrist"},
-            "observation.images.overview": {**visual, "name": "observation.images.overview"},
-        }
-
-        preprocessor, _ = make_pi05_preprocessors(stats=stats)
-
-        assert preprocessor.camera_order == ["wrist", "overview"]
-
 
 # ============================================================================ #
 # Feature Normalization Tests                                                  #
@@ -917,6 +873,50 @@ class TestSampleInput:
         assert f"{IMAGES}.front_cam" in sample_input
         assert f"{IMAGES}.wrist_cam" in sample_input
         assert IMAGES not in sample_input
+
+
+class TestCameraOrderCheck:
+    """Pi05 warns when inference cameras arrive in a different order than training."""
+
+    @staticmethod
+    def _policy() -> Pi05:
+        stats = {
+            "observation.state": {"name": "state", "shape": (8,), "type": "STATE"},
+            "observation.images.wrist": {"name": "wrist", "shape": (3, 224, 224), "type": "VISUAL"},
+            "observation.images.overview": {"name": "overview", "shape": (3, 224, 224), "type": "VISUAL"},
+        }
+        # Set stats after construction so the full model is never built.
+        policy = Pi05()
+        policy._dataset_stats = stats
+        policy.model = torch.nn.Identity()  # inputs_schema only needs a model to exist
+        return policy
+
+    @staticmethod
+    def _batch(*cameras: str) -> Observation:
+        return Observation(images={camera: torch.zeros(1, 3, 8, 8) for camera in cameras})
+
+    def test_swapped_cameras_warn_once(self, caplog: pytest.LogCaptureFixture) -> None:
+        import logging
+
+        policy = self._policy()
+        with caplog.at_level(logging.WARNING):
+            policy._check_camera_order(self._batch("overview", "wrist"))
+            policy._check_camera_order(self._batch("overview", "wrist"))
+        assert caplog.text.count("trained on ['wrist', 'overview']") == 1
+
+    def test_training_order_does_not_warn(self, caplog: pytest.LogCaptureFixture) -> None:
+        import logging
+
+        with caplog.at_level(logging.WARNING):
+            self._policy()._check_camera_order(self._batch("wrist", "overview"))
+        assert "trained on" not in caplog.text
+
+    def test_other_camera_names_do_not_warn(self, caplog: pytest.LogCaptureFixture) -> None:
+        import logging
+
+        with caplog.at_level(logging.WARNING):
+            self._policy()._check_camera_order(self._batch("top", "wrist"))
+        assert "trained on" not in caplog.text
 
 
 # ============================================================================ #
