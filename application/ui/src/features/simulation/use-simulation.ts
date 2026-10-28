@@ -41,7 +41,8 @@ export const useSimulationUpdates = () => {
         }
         let events: EventSource;
         let reopen: ReturnType<typeof setTimeout> | undefined;
-        let lastStatus: Simulation['status'] | undefined;
+        let lastSimulation: string | undefined;
+        let reconnected = false;
 
         const onMessage = (event: MessageEvent<string>) => {
             let simulation: Simulation;
@@ -52,10 +53,19 @@ export const useSimulationUpdates = () => {
                 return;
             }
             queryClient.setQueryData(simulationQueryKey(), simulation);
-            if (lastStatus !== undefined && simulation.status !== lastStatus) {
+            // Which simulation runs where, not its progress: a replacement can keep the status, and
+            // a stream that dropped may have missed changes.
+            const current = JSON.stringify([
+                simulation.status,
+                simulation.project_id,
+                simulation.robot_id,
+                simulation.started_at,
+                simulation.http_url,
+            ]);
+            if (lastSimulation !== undefined && (current !== lastSimulation || reconnected)) {
                 // Whether a simulated robot is online follows its simulation, and a simulation that
-                // starts on a new port stores that address on its robot (so a robot edited later
-                // keeps it) and moves its IP cameras (and so the environments' cameras) along.
+                // starts on a new port stores that address on its robot and moves its IP cameras (and
+                // so the environments' cameras) along.
                 for (const path of [
                     '/api/projects/{project_id}/robots/online',
                     '/api/projects/{project_id}/robots',
@@ -67,7 +77,8 @@ export const useSimulationUpdates = () => {
                     queryClient.invalidateQueries({ queryKey: ['get', path] });
                 }
             }
-            lastStatus = simulation.status;
+            lastSimulation = current;
+            reconnected = false;
         };
 
         const open = () => {
@@ -76,6 +87,7 @@ export const useSimulationUpdates = () => {
             // The browser retries a dropped stream by itself, but gives up for good on an error
             // response (e.g. while the backend restarts): open a new one then.
             events.onerror = () => {
+                reconnected = true;
                 if (events.readyState === EventSource.CLOSED) {
                     reopen = setTimeout(open, REOPEN_DELAY_MS);
                 }

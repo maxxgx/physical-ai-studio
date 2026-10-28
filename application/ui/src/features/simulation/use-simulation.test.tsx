@@ -96,6 +96,28 @@ describe('useSimulationUpdates', () => {
         expect(queryClient.getQueryState(robotsKey)?.isInvalidated).toBe(true);
     });
 
+    it('refreshes after a replacement that keeps the status, and after the stream reconnected', () => {
+        rs.stubGlobal('EventSource', FakeEventSource);
+        const { queryClient, events } = renderUpdates();
+        const invalidate = rs.spyOn(queryClient, 'invalidateQueries');
+        const robotQueries = { queryKey: ['get', '/api/projects/{project_id}/robots/{robot_id}'] };
+        const first = { status: 'running', robot_id: 'robot-1', http_url: 'http://127.0.0.1:56209' } as const;
+
+        act(() => events().emit(first));
+        act(() => events().emit(first));
+        expect(invalidate).not.toHaveBeenCalled();
+
+        // Replaced while the stream was up, but the "starting" in between was missed.
+        act(() => events().emit({ ...first, http_url: 'http://127.0.0.1:56300' }));
+        expect(invalidate).toHaveBeenCalledWith(robotQueries);
+
+        // The stream dropped and the browser reconnected it: the state looks the same, but may not be.
+        invalidate.mockClear();
+        act(() => events().onerror?.());
+        act(() => events().emit({ ...first, http_url: 'http://127.0.0.1:56300' }));
+        expect(invalidate).toHaveBeenCalledWith(robotQueries);
+    });
+
     it('opens a new stream after the browser gave up on one, and closes it on unmount', () => {
         rs.useFakeTimers();
         rs.stubGlobal('EventSource', FakeEventSource);
