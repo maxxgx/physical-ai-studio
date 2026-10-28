@@ -183,6 +183,7 @@ class SimulationManager:
         self._logs: deque[str] = deque(maxlen=LOG_LINES)
         self._subscribers: set[asyncio.Queue[Simulation]] = set()
         self._background: set[asyncio.Task] = set()
+        self._address_writes: set[asyncio.Task] = set()
 
     # -- reading -----------------------------------------------------------
 
@@ -252,6 +253,10 @@ class SimulationManager:
 
             if await _is_online(definition, robot.payload):
                 raise SimulationNameInUseError(owner_name)
+
+            # A stopped simulation's address may still be being written. Let it land first, so that
+            # it cannot overwrite the address of the one starting now.
+            await self._finish_address_writes()
 
             await self._spawn(argv, owner_name, request, robot.type)
             return self.state()
@@ -403,7 +408,9 @@ class SimulationManager:
             "viewer_url": event.get("viewer_url") if isinstance(event.get("viewer_url"), str) else None,
             "cameras": [str(camera) for camera in cameras] if isinstance(cameras, list) else [],
         }
-        self._spawn_background(self._finish_ready(child, running))
+        task = self._spawn_background(self._finish_ready(child, running))
+        self._address_writes.add(task)
+        task.add_done_callback(self._address_writes.discard)
 
     async def _finish_ready(self, child: _Child, running: dict[str, Any]) -> None:
         """Store the simulation's address, then report it running.
@@ -416,6 +423,11 @@ class SimulationManager:
             await self._store_address(self._state.project_id, self._state.robot_id, http_url)
         if child is self._child and not child.stop_requested and self._state.status is SimulationStatus.STARTING:
             self._update(**running)
+
+    async def _finish_address_writes(self) -> None:
+        """Wait until the addresses being stored are stored (each write is bounded by its own timeout)."""
+        if self._address_writes:
+            await asyncio.gather(*self._address_writes, return_exceptions=True)
 
     async def _store_address(self, project_id: UUID, robot_id: UUID, http_url: str) -> None:
         try:
@@ -535,10 +547,11 @@ class SimulationManager:
                 self._child = None
                 self._set(Simulation())
 
-    def _spawn_background(self, coroutine: Any) -> None:
+    def _spawn_background(self, coroutine: Any) -> asyncio.Task:
         task = asyncio.create_task(coroutine)
         self._background.add(task)
         task.add_done_callback(self._background.discard)
+        return task
 
     # -- state -------------------------------------------------------------
 

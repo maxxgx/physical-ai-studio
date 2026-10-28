@@ -668,6 +668,22 @@ async def test_a_stop_while_the_address_is_stored_is_not_undone(harness: Harness
     assert harness.manager.state().status is not SimulationStatus.RUNNING
 
 
+async def test_a_replaced_simulations_address_write_lands_before_the_new_ones(harness: Harness) -> None:
+    robot_id = harness.robots.add()
+    harness.robots.set_http_url_delay_s = 1.0
+    harness.scenario = {"events": [ready("sim-a", http_url="http://127.0.0.1:50001")]}
+    await harness.manager.start(harness.request(robot_id))
+    await asyncio.sleep(0.5)  # ready is in, the first address is being stored
+
+    harness.robots.set_http_url_delay_s = 0.0
+    harness.scenario = {"events": [ready("sim-a", http_url="http://127.0.0.1:50002")]}
+    await harness.manager.start(harness.request(robot_id, replace=True))
+    await harness.wait_for(SimulationStatus.RUNNING)
+    await asyncio.sleep(1.0)  # past the first write's delay
+
+    assert harness.robots.http_urls == [(robot_id, "http://127.0.0.1:50001"), (robot_id, "http://127.0.0.1:50002")]
+
+
 async def test_a_robot_that_allows_remote_simulations_is_refused(harness: Harness) -> None:
     class RemotePayload(FakePayload):
         allow_remote: bool = True
