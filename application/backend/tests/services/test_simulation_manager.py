@@ -685,6 +685,23 @@ async def test_a_replaced_simulations_address_write_lands_before_the_new_ones(ha
     assert harness.robots.http_urls == [(robot_id, "http://127.0.0.1:50001"), (robot_id, "http://127.0.0.1:50002")]
 
 
+async def test_a_robot_update_sees_whether_studio_simulates_the_robot(harness: Harness) -> None:
+    robot_id, other_id = harness.robots.add(), harness.robots.add()
+    harness.scenario = {"events": ["READY"]}
+
+    async def simulated(robot: UUID) -> bool:
+        async with harness.manager.updating_robot(harness.project_id, robot) as simulated:
+            return simulated
+
+    assert await simulated(robot_id) is False
+    await harness.manager.start(harness.request(robot_id))
+    await harness.wait_for(SimulationStatus.RUNNING)
+    assert [await simulated(robot_id), await simulated(other_id)] == [True, False]
+    await harness.manager.stop()
+    await harness.wait_for(SimulationStatus.IDLE)
+    assert await simulated(robot_id) is False
+
+
 async def test_a_robot_that_allows_remote_simulations_is_refused(harness: Harness) -> None:
     class RemotePayload(FakePayload):
         allow_remote: bool = True

@@ -164,6 +164,7 @@ class SimulationManager:
         self._subscribers: set[asyncio.Queue[Simulation]] = set()
         self._background: set[asyncio.Task] = set()
         self._address_writes: set[asyncio.Task] = set()
+        self._address_lock = asyncio.Lock()
 
     # -- reading -----------------------------------------------------------
 
@@ -188,6 +189,17 @@ class SimulationManager:
             yield queue
         finally:
             self._subscribers.discard(queue)
+
+    @contextlib.asynccontextmanager
+    async def updating_robot(self, project_id: UUID, robot_id: UUID) -> AsyncIterator[bool]:
+        """Hold off storing a simulation's address while a robot is updated.
+
+        Yields whether Studio is starting, running or stopping this robot's simulation. Its address
+        is Studio's then: whoever updates the robot keeps the stored one.
+        """
+        async with self._address_lock:
+            state = self._state
+            yield state.status in _ACTIVE and state.project_id == project_id and state.robot_id == robot_id
 
     # -- commands ----------------------------------------------------------
 
@@ -411,7 +423,10 @@ class SimulationManager:
 
     async def _store_address(self, project_id: UUID, robot_id: UUID, http_url: str) -> None:
         try:
-            await asyncio.wait_for(self._robots.set_http_url(project_id, robot_id, http_url), STORE_ADDRESS_TIMEOUT_S)
+            async with self._address_lock:
+                await asyncio.wait_for(
+                    self._robots.set_http_url(project_id, robot_id, http_url), STORE_ADDRESS_TIMEOUT_S
+                )
         except Exception:
             logger.exception("Could not store the simulation's address {} on its robot", http_url)
 

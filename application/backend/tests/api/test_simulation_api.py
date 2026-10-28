@@ -13,7 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import api.robot_catalog as robot_catalog
-from api.dependencies import get_simulation_manager
+from api.dependencies import get_robot_service, get_simulation_manager
 from api.simulation import simulation_events
 from exceptions import (
     ResourceNotFoundError,
@@ -24,6 +24,8 @@ from exceptions import (
     SimulationNotSupportedError,
 )
 from main import app
+from schemas.robot import RobotAdapter
+from schemas.robot import _registry as _robot_registry
 from schemas.simulation import Simulation, SimulationStatus, StartSimulationRequest
 
 PROJECT_ID = uuid4()
@@ -52,6 +54,12 @@ class StubManager:
         self.started.append(request)
         self.current = STARTING
         return self.current
+
+    @contextlib.asynccontextmanager
+    async def updating_robot(self, project_id: object, robot_id: object) -> AsyncIterator[bool]:
+        active = {SimulationStatus.STARTING, SimulationStatus.RUNNING, SimulationStatus.STOPPING}
+        current = self.current
+        yield current.status in active and current.project_id == project_id and current.robot_id == robot_id
 
     async def stop(self) -> Simulation:
         self.stopped += 1
@@ -216,3 +224,47 @@ def test_catalog_describes_the_simulation_of_simulated_types() -> None:
         "labels": ["1 arm", "twin"],
     }
     assert robot_catalog._simulation_response(None) is None
+
+
+def _simulated_robot_type() -> str:
+    for model in _robot_registry.get_robot_types():
+        if "http_url" in getattr(model.model_fields["payload"].annotation, "model_fields", {}):
+            return model.model_fields["type"].annotation.__args__[0]
+    pytest.skip("No installed robot type has a simulation address")
+    raise AssertionError("unreachable")
+
+
+class _StoredRobots:
+    def __init__(self, robot: object) -> None:
+        self.robot = robot
+        self.updates: list = []
+
+    async def get_robot_by_id(self, project_id: object, robot_id: object) -> object:
+        return self.robot
+
+    async def update_robot(self, project_id: object, robot: object) -> object:
+        self.updates.append(robot)
+        return robot
+
+
+@pytest.mark.parametrize(("status", "kept"), [(SimulationStatus.RUNNING, True), (SimulationStatus.IDLE, False)])
+def test_updating_a_robot_keeps_the_address_of_the_simulation_studio_runs(
+    manager: StubManager, status: SimulationStatus, kept: bool
+) -> None:
+    studio_url, form_url = "http://127.0.0.1:56209", "http://127.0.0.1:8080"
+    robot_type = _simulated_robot_type()
+    stored = RobotAdapter.validate_python(
+        {"id": str(ROBOT_ID), "name": "Sim", "type": robot_type, "payload": {"http_url": studio_url}}
+    )
+    robots = _StoredRobots(stored)
+    manager.current = Simulation(status=status, project_id=PROJECT_ID, robot_id=ROBOT_ID)
+    app.dependency_overrides[get_robot_service] = lambda: robots
+
+    # The robot form was opened before the simulation started: it still has the old address.
+    body = {**stored.model_dump(mode="json"), "name": "Renamed", "payload": {"http_url": form_url}}
+    response = TestClient(app).put(f"/api/projects/{PROJECT_ID}/robots/{ROBOT_ID}", json=body)
+
+    assert response.status_code == 200
+    assert [(robot.name, robot.payload.http_url) for robot in robots.updates] == [
+        ("Renamed", studio_url if kept else form_url)
+    ]
