@@ -17,6 +17,7 @@ from schemas.environment import (
     TeleoperatorNoneWithRobot,
     TeleoperatorRobotWithRobot,
 )
+from schemas.project_camera import Camera
 
 
 class ProjectEnvironmentRepository(ProjectBaseRepository[Environment, ProjectEnvironmentDB]):
@@ -63,19 +64,36 @@ class ProjectEnvironmentRepository(ProjectBaseRepository[Environment, ProjectEnv
             raise ValueError(f"{item.__class__} with ID `{item.id}` doesn't exist")
         return updated
 
-    async def add_cameras(self, environment_id: UUID, camera_ids: Sequence[UUID]) -> None:
+    async def add_cameras(
+        self,
+        environment_id: UUID,
+        camera_ids: Sequence[UUID],
+        *,
+        new_cameras: Sequence[Camera] = (),
+        changed_cameras: Sequence[Camera] = (),
+    ) -> None:
         """Link cameras to an environment, keeping its other links; a camera it has already is skipped.
 
         One ``INSERT``, unlike ``update``, which replaces every link with those of a snapshot: two
-        additions at the same time both stay.
+        additions at the same time both stay. *new_cameras* are created and *changed_cameras* saved
+        first, in the same transaction: if linking fails, none of it is kept.
         """
-        if not camera_ids:
-            return
-        await self.db.execute(
-            insert(EnvironmentCameraDB)
-            .values([{"environment_id": str(environment_id), "camera_id": str(camera_id)} for camera_id in camera_ids])
-            .on_conflict_do_nothing()
-        )
+        for camera in new_cameras:
+            row = ProjectCameraMapper.to_schema(camera)
+            row.project_id = self.project_id
+            self.db.add(row)
+        for camera in changed_cameras:
+            row = ProjectCameraMapper.to_schema(camera)
+            row.project_id = self.project_id
+            await self.db.merge(row)
+        if camera_ids:
+            await self.db.execute(
+                insert(EnvironmentCameraDB)
+                .values(
+                    [{"environment_id": str(environment_id), "camera_id": str(camera_id)} for camera_id in camera_ids]
+                )
+                .on_conflict_do_nothing()
+            )
         await self.db.commit()
 
     async def get_by_id_with_relations(self, environment_id: UUID) -> EnvironmentWithRelations | None:

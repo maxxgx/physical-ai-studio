@@ -4,7 +4,6 @@
 """What a simulated robot's simulation serves (viewer, speed, cameras), and adding its cameras."""
 
 import asyncio
-import contextlib
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -167,32 +166,30 @@ class RobotSimulationService:
             on_stream = await _reusable_cameras(camera_service, project_id, robot_id)
             cameras: list[IPCamera] = []
             created: list[IPCamera] = []
+            adopted: list[IPCamera] = []
+            for name in dict.fromkeys(names):
+                source = by_name[name]
+                camera = on_stream.get(source.stream_url)
+                if camera is None:
+                    camera = _ip_camera(camera_names.get(name, "").strip() or f"{robot.name} {name}", source, robot_id)
+                    created.append(camera)
+                elif camera.payload.simulation_robot_id is None:
+                    payload = camera.payload.model_copy(update={"simulation_robot_id": robot_id})
+                    camera = camera.model_copy(update={"payload": payload})
+                    adopted.append(camera)
+                cameras.append(camera)
             try:
-                for name in dict.fromkeys(names):
-                    source = by_name[name]
-                    camera = on_stream.get(source.stream_url)
-                    if camera is None:
-                        camera = _ip_camera(
-                            camera_names.get(name, "").strip() or f"{robot.name} {name}", source, robot_id
-                        )
-                        await camera_service.create_camera(project_id, camera)
-                        created.append(camera)
-                    elif camera.payload.simulation_robot_id is None:
-                        payload = camera.payload.model_copy(update={"simulation_robot_id": robot_id})
-                        camera = camera.model_copy(update={"payload": payload})
-                        await camera_service.update_camera(project_id, camera)
-                    cameras.append(camera)
-
-                # Appended, not written back from a snapshot of the environment: a camera that
-                # another request added in the meantime stays.
-                await environments.add_cameras(environment_id, [camera.id for camera in cameras])
+                # One transaction: a failure (e.g. the environment deleted meanwhile) keeps neither the
+                # new cameras nor the adoptions. Appended, not written back from a snapshot of the
+                # environment: a camera that another request added in the meantime stays.
+                await environments.add_cameras(
+                    environment_id,
+                    [camera.id for camera in cameras],
+                    new_cameras=created,
+                    changed_cameras=adopted,
+                )
             except Exception:
-                # Each camera is committed on its own: remove the ones this call made, in a clean
-                # transaction (the failure may have left the session's one unusable).
                 await self._session.rollback()
-                for camera in created:
-                    with contextlib.suppress(Exception):
-                        await camera_service.delete_camera(project_id, camera.id)
                 raise
             return cameras
 

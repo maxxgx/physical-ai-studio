@@ -15,6 +15,7 @@ import httpx
 import pytest
 from pydantic import BaseModel
 from sqlalchemy import event, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import services.robot_simulation_service as module
@@ -189,9 +190,19 @@ def environment_store(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         async def get_by_id(self, environment_id: UUID) -> Any:
             return store["environment"]
 
-        async def add_cameras(self, environment_id: UUID, camera_ids: list[UUID]) -> None:
+        async def add_cameras(
+            self,
+            environment_id: UUID,
+            camera_ids: list[UUID],
+            *,
+            new_cameras: list[IPCamera] = (),  # type: ignore[assignment]
+            changed_cameras: list[IPCamera] = (),  # type: ignore[assignment]
+        ) -> None:
+            # All or nothing, like the one transaction of the real repository.
             if store["fail_update"]:
                 raise RuntimeError("database is gone")
+            store["created"].extend(new_cameras)
+            store["updated_cameras"].extend(changed_cameras)
             store["linked"].extend(camera_ids)
 
     class FakeCameraService:
@@ -379,16 +390,14 @@ async def test_another_robots_camera_on_the_stream_is_not_reused(
     assert environment_store["linked"] == [cameras[0].id]
 
 
-async def test_cameras_created_before_a_failure_are_removed(
-    robot: SimpleNamespace, environment_store: dict[str, Any]
-) -> None:
+async def test_a_failure_keeps_no_new_camera(robot: SimpleNamespace, environment_store: dict[str, Any]) -> None:
     environment_store["fail_update"] = True
 
     with pytest.raises(RuntimeError):
         await service(sim_api(EXTERNAL)).add_cameras(PROJECT_ID, uuid4(), ROBOT_ID, ["wrist"])
 
-    assert environment_store["deleted"] == [camera.id for camera in environment_store["created"]]
-    assert len(environment_store["deleted"]) == 1
+    assert environment_store["created"] == []
+    assert environment_store["linked"] == []
 
 
 async def test_listing_returns_the_running_simulations_of_simulated_robots(robot: SimpleNamespace) -> None:
@@ -456,12 +465,14 @@ def two_camera_api(on_cameras_probe: Any) -> httpx.MockTransport:
     return httpx.MockTransport(handle)
 
 
-async def add_with_database(session: Any, transport: httpx.MockTransport, name: str) -> list[IPCamera]:
+async def add_with_database(session: Any, transport: httpx.MockTransport, name: str | list[str]) -> list[IPCamera]:
     launch = SimpleNamespace(owner_name=lambda payload: payload.name)
     registry = SimpleNamespace(get_definition=lambda robot_type: SimpleNamespace(simulation=launch))
     manager = fake_manager(Simulation)
     simulations = RobotSimulationService(session, registry, manager, transport=transport)  # type: ignore[arg-type]
-    return await simulations.add_cameras(PROJECT_ID, ENVIRONMENT_ID, ROBOT_ID, [name])
+    return await simulations.add_cameras(
+        PROJECT_ID, ENVIRONMENT_ID, ROBOT_ID, [name] if isinstance(name, str) else name
+    )
 
 
 async def linked_cameras(sessions: Any) -> list[str]:
@@ -553,3 +564,25 @@ async def test_adding_cameras_is_refused_once_a_replacement_moved_the_simulation
     assert environment_store["updated_cameras"] == []
     assert environment_store["created"] == []
     assert environment_store["linked"] == []
+
+
+async def test_a_failed_addition_keeps_neither_an_adoption_nor_a_new_camera(
+    robot: SimpleNamespace, studio_db: Any
+) -> None:
+    registry = RobotCatalogRegistry()
+    unowned = _ip_camera(f"{EXTERNAL}/cameras/wrist/mjpeg")
+    async with studio_db() as session:
+        await ProjectCameraService(session, registry).create_camera(PROJECT_ID, unowned)
+
+    async def delete_the_environment() -> None:
+        # The environment is deleted while the addition probes the simulation.
+        async with studio_db() as session:
+            await EnvironmentService(session, registry).delete_environment(PROJECT_ID, ENVIRONMENT_ID)
+
+    async with studio_db() as session:
+        with pytest.raises(IntegrityError):
+            await add_with_database(session, two_camera_api(delete_the_environment), ["wrist", "overview"])
+
+    async with studio_db() as session:
+        stored = await ProjectCameraService(session, registry).get_camera_list(PROJECT_ID)
+    assert [(camera.id, camera.payload.simulation_robot_id) for camera in stored] == [(unowned.id, None)]
