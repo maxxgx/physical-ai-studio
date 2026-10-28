@@ -118,6 +118,19 @@ describe('useSimulationUpdates', () => {
         expect(invalidate).toHaveBeenCalledWith(robotQueries);
     });
 
+    it('refreshes on the first event after a stream that failed before its first event', () => {
+        rs.stubGlobal('EventSource', FakeEventSource);
+        const { queryClient, events } = renderUpdates();
+        const invalidate = rs.spyOn(queryClient, 'invalidateQueries');
+
+        act(() => events().onerror?.());
+        act(() => events().emit({ status: 'running', robot_id: 'robot-1' }));
+
+        expect(invalidate).toHaveBeenCalledWith({
+            queryKey: ['get', '/api/projects/{project_id}/robots/{robot_id}'],
+        });
+    });
+
     it('opens a new stream after the browser gave up on one, and closes it on unmount', () => {
         rs.useFakeTimers();
         rs.stubGlobal('EventSource', FakeEventSource);

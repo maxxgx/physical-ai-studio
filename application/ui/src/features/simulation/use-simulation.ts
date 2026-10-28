@@ -62,7 +62,8 @@ export const useSimulationUpdates = () => {
                 simulation.started_at,
                 simulation.http_url,
             ]);
-            if (lastSimulation !== undefined && (current !== lastSimulation || reconnected)) {
+            // A reconnect refreshes by itself, also when the stream failed before its first event.
+            if (reconnected || (lastSimulation !== undefined && current !== lastSimulation)) {
                 // Whether a simulated robot is online follows its simulation, and a simulation that
                 // starts on a new port stores that address on its robot and moves its IP cameras (and
                 // so the environments' cameras) along.
