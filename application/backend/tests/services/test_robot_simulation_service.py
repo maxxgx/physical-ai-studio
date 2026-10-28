@@ -211,6 +211,7 @@ async def test_adding_cameras_creates_ip_cameras_on_the_streams(
             {"url": f"{EXTERNAL}/cameras/wrist/mjpeg"},
         )
     ]
+    assert created[0].payload.simulation_robot_id == ROBOT_ID
     updated = environment_store["updated"]
     assert [c.camera_id for c in updated.cameras] == [environment.cameras[0].camera_id, created[0].id]
 
@@ -251,15 +252,17 @@ async def test_adding_cameras_needs_a_running_simulation(
         await service({}).add_cameras(PROJECT_ID, uuid4(), ROBOT_ID, ["wrist"])
 
 
-async def test_moving_the_simulation_rewrites_only_its_camera_urls() -> None:
-    def ipcam(url: str) -> IPCamera:
-        return IPCamera(id=uuid4(), name=url, fingerprint={"url": url}, hardware_name=None, payload={"url": url})
+def _owned_camera(url: str, owner: UUID | None) -> IPCamera:
+    return IPCamera(
+        id=uuid4(),
+        name=url,
+        fingerprint={"url": url},
+        hardware_name=None,
+        payload={"url": url, "simulation_robot_id": owner},
+    )
 
-    cameras = [
-        ipcam(f"{EXTERNAL}/cameras/wrist/mjpeg"),
-        ipcam("http://127.0.0.1:80800/cameras/wrist/mjpeg"),
-        ipcam("rtsp://192.168.1.100:554/stream1"),
-    ]
+
+async def _move(cameras: list[IPCamera], *, move_unowned: bool = True) -> list[IPCamera]:
     updates: list[IPCamera] = []
 
     class FakeCameraService:
@@ -269,11 +272,54 @@ async def test_moving_the_simulation_rewrites_only_its_camera_urls() -> None:
         async def update_camera(self, project_id: UUID, camera: IPCamera) -> None:
             updates.append(camera)
 
-    await _move_simulation_cameras(FakeCameraService(), PROJECT_ID, EXTERNAL, STUDIO)  # type: ignore[arg-type]
+    await _move_simulation_cameras(
+        FakeCameraService(),  # type: ignore[arg-type]
+        PROJECT_ID,
+        ROBOT_ID,
+        EXTERNAL,
+        STUDIO,
+        move_unowned=move_unowned,
+    )
+    return updates
 
-    assert [(c.id, c.payload.url, c.fingerprint) for c in updates] == [
-        (cameras[0].id, f"{STUDIO}/cameras/wrist/mjpeg", {"url": f"{STUDIO}/cameras/wrist/mjpeg"})
+
+async def test_moving_the_simulation_rewrites_only_its_camera_urls() -> None:
+    cameras = [
+        _owned_camera(f"{EXTERNAL}/cameras/wrist/mjpeg", ROBOT_ID),
+        _owned_camera("http://127.0.0.1:80800/cameras/wrist/mjpeg", ROBOT_ID),
+        _owned_camera("rtsp://192.168.1.100:554/stream1", None),
     ]
+
+    updates = await _move(cameras)
+
+    assert [(c.id, c.payload.url, c.fingerprint, c.payload.simulation_robot_id) for c in updates] == [
+        (cameras[0].id, f"{STUDIO}/cameras/wrist/mjpeg", {"url": f"{STUDIO}/cameras/wrist/mjpeg"}, ROBOT_ID)
+    ]
+
+
+async def test_moving_the_simulation_leaves_another_robots_cameras_on_the_same_address() -> None:
+    mine = _owned_camera(f"{EXTERNAL}/cameras/wrist/mjpeg", ROBOT_ID)
+    theirs = _owned_camera(f"{EXTERNAL}/cameras/overview/mjpeg", uuid4())
+
+    updates = await _move([mine, theirs])
+
+    assert [c.id for c in updates] == [mine.id]
+
+
+@pytest.mark.parametrize("move_unowned", [True, False])
+async def test_a_camera_without_an_owner_moves_only_when_asked_and_then_records_the_robot(
+    move_unowned: bool,
+) -> None:
+    legacy = _owned_camera(f"{EXTERNAL}/cameras/wrist/mjpeg", None)
+
+    updates = await _move([legacy], move_unowned=move_unowned)
+
+    if move_unowned:
+        assert [(c.id, c.payload.url, c.payload.simulation_robot_id) for c in updates] == [
+            (legacy.id, f"{STUDIO}/cameras/wrist/mjpeg", ROBOT_ID)
+        ]
+    else:
+        assert updates == []
 
 
 def _ip_camera(url: str) -> IPCamera:

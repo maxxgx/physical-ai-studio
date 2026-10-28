@@ -172,7 +172,7 @@ class RobotSimulationService:
                 source = by_name[name]
                 camera = on_stream.get(source.stream_url)
                 if camera is None:
-                    camera = _ip_camera(camera_names.get(name, "").strip() or f"{robot.name} {name}", source)
+                    camera = _ip_camera(camera_names.get(name, "").strip() or f"{robot.name} {name}", source, robot_id)
                     await camera_service.create_camera(project_id, camera)
                     created.append(camera)
                 cameras.append(camera)
@@ -215,14 +215,21 @@ async def _get_json(client: httpx.AsyncClient, url: str) -> Any:
         return None
 
 
-def _ip_camera(name: str, source: SimulationCamera) -> IPCamera:
+def _ip_camera(name: str, source: SimulationCamera, robot_id: UUID) -> IPCamera:
     return IPCamera(
         id=uuid4(),
         name=name,
         fingerprint={"url": source.stream_url},
         # Required by the database; the camera form also uses the name when there is no hardware.
         hardware_name=name,
-        payload=IPCameraPayload(url=source.stream_url, width=source.width, height=source.height, fps=source.fps),
+        payload=IPCameraPayload(
+            url=source.stream_url,
+            width=source.width,
+            height=source.height,
+            fps=source.fps,
+            # So that starting the simulation again moves this camera, and no other robot's.
+            simulation_robot_id=robot_id,
+        ),
     )
 
 
