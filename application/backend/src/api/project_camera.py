@@ -86,20 +86,17 @@ async def update_project_camera(
     _ensure_not_claimed(existing.fingerprint, claims)
     _ensure_not_claimed(_require_fingerprint(camera.fingerprint), claims)
     camera_with_id = camera.model_copy(update={"id": camera_id})
-    owner = existing.payload.simulation_robot_id if isinstance(existing, IPCamera) else None
-    if not isinstance(camera_with_id, IPCamera) or owner is None:
-        if isinstance(camera_with_id, IPCamera):
-            payload = camera_with_id.payload.model_copy(update={"simulation_robot_id": None})
-            camera_with_id = camera_with_id.model_copy(update={"payload": payload})
+    if not isinstance(camera_with_id, IPCamera):
         return await camera_service.update_camera(project_id, camera_with_id)
 
-    # The lock robot updates take: Studio does not move the camera in the meantime.
-    async with simulations.updating_robot(project_id, owner) as simulated_by_studio:
+    # The lock Studio moves and adopts cameras under: decided on the camera as stored then.
+    async with simulations.holding_addresses() as simulated_by_studio:
         camera_service.session.expire_all()  # re-read below, not from this session's cache
         existing = await camera_service.get_camera_by_id(project_id, camera_id)
-        if simulated_by_studio and isinstance(existing, IPCamera):
+        owner = existing.payload.simulation_robot_id if isinstance(existing, IPCamera) else None
+        if isinstance(existing, IPCamera) and owner is not None and simulated_by_studio(project_id, owner):
             payload = camera_with_id.payload.model_copy(
-                update={"url": existing.payload.url, "simulation_robot_id": existing.payload.simulation_robot_id}
+                update={"url": existing.payload.url, "simulation_robot_id": owner}
             )
             camera_with_id = camera_with_id.model_copy(update={"payload": payload, "fingerprint": existing.fingerprint})
         else:

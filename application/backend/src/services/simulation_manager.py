@@ -20,7 +20,7 @@ import ipaddress
 import json
 import time
 from collections import deque
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -197,9 +197,23 @@ class SimulationManager:
         Yields whether Studio is starting, running or stopping this robot's simulation. Its address
         is Studio's then: whoever updates the robot keeps the stored one.
         """
+        async with self.holding_addresses() as simulated_by_studio:
+            yield simulated_by_studio(project_id, robot_id)
+
+    @contextlib.asynccontextmanager
+    async def holding_addresses(self) -> AsyncIterator[Callable[[UUID, UUID], bool]]:
+        """Hold off storing simulation addresses, and so moving and adopting cameras.
+
+        One lock, never taken while it is held, for robot and camera updates, address writes and
+        additions of a simulation's cameras alike. Yields whether Studio is starting, running or
+        stopping the simulation of a project's robot.
+        """
         async with self._address_lock:
-            state = self._state
-            yield state.status in _ACTIVE and state.project_id == project_id and state.robot_id == robot_id
+            yield self._simulated_by_studio
+
+    def _simulated_by_studio(self, project_id: UUID, robot_id: UUID) -> bool:
+        state = self._state
+        return state.status in _ACTIVE and state.project_id == project_id and state.robot_id == robot_id
 
     # -- commands ----------------------------------------------------------
 

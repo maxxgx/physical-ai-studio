@@ -3,6 +3,7 @@
 
 """Editing a camera added from a simulation: whether it stays its simulated robot's."""
 
+import asyncio
 import contextlib
 from collections.abc import AsyncIterator, Iterator
 from types import SimpleNamespace
@@ -57,15 +58,19 @@ class FakeRobots:
 
 
 class StubManager:
-    """Which robot's simulation Studio runs, as ``SimulationManager.updating_robot`` reports it."""
+    """Which robot's simulation Studio runs, and the lock Studio moves and adopts cameras under."""
 
     def __init__(self) -> None:
         self.current = Simulation()
+        self.lock = asyncio.Lock()
+
+    def simulated_by_studio(self, project_id: UUID, robot_id: UUID) -> bool:
+        return self.current.status is SimulationStatus.RUNNING and self.current.robot_id == robot_id
 
     @contextlib.asynccontextmanager
-    async def updating_robot(self, project_id: UUID, robot_id: UUID) -> AsyncIterator[bool]:
-        current = self.current
-        yield current.status is SimulationStatus.RUNNING and current.robot_id == robot_id
+    async def holding_addresses(self) -> AsyncIterator[Any]:
+        async with self.lock:
+            yield self.simulated_by_studio
 
 
 @pytest.fixture
@@ -168,3 +173,42 @@ def test_creating_a_camera_does_not_let_the_request_choose_its_robot(cameras: Fa
     assert response.status_code == 201
     (created,) = [camera for camera in cameras.cameras.values() if camera.name == "Mine now"]
     assert created.payload.simulation_robot_id is None
+
+
+async def test_a_save_that_read_the_camera_before_it_was_adopted_keeps_the_adopting_robot(
+    cameras: FakeCameras, manager: StubManager
+) -> None:
+    import api.project_camera as routes
+
+    (camera,) = cameras.cameras.values()
+    unowned = camera.model_copy(update={"payload": camera.payload.model_copy(update={"simulation_robot_id": None})})
+    cameras.cameras[camera.id] = unowned
+    read = cameras.get_camera_by_id
+    reads = 0
+
+    async def read_then_adopt(project_id: UUID, camera_id: UUID) -> IPCamera:
+        # The save reads the camera; then an addition of A's cameras adopts it, under the lock.
+        nonlocal reads
+        reads += 1
+        seen = await read(project_id, camera_id)
+        if reads == 1:
+            async with manager.holding_addresses():
+                payload = seen.payload.model_copy(update={"simulation_robot_id": A})
+                cameras.cameras[camera_id] = seen.model_copy(update={"payload": payload})
+        return seen
+
+    cameras.get_camera_by_id = read_then_adopt  # type: ignore[method-assign]
+    form = unowned.model_copy(update={"name": "Renamed"})
+
+    await routes.update_project_camera(
+        PROJECT_ID,
+        camera.id,
+        cameras,  # type: ignore[arg-type]
+        form,
+        SimpleNamespace(holder_of=lambda _: None),  # type: ignore[arg-type]
+        FakeRobots(),  # type: ignore[arg-type]
+        manager,  # type: ignore[arg-type]
+    )
+
+    saved = cameras.cameras[camera.id]
+    assert (saved.name, saved.payload.url, saved.payload.simulation_robot_id) == ("Renamed", unowned.payload.url, A)
