@@ -69,9 +69,16 @@ const RobotCamerasPrompt = ({
         }
     );
 
+    // A camera on a stream of this simulation is present when it is this robot's, or no robot's
+    // (adding it makes it this robot's). Another robot's camera only shares the URL: that robot's
+    // simulation ran on this port before, and moves the camera when it restarts.
     const environmentUrls = new Set(
         (environment.cameras ?? []).flatMap((camera) =>
-            camera.driver === 'ipcam' && 'url' in camera.payload ? [camera.payload.url] : []
+            camera.driver === 'ipcam' &&
+            'url' in camera.payload &&
+            [robot.id, null, undefined].includes(camera.payload.simulation_robot_id)
+                ? [camera.payload.url]
+                : []
         )
     );
     const missing = (simulation?.cameras ?? []).filter(({ stream_url }) => !environmentUrls.has(stream_url));
