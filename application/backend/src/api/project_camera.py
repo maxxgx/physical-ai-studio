@@ -43,8 +43,14 @@ async def create_project_camera(
     camera: Camera,
     camera_service: Annotated[ProjectCameraService, Depends(get_camera_service)],
 ) -> Camera:
-    """Create a new camera."""
+    """Create a new camera.
+
+    An IP camera's simulated robot (``payload.simulation_robot_id``) is not taken from the request:
+    only adding a simulation's cameras sets it.
+    """
     _require_fingerprint(camera.fingerprint)
+    if isinstance(camera, IPCamera):
+        camera = camera.model_copy(update={"payload": camera.payload.model_copy(update={"simulation_robot_id": None})})
     return await camera_service.create_camera(project_id, camera)
 
 

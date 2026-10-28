@@ -39,6 +39,10 @@ class FakeCameras:
         self.cameras[camera.id] = camera
         return camera
 
+    async def create_camera(self, project_id: UUID, camera: IPCamera) -> IPCamera:
+        self.cameras[camera.id] = camera
+        return camera
+
 
 class FakeRobots:
     robots = {
@@ -147,3 +151,20 @@ async def test_a_name_saved_from_a_form_opened_before_the_simulation_moved_keeps
         {"url": moved},
         A,
     )
+
+
+def test_creating_a_camera_does_not_let_the_request_choose_its_robot(cameras: FakeCameras) -> None:
+    url = f"{A_URL}/cameras/overview/mjpeg"
+    body = {
+        "name": "Mine now",
+        "driver": "ipcam",
+        "fingerprint": {"url": url},
+        "hardware_name": None,
+        "payload": {"url": url, "simulation_robot_id": str(A)},
+    }
+
+    response = TestClient(app).post(f"/api/projects/{PROJECT_ID}/cameras", json=body)
+
+    assert response.status_code == 201
+    (created,) = [camera for camera in cameras.cameras.values() if camera.name == "Mine now"]
+    assert created.payload.simulation_robot_id is None
