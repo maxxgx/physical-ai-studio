@@ -80,6 +80,22 @@ describe('useSimulationUpdates', () => {
         expect(invalidate).toHaveBeenCalledWith({ queryKey: ['get', '/api/projects/{project_id}/robots/online'] });
     });
 
+    it('refreshes the robots once a started simulation is running, as it stored its new address on its robot', () => {
+        rs.stubGlobal('EventSource', FakeEventSource);
+        const { queryClient, events } = renderUpdates();
+        const path = { params: { path: { project_id: 'project-1', robot_id: 'robot-1' } } };
+        const robotKey = $api.queryOptions('get', '/api/projects/{project_id}/robots/{robot_id}', path).queryKey;
+        const robotsKey = $api.queryOptions('get', '/api/projects/{project_id}/robots', path).queryKey;
+        queryClient.setQueryData(robotKey, { payload: { http_url: 'http://127.0.0.1:8080' } });
+        queryClient.setQueryData(robotsKey, []);
+
+        act(() => events().emit({ status: 'starting', robot_id: 'robot-1' }));
+        act(() => events().emit({ status: 'running', robot_id: 'robot-1', http_url: 'http://127.0.0.1:56209' }));
+
+        expect(queryClient.getQueryState(robotKey)?.isInvalidated).toBe(true);
+        expect(queryClient.getQueryState(robotsKey)?.isInvalidated).toBe(true);
+    });
+
     it('opens a new stream after the browser gave up on one, and closes it on unmount', () => {
         rs.useFakeTimers();
         rs.stubGlobal('EventSource', FakeEventSource);
