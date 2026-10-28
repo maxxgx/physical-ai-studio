@@ -26,6 +26,7 @@ from exceptions import (
     SimulationNameInUseError,
     SimulationNotSupportedError,
 )
+from schemas.project_camera import IPCamera
 from schemas.robot import UnavailableRobot
 from schemas.simulation import Simulation, SimulationPhase, SimulationStatus, StartSimulationRequest
 from services.simulation_manager import SimulationManager
@@ -724,9 +725,6 @@ async def test_the_database_store_writes_the_address_only_when_it_changes(
         async def get_robot_by_id(self, project_id: UUID, robot_id: UUID) -> Any:
             return robot
 
-        async def get_robot_list(self, project_id: UUID) -> list[Any]:
-            return []
-
         async def update_robot(self, project_id: UUID, updated: Any) -> None:
             updates.append(updated)
 
@@ -751,56 +749,70 @@ async def _no_cameras(project_id: UUID) -> list[Any]:
     return []
 
 
-@pytest.mark.parametrize(
-    ("other_url", "move_unowned"), [("http://127.0.0.1:8080", False), ("http://127.0.0.1:7", True)]
-)
-async def test_the_database_store_moves_unowned_cameras_only_when_no_other_robot_has_the_address(
-    monkeypatch: pytest.MonkeyPatch, other_url: str, move_unowned: bool
+class _StoredRobot(BaseModel):
+    id: UUID
+    type: str = "Sim_Follower"
+    payload: FakePayload
+
+
+async def test_the_database_store_moves_only_the_started_robots_cameras_after_sequential_starts(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import services.simulation_manager as module
 
-    robot_id = uuid4()
-    robot = SimpleNamespace(
-        id=robot_id,
-        type="Sim_Follower",
-        payload=FakePayload(http_url="http://127.0.0.1:8080"),
-        model_copy=lambda update: SimpleNamespace(**update),
-    )
-    other = SimpleNamespace(id=uuid4(), type="Sim_Follower", payload=FakePayload(name="sim-b", http_url=other_url))
-    moves: list[dict[str, Any]] = []
+    shared = "http://127.0.0.1:8080"
+    a, b = uuid4(), uuid4()
+    robots = {
+        a: _StoredRobot(id=a, payload=FakePayload(name="sim-a", http_url=shared)),
+        b: _StoredRobot(id=b, payload=FakePayload(name="sim-b", http_url=shared)),
+    }
 
-    class FakeService:
+    def camera(stream: str, owner: UUID | None) -> IPCamera:
+        url = f"{shared}/cameras/{stream}/mjpeg"
+        return IPCamera(
+            id=uuid4(),
+            name=stream,
+            fingerprint={"url": url},
+            hardware_name=stream,
+            payload={"url": url, "simulation_robot_id": owner},
+        )
+
+    cameras = {cam.name: cam for cam in (camera("wrist", a), camera("unowned", None))}
+
+    class FakeRobotService:
         def __init__(self, session: Any, registry: Any) -> None:
             pass
 
         async def get_robot_by_id(self, project_id: UUID, robot_id: UUID) -> Any:
-            return robot
-
-        async def get_robot_list(self, project_id: UUID) -> list[Any]:
-            return [robot, other]
+            return robots[robot_id]
 
         async def update_robot(self, project_id: UUID, updated: Any) -> None:
-            pass
+            robots[updated.id] = updated
 
-    async def fake_move(cameras: Any, project_id: UUID, owner: UUID, old_url: str, new_url: str, **kwargs: Any) -> None:
-        moves.append({"owner": owner, "old_url": old_url, "new_url": new_url, **kwargs})
+    class FakeCameraService:
+        async def get_camera_list(self, project_id: UUID) -> list[IPCamera]:
+            return list(cameras.values())
+
+        async def update_camera(self, project_id: UUID, updated: IPCamera) -> None:
+            cameras[updated.name] = updated
 
     @contextlib.asynccontextmanager
     async def fake_session():
         yield None
 
-    monkeypatch.setattr(module, "RobotService", FakeService)
-    monkeypatch.setattr(module, "ProjectCameraService", lambda *_args: None)
-    monkeypatch.setattr(module, "_move_simulation_cameras", fake_move)
+    monkeypatch.setattr(module, "RobotService", FakeRobotService)
+    monkeypatch.setattr(module, "ProjectCameraService", lambda *_args: FakeCameraService())
     monkeypatch.setattr(module, "get_async_db_session_ctx", fake_session)
+    store = module.DatabaseSimulationRobots(SimpleNamespace())  # type: ignore[arg-type]
 
-    await module.DatabaseSimulationRobots(SimpleNamespace()).set_http_url(uuid4(), robot_id, "http://127.0.0.1:9")  # type: ignore[arg-type]
+    await store.set_http_url(uuid4(), a, "http://127.0.0.1:50001")
+    await store.set_http_url(uuid4(), b, "http://127.0.0.1:50002")
 
-    assert moves == [
-        {
-            "owner": robot_id,
-            "old_url": "http://127.0.0.1:8080",
-            "new_url": "http://127.0.0.1:9",
-            "move_unowned": move_unowned,
-        }
+    assert {name: (cam.payload.url, cam.payload.simulation_robot_id) for name, cam in cameras.items()} == {
+        "wrist": ("http://127.0.0.1:50001/cameras/wrist/mjpeg", a),
+        "unowned": (f"{shared}/cameras/unowned/mjpeg", None),
+    }
+    assert [robots[a].payload.http_url, robots[b].payload.http_url] == [
+        "http://127.0.0.1:50001",
+        "http://127.0.0.1:50002",
     ]

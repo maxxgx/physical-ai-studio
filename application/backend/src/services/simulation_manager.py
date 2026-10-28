@@ -97,54 +97,34 @@ class DatabaseSimulationRobots:
             robot = await service.get_robot_by_id(project_id, robot_id)
             if isinstance(robot, UnavailableRobot) or "http_url" not in type(robot.payload).model_fields:
                 return
-            old_url = robot.payload.http_url
-            if old_url == http_url:
-                return
-            # Cameras saved without an owner can only be told apart by their address, so they move
-            # only when no other robot of the project has the same one.
-            address_shared = any(
-                other.id != robot_id and getattr(other.payload, "http_url", None) == old_url
-                for other in await service.get_robot_list(project_id)
-                if not isinstance(other, UnavailableRobot)
-            )
-            # Cameras first: if moving them fails, the robot still has the old address and the next
-            # start moves the rest.
+            # Cameras first: if moving them fails, the next start moves the rest.
             await _move_simulation_cameras(
-                ProjectCameraService(session, self._registry),
-                project_id,
-                robot_id,
-                old_url,
-                http_url,
-                move_unowned=not address_shared,
+                ProjectCameraService(session, self._registry), project_id, robot_id, http_url
             )
+            if robot.payload.http_url == http_url:
+                return
             payload = robot.payload.model_copy(update={"http_url": http_url})
             await service.update_robot(project_id, robot.model_copy(update={"payload": payload}))
 
 
 async def _move_simulation_cameras(
-    cameras: ProjectCameraService,
-    project_id: UUID,
-    robot_id: UUID,
-    old_url: str,
-    new_url: str,
-    *,
-    move_unowned: bool,
+    cameras: ProjectCameraService, project_id: UUID, robot_id: UUID, new_url: str
 ) -> None:
-    """Point the IP cameras on a robot's simulation streams at the simulation's new address.
+    """Point the IP cameras added from a robot's simulation at the simulation's new address.
 
     Simulations start on free ports, so the address changes on every start. A camera added from a
-    simulation records its robot, and only that robot's cameras move. A camera without one (added
-    before cameras recorded it, or by hand) moves when *move_unowned*, and then records the robot.
+    simulation records its robot, and only that robot's cameras move, from whatever address they
+    were on (the robot's stored address may have changed since). A camera without a robot never
+    moves: its address cannot tell which simulation it came from.
     """
-    prefix = f"{old_url}/cameras/"
     for camera in await cameras.get_camera_list(project_id):
-        if not isinstance(camera, IPCamera) or not camera.payload.url.startswith(prefix):
+        if not isinstance(camera, IPCamera) or camera.payload.simulation_robot_id != robot_id:
             continue
-        owner = camera.payload.simulation_robot_id
-        if owner != robot_id and not (owner is None and move_unowned):
+        base, separator, stream = camera.payload.url.partition("/cameras/")
+        if not separator or base == new_url:
             continue
-        url = f"{new_url}/cameras/{camera.payload.url.removeprefix(prefix)}"
-        payload = camera.payload.model_copy(update={"url": url, "simulation_robot_id": robot_id})
+        url = f"{new_url}/cameras/{stream}"
+        payload = camera.payload.model_copy(update={"url": url})
         await cameras.update_camera(
             project_id, camera.model_copy(update={"payload": payload, "fingerprint": {"url": url}})
         )
