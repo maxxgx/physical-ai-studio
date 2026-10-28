@@ -22,11 +22,9 @@ from exceptions import (
 from repositories.project_environment_repo import ProjectEnvironmentRepository
 from robots.catalog.registry import RobotCatalogRegistry
 from robots.robot_service import RobotService
-from schemas.environment import CameraEnvironmentConfiguration
 from schemas.project_camera import IPCamera, IPCameraPayload
 from schemas.robot import UnavailableRobot
 from schemas.simulation import ProjectRobotSimulation, RobotSimulation, SimulationCamera, SimulationStatus
-from services.environment_service import EnvironmentService
 from services.project_camera_service import ProjectCameraService
 from services.simulation_manager import SimulationManager
 
@@ -141,10 +139,8 @@ class RobotSimulationService:
         not_added = [name for name in camera_names if name not in names]
         if not_added:
             raise SimulationInvalidRequestError(f"Names given for cameras that are not added: {', '.join(not_added)}.")
-        environment = await ProjectEnvironmentRepository(self._session, project_id, self._registry).get_by_id(
-            environment_id
-        )
-        if environment is None:
+        environments = ProjectEnvironmentRepository(self._session, project_id, self._registry)
+        if await environments.get_by_id(environment_id) is None:
             raise ResourceNotFoundError(ResourceType.ENVIRONMENT, str(environment_id))
         simulation = await self.get(project_id, robot_id)
         if not simulation.running:
@@ -164,7 +160,6 @@ class RobotSimulationService:
             for camera in await camera_service.get_camera_list(project_id)
             if isinstance(camera, IPCamera)
         }
-        in_environment = {configuration.camera_id for configuration in environment.cameras}
         cameras: list[IPCamera] = []
         created: list[IPCamera] = []
         try:
@@ -177,16 +172,9 @@ class RobotSimulationService:
                     created.append(camera)
                 cameras.append(camera)
 
-            added = [
-                CameraEnvironmentConfiguration(camera_id=camera.id)
-                for camera in cameras
-                if camera.id not in in_environment
-            ]
-            if added:
-                await EnvironmentService(self._session, self._registry).update_environment(
-                    project_id,
-                    environment.model_copy(update={"cameras": [*environment.cameras, *added]}),
-                )
+            # Appended, not written back from a snapshot of the environment: a camera that another
+            # request added in the meantime stays.
+            await environments.add_cameras(environment_id, [camera.id for camera in cameras])
         except Exception:
             # Each camera is committed on its own: remove the ones this call made, in a clean
             # transaction (the failure may have left the session's one unusable).

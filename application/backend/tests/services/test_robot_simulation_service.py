@@ -3,6 +3,8 @@
 
 """RobotSimulationService against a fake simulation HTTP API."""
 
+import asyncio
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
@@ -11,12 +13,19 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 from pydantic import BaseModel
+from sqlalchemy import event, select
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import services.robot_simulation_service as module
+from db.schema import Base, EnvironmentCameraDB, ProjectDB, ProjectEnvironmentDB
 from exceptions import SimulationInvalidRequestError, SimulationNotRunningError, SimulationNotSupportedError
+from repositories.project_environment_repo import ProjectEnvironmentRepository
+from robots.catalog.registry import RobotCatalogRegistry
 from schemas.environment import CameraEnvironmentConfiguration, Environment
 from schemas.project_camera import IPCamera
 from schemas.simulation import Simulation, SimulationStatus
+from services.environment_service import EnvironmentService
+from services.project_camera_service import ProjectCameraService
 from services.robot_simulation_service import RobotSimulationService
 from services.simulation_manager import _move_simulation_cameras
 
@@ -152,7 +161,7 @@ def environment_store(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         "created": [],
         "deleted": [],
         "existing": [],
-        "updated": None,
+        "linked": [],
         "fail_update": False,
     }
 
@@ -162,6 +171,11 @@ def environment_store(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
 
         async def get_by_id(self, environment_id: UUID) -> Any:
             return store["environment"]
+
+        async def add_cameras(self, environment_id: UUID, camera_ids: list[UUID]) -> None:
+            if store["fail_update"]:
+                raise RuntimeError("database is gone")
+            store["linked"].extend(camera_ids)
 
     class FakeCameraService:
         def __init__(self, *args: Any) -> None:
@@ -177,18 +191,8 @@ def environment_store(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         async def delete_camera(self, project_id: UUID, camera_id: UUID) -> None:
             store["deleted"].append(camera_id)
 
-    class FakeEnvironmentService:
-        def __init__(self, *args: Any) -> None:
-            pass
-
-        async def update_environment(self, project_id: UUID, environment: Environment) -> None:
-            if store["fail_update"]:
-                raise RuntimeError("database is gone")
-            store["updated"] = environment
-
     monkeypatch.setattr(module, "ProjectEnvironmentRepository", FakeEnvironmentRepository)
     monkeypatch.setattr(module, "ProjectCameraService", FakeCameraService)
-    monkeypatch.setattr(module, "EnvironmentService", FakeEnvironmentService)
     return store
 
 
@@ -212,8 +216,7 @@ async def test_adding_cameras_creates_ip_cameras_on_the_streams(
         )
     ]
     assert created[0].payload.simulation_robot_id == ROBOT_ID
-    updated = environment_store["updated"]
-    assert [c.camera_id for c in updated.cameras] == [environment.cameras[0].camera_id, created[0].id]
+    assert environment_store["linked"] == [created[0].id]
 
 
 @pytest.mark.parametrize(("given", "expected"), [("  Wrist  ", "Wrist"), (" ", "Sim arm wrist")])
@@ -336,22 +339,7 @@ async def test_a_camera_already_on_the_stream_is_reused(
 
     assert [(camera.id, camera.name) for camera in cameras] == [(existing.id, existing.name)]
     assert environment_store["created"] == []
-    assert environment_store["updated"].cameras[-1].camera_id == existing.id
-
-
-async def test_a_camera_already_in_the_environment_is_not_added_again(
-    robot: SimpleNamespace, environment_store: dict[str, Any]
-) -> None:
-    existing = _ip_camera(f"{EXTERNAL}/cameras/wrist/mjpeg")
-    environment_store["existing"] = [existing]
-    environment_store["environment"] = environment_store["environment"].model_copy(
-        update={"cameras": [CameraEnvironmentConfiguration(camera_id=existing.id)]}
-    )
-
-    await service(sim_api(EXTERNAL)).add_cameras(PROJECT_ID, uuid4(), ROBOT_ID, ["wrist"])
-
-    assert environment_store["created"] == []
-    assert environment_store["updated"] is None
+    assert environment_store["linked"] == [existing.id]
 
 
 async def test_cameras_created_before_a_failure_are_removed(
@@ -389,3 +377,108 @@ async def test_one_robot_that_cannot_be_probed_does_not_hide_the_others(robot: S
     result = await service(sim_api(EXTERNAL)).list_running(PROJECT_ID)
 
     assert [r.robot_name for r in result] == ["Sim arm"]
+
+
+ENVIRONMENT_ID = uuid4()
+
+
+@pytest.fixture
+async def studio_db(tmp_path: Path):
+    """A database with the project and an empty environment; yields its session factory."""
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'studio.db'}")
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def enable_foreign_keys(connection: Any, _record: Any) -> None:
+        connection.execute("PRAGMA foreign_keys=ON")
+
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as session:
+        session.add(ProjectDB(id=str(PROJECT_ID), name="Project"))
+        session.add(ProjectEnvironmentDB(id=str(ENVIRONMENT_ID), project_id=str(PROJECT_ID), name="Rig"))
+        await session.commit()
+    yield sessions
+    await engine.dispose()
+
+
+def two_camera_api(on_cameras_probe: Any) -> httpx.MockTransport:
+    """The simulation API with a wrist and an overview camera; awaits *on_cameras_probe* on each camera probe."""
+    responses = sim_api(EXTERNAL)
+    responses[f"{EXTERNAL}/cameras"] = [
+        {**responses[f"{EXTERNAL}/cameras"][0], "name": name, "stream_url": f"/cameras/{name}/mjpeg"}
+        for name in ("wrist", "overview")
+    ]
+
+    async def handle(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if url == f"{EXTERNAL}/cameras":
+            await on_cameras_probe()
+        return httpx.Response(200, json=responses[url]) if url in responses else httpx.Response(404)
+
+    return httpx.MockTransport(handle)
+
+
+async def add_with_database(session: Any, transport: httpx.MockTransport, name: str) -> list[IPCamera]:
+    launch = SimpleNamespace(owner_name=lambda payload: payload.name)
+    registry = SimpleNamespace(get_definition=lambda robot_type: SimpleNamespace(simulation=launch))
+    manager = SimpleNamespace(state=Simulation)
+    simulations = RobotSimulationService(session, registry, manager, transport=transport)  # type: ignore[arg-type]
+    return await simulations.add_cameras(PROJECT_ID, ENVIRONMENT_ID, ROBOT_ID, [name])
+
+
+async def linked_cameras(sessions: Any) -> list[str]:
+    async with sessions() as session:
+        return sorted((await session.scalars(select(EnvironmentCameraDB.camera_id))).all())
+
+
+async def test_concurrent_additions_to_an_environment_keep_each_others_cameras(
+    robot: SimpleNamespace, studio_db: Any
+) -> None:
+    # The first two additions both read the environment before either adds its camera to it.
+    both_probing = asyncio.Barrier(2)
+    probes = 0
+
+    async def wait_for_the_other() -> None:
+        nonlocal probes
+        probes += 1
+        if probes <= 2:
+            await asyncio.wait_for(both_probing.wait(), 5.0)
+
+    transport = two_camera_api(wait_for_the_other)
+
+    async def add(name: str) -> list[IPCamera]:
+        async with studio_db() as session:
+            return await add_with_database(session, transport, name)
+
+    wrist, overview = await asyncio.gather(add("wrist"), add("overview"))
+    await add("wrist")  # already in the environment
+
+    assert await linked_cameras(studio_db) == sorted([str(wrist[0].id), str(overview[0].id)])
+
+
+async def test_adding_cameras_keeps_a_change_made_to_the_environment_meanwhile(
+    robot: SimpleNamespace, studio_db: Any
+) -> None:
+    registry = RobotCatalogRegistry()
+    removed = _ip_camera("rtsp://192.168.1.100:554/stream1")
+    async with studio_db() as session:
+        await ProjectCameraService(session, registry).create_camera(PROJECT_ID, removed)
+        environment = await ProjectEnvironmentRepository(session, PROJECT_ID, registry).get_by_id(ENVIRONMENT_ID)
+        linked = [CameraEnvironmentConfiguration(camera_id=removed.id)]
+        await EnvironmentService(session, registry).update_environment(
+            PROJECT_ID, environment.model_copy(update={"cameras": linked})
+        )
+
+    async def remove_the_other_camera() -> None:
+        # Someone saves the environment without that camera while the addition probes the simulation.
+        async with studio_db() as session:
+            environment = await ProjectEnvironmentRepository(session, PROJECT_ID, registry).get_by_id(ENVIRONMENT_ID)
+            await EnvironmentService(session, registry).update_environment(
+                PROJECT_ID, environment.model_copy(update={"cameras": []})
+            )
+
+    async with studio_db() as session:
+        wrist = await add_with_database(session, two_camera_api(remove_the_other_camera), "wrist")
+
+    assert await linked_cameras(studio_db) == [str(wrist[0].id)]
