@@ -124,7 +124,8 @@ class RobotSimulationService:
     ) -> list[IPCamera]:
         """Add some of a running simulation's cameras to an environment, as IP cameras on their streams.
 
-        A project camera already on a stream is reused, under its own name. A new one is named from
+        A project camera already on a stream is reused, under its own name, unless another robot's
+        simulation added it. A reused camera of no robot becomes this robot's. A new one is named from
         *camera_names* (by simulation camera), or ``"<robot name> <camera>"`` when that has none or a
         blank one. Returns the cameras for *names*.
 
@@ -154,12 +155,16 @@ class RobotSimulationService:
 
         robot = await RobotService(self._session, self._registry).get_robot_by_id(project_id, robot_id)
         camera_service = ProjectCameraService(self._session, self._registry)
-        # A camera on the same stream is reused, not duplicated (e.g. a second click, or a stale page).
-        on_stream = {
-            camera.payload.url: camera
-            for camera in await camera_service.get_camera_list(project_id)
-            if isinstance(camera, IPCamera)
-        }
+        # A camera of this robot on the same stream is reused, not duplicated (e.g. a second click, or
+        # a stale page), and so is one of no robot, which then becomes this robot's. A camera of
+        # another robot is not: its simulation ran on this port before, and moves it when it restarts.
+        on_stream: dict[str, IPCamera] = {}
+        for camera in await camera_service.get_camera_list(project_id):
+            if not isinstance(camera, IPCamera) or camera.payload.simulation_robot_id not in {robot_id, None}:
+                continue
+            known = on_stream.get(camera.payload.url)
+            if known is None or known.payload.simulation_robot_id is None:
+                on_stream[camera.payload.url] = camera
         cameras: list[IPCamera] = []
         created: list[IPCamera] = []
         try:
@@ -170,6 +175,10 @@ class RobotSimulationService:
                     camera = _ip_camera(camera_names.get(name, "").strip() or f"{robot.name} {name}", source, robot_id)
                     await camera_service.create_camera(project_id, camera)
                     created.append(camera)
+                elif camera.payload.simulation_robot_id is None:
+                    payload = camera.payload.model_copy(update={"simulation_robot_id": robot_id})
+                    camera = camera.model_copy(update={"payload": payload})
+                    await camera_service.update_camera(project_id, camera)
                 cameras.append(camera)
 
             # Appended, not written back from a snapshot of the environment: a camera that another

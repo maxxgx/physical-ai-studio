@@ -162,6 +162,7 @@ def environment_store(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         "deleted": [],
         "existing": [],
         "linked": [],
+        "updated_cameras": [],
         "fail_update": False,
     }
 
@@ -186,6 +187,10 @@ def environment_store(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
 
         async def create_camera(self, project_id: UUID, camera: IPCamera) -> IPCamera:
             store["created"].append(camera)
+            return camera
+
+        async def update_camera(self, project_id: UUID, camera: IPCamera) -> IPCamera:
+            store["updated_cameras"].append(camera)
             return camera
 
         async def delete_camera(self, project_id: UUID, camera_id: UUID) -> None:
@@ -312,17 +317,50 @@ def _ip_camera(url: str) -> IPCamera:
     return IPCamera(id=uuid4(), name="cam", fingerprint={"url": url}, hardware_name="cam", payload={"url": url})
 
 
-async def test_a_camera_already_on_the_stream_is_reused(
+async def test_a_camera_of_the_robot_already_on_the_stream_is_reused(
     robot: SimpleNamespace, environment_store: dict[str, Any]
 ) -> None:
-    existing = _ip_camera(f"{EXTERNAL}/cameras/wrist/mjpeg")
+    existing = _owned_camera(f"{EXTERNAL}/cameras/wrist/mjpeg", ROBOT_ID)
     environment_store["existing"] = [existing]
 
     cameras = await service(sim_api(EXTERNAL)).add_cameras(PROJECT_ID, uuid4(), ROBOT_ID, ["wrist"], {"wrist": "New"})
 
     assert [(camera.id, camera.name) for camera in cameras] == [(existing.id, existing.name)]
     assert environment_store["created"] == []
+    assert environment_store["updated_cameras"] == []
     assert environment_store["linked"] == [existing.id]
+
+
+async def test_a_camera_of_no_robot_on_the_stream_is_reused_and_becomes_the_robots(
+    robot: SimpleNamespace, environment_store: dict[str, Any]
+) -> None:
+    existing = _ip_camera(f"{EXTERNAL}/cameras/wrist/mjpeg")
+    environment_store["existing"] = [existing]
+
+    cameras = await service(sim_api(EXTERNAL)).add_cameras(PROJECT_ID, uuid4(), ROBOT_ID, ["wrist"])
+
+    assert [(camera.id, camera.payload.simulation_robot_id) for camera in cameras] == [(existing.id, ROBOT_ID)]
+    assert [(c.id, c.payload.simulation_robot_id) for c in environment_store["updated_cameras"]] == [
+        (existing.id, ROBOT_ID)
+    ]
+    assert environment_store["created"] == []
+    assert environment_store["linked"] == [existing.id]
+
+
+async def test_another_robots_camera_on_the_stream_is_not_reused(
+    robot: SimpleNamespace, environment_store: dict[str, Any]
+) -> None:
+    # The other robot's simulation ran on this port before, and moves its camera when it restarts.
+    theirs = _owned_camera(f"{EXTERNAL}/cameras/wrist/mjpeg", uuid4())
+    environment_store["existing"] = [theirs]
+
+    cameras = await service(sim_api(EXTERNAL)).add_cameras(PROJECT_ID, uuid4(), ROBOT_ID, ["wrist"])
+
+    assert [camera.id for camera in cameras] == [camera.id for camera in environment_store["created"]]
+    assert cameras[0].id != theirs.id
+    assert cameras[0].payload.simulation_robot_id == ROBOT_ID
+    assert environment_store["updated_cameras"] == []
+    assert environment_store["linked"] == [cameras[0].id]
 
 
 async def test_cameras_created_before_a_failure_are_removed(
