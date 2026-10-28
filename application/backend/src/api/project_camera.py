@@ -3,7 +3,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from api.dependencies import CameraClaimRegistryDep, RobotServiceDep, get_camera_service
+from api.dependencies import CameraClaimRegistryDep, RobotServiceDep, SimulationManagerDep, get_camera_service
 from exceptions import RecordingLockError, ResourceNotFoundError
 from schemas.project_camera import Camera, IPCamera
 from services import ProjectCameraService, RobotService
@@ -66,26 +66,41 @@ async def update_project_camera(
     camera: Camera,
     claims: CameraClaimRegistryDep,
     robot_service: RobotServiceDep,
+    simulations: SimulationManagerDep,
 ) -> Camera:
     """Set camera.
 
     An IP camera added from a simulation keeps its simulated robot (``payload.simulation_robot_id``,
-    which Studio sets, not the request) while its stream URL stays on that robot's simulation. A URL
-    edited to point elsewhere drops the robot, so that restarting its simulation leaves the camera be.
+    which Studio sets, not the request). While Studio starts, runs or stops that robot's simulation,
+    the camera also keeps the stream URL Studio stored: a form opened before the simulation moved
+    still carries the old one. Otherwise a URL edited to point away from the robot's simulation drops
+    the robot, so that restarting its simulation leaves the camera be.
     """
     existing = await camera_service.get_camera_by_id(project_id, camera_id)
     _ensure_not_claimed(existing.fingerprint, claims)
     _ensure_not_claimed(_require_fingerprint(camera.fingerprint), claims)
     camera_with_id = camera.model_copy(update={"id": camera_id})
-    if isinstance(camera_with_id, IPCamera):
-        owner = await _simulation_owner(robot_service, project_id, existing, camera_with_id)
-        payload = camera_with_id.payload.model_copy(update={"simulation_robot_id": owner})
-        camera_with_id = camera_with_id.model_copy(update={"payload": payload})
+    owner = existing.payload.simulation_robot_id if isinstance(existing, IPCamera) else None
+    if not isinstance(camera_with_id, IPCamera) or owner is None:
+        if isinstance(camera_with_id, IPCamera):
+            payload = camera_with_id.payload.model_copy(update={"simulation_robot_id": None})
+            camera_with_id = camera_with_id.model_copy(update={"payload": payload})
+        return await camera_service.update_camera(project_id, camera_with_id)
 
-    return await camera_service.update_camera(
-        project_id,
-        camera_with_id,
-    )
+    # The lock robot updates take: Studio does not move the camera in the meantime.
+    async with simulations.updating_robot(project_id, owner) as simulated_by_studio:
+        camera_service.session.expire_all()  # re-read below, not from this session's cache
+        existing = await camera_service.get_camera_by_id(project_id, camera_id)
+        if simulated_by_studio and isinstance(existing, IPCamera):
+            payload = camera_with_id.payload.model_copy(
+                update={"url": existing.payload.url, "simulation_robot_id": existing.payload.simulation_robot_id}
+            )
+            camera_with_id = camera_with_id.model_copy(update={"payload": payload, "fingerprint": existing.fingerprint})
+        else:
+            owner = await _simulation_owner(robot_service, project_id, existing, camera_with_id)
+            payload = camera_with_id.payload.model_copy(update={"simulation_robot_id": owner})
+            camera_with_id = camera_with_id.model_copy(update={"payload": payload})
+        return await camera_service.update_camera(project_id, camera_with_id)
 
 
 async def _simulation_owner(

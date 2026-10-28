@@ -3,7 +3,8 @@
 
 """Editing a camera added from a simulation: whether it stays its simulated robot's."""
 
-from collections.abc import Iterator
+import contextlib
+from collections.abc import AsyncIterator, Iterator
 from types import SimpleNamespace
 from typing import Any
 from uuid import UUID, uuid4
@@ -11,10 +12,11 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi.testclient import TestClient
 
-from api.dependencies import get_camera_claim_registry, get_camera_service, get_robot_service
+from api.dependencies import get_camera_claim_registry, get_camera_service, get_robot_service, get_simulation_manager
 from exceptions import ResourceNotFoundError, ResourceType
 from main import app
 from schemas.project_camera import IPCamera
+from schemas.simulation import Simulation, SimulationStatus
 from services.simulation_manager import _move_simulation_cameras
 
 PROJECT_ID = uuid4()
@@ -25,6 +27,7 @@ A_URL, B_URL = "http://127.0.0.1:50001", "http://127.0.0.1:50002"
 class FakeCameras:
     def __init__(self, camera: IPCamera) -> None:
         self.cameras = {camera.id: camera}
+        self.session = SimpleNamespace(expire_all=lambda: None)
 
     async def get_camera_by_id(self, project_id: UUID, camera_id: UUID) -> IPCamera:
         return self.cameras[camera_id]
@@ -49,8 +52,25 @@ class FakeRobots:
         return self.robots[robot_id]
 
 
+class StubManager:
+    """Which robot's simulation Studio runs, as ``SimulationManager.updating_robot`` reports it."""
+
+    def __init__(self) -> None:
+        self.current = Simulation()
+
+    @contextlib.asynccontextmanager
+    async def updating_robot(self, project_id: UUID, robot_id: UUID) -> AsyncIterator[bool]:
+        current = self.current
+        yield current.status is SimulationStatus.RUNNING and current.robot_id == robot_id
+
+
 @pytest.fixture
-def cameras() -> Iterator[FakeCameras]:
+def manager() -> StubManager:
+    return StubManager()
+
+
+@pytest.fixture
+def cameras(manager: StubManager) -> Iterator[FakeCameras]:
     url = f"{A_URL}/cameras/wrist/mjpeg"
     camera = IPCamera(
         id=uuid4(),
@@ -63,14 +83,16 @@ def cameras() -> Iterator[FakeCameras]:
     app.dependency_overrides[get_camera_service] = lambda: fake
     app.dependency_overrides[get_robot_service] = lambda: FakeRobots()
     app.dependency_overrides[get_camera_claim_registry] = lambda: SimpleNamespace(holder_of=lambda _: None)
+    app.dependency_overrides[get_simulation_manager] = lambda: manager
     yield fake
     app.dependency_overrides.clear()
 
 
-def edit_url(cameras: FakeCameras, url: str) -> IPCamera:
-    """Save the camera form with a new stream URL; the form sends back the rest of the payload as it was."""
+def edit_url(cameras: FakeCameras, url: str, form: IPCamera | None = None, name: str | None = None) -> IPCamera:
+    """Save the camera form with a stream URL; the form sends back the rest of the camera as it opened it."""
     (camera,) = cameras.cameras.values()
-    body = camera.model_dump(mode="json")
+    body = (form or camera).model_dump(mode="json")
+    body["name"] = name or body["name"]
     body["fingerprint"] = {"url": url}
     body["payload"]["url"] = url
     response = TestClient(app).put(f"/api/projects/{PROJECT_ID}/cameras/{camera.id}", json=body)
@@ -107,3 +129,21 @@ def test_saving_a_camera_does_not_let_the_request_choose_its_robot(cameras: Fake
 
     assert response.status_code == 200
     assert cameras.cameras[camera.id].payload.simulation_robot_id == A
+
+
+async def test_a_name_saved_from_a_form_opened_before_the_simulation_moved_keeps_its_new_url(
+    cameras: FakeCameras, manager: StubManager
+) -> None:
+    (form,) = cameras.cameras.values()  # opened now, at A's address
+    await _move_simulation_cameras(cameras, PROJECT_ID, A, "http://127.0.0.1:50003")  # type: ignore[arg-type]
+    manager.current = Simulation(status=SimulationStatus.RUNNING, project_id=PROJECT_ID, robot_id=A)
+
+    saved = edit_url(cameras, form.payload.url, form=form, name="Renamed")
+
+    moved = "http://127.0.0.1:50003/cameras/wrist/mjpeg"
+    assert (saved.name, saved.payload.url, saved.fingerprint, saved.payload.simulation_robot_id) == (
+        "Renamed",
+        moved,
+        {"url": moved},
+        A,
+    )
