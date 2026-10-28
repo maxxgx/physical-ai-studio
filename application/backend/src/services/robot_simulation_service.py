@@ -16,6 +16,7 @@ from exceptions import (
     ResourceNotFoundError,
     ResourceType,
     SimulationInvalidRequestError,
+    SimulationMovedError,
     SimulationNotRunningError,
     SimulationNotSupportedError,
 )
@@ -133,6 +134,7 @@ class RobotSimulationService:
             ResourceNotFoundError: The robot or the environment does not exist.
             SimulationNotSupportedError: The robot type has no simulation.
             SimulationNotRunningError: The robot's simulation does not run.
+            SimulationMovedError: The simulation restarted on another address after it was probed.
             SimulationInvalidRequestError: The simulation has no camera with one of the names, or
                 *camera_names* names a camera that is not added.
         """
@@ -153,46 +155,54 @@ class RobotSimulationService:
                 f"The simulation has no camera named {', '.join(unknown)}; it has {', '.join(by_name) or 'none'}."
             )
 
-        robot = await RobotService(self._session, self._registry).get_robot_by_id(project_id, robot_id)
-        camera_service = ProjectCameraService(self._session, self._registry)
-        # A camera of this robot on the same stream is reused, not duplicated (e.g. a second click, or
-        # a stale page), and so is one of no robot, which then becomes this robot's. A camera of
-        # another robot is not: its simulation ran on this port before, and moves it when it restarts.
-        on_stream: dict[str, IPCamera] = {}
-        for camera in await camera_service.get_camera_list(project_id):
-            if not isinstance(camera, IPCamera) or camera.payload.simulation_robot_id not in {robot_id, None}:
-                continue
-            known = on_stream.get(camera.payload.url)
-            if known is None or known.payload.simulation_robot_id is None:
-                on_stream[camera.payload.url] = camera
-        cameras: list[IPCamera] = []
-        created: list[IPCamera] = []
-        try:
-            for name in dict.fromkeys(names):
-                source = by_name[name]
-                camera = on_stream.get(source.stream_url)
-                if camera is None:
-                    camera = _ip_camera(camera_names.get(name, "").strip() or f"{robot.name} {name}", source, robot_id)
-                    await camera_service.create_camera(project_id, camera)
-                    created.append(camera)
-                elif camera.payload.simulation_robot_id is None:
-                    payload = camera.payload.model_copy(update={"simulation_robot_id": robot_id})
-                    camera = camera.model_copy(update={"payload": payload})
-                    await camera_service.update_camera(project_id, camera)
-                cameras.append(camera)
+        # Studio does not move the robot's simulation (and its cameras) in the meantime, and the
+        # simulation must still be where it was probed: else the cameras would be saved on a stopped
+        # simulation's address (that a replacement's relocation already went past).
+        async with self._manager.updating_robot(project_id, robot_id):
+            self._session.expire_all()  # re-read below, not from this session's cache
+            robot = await RobotService(self._session, self._registry).get_robot_by_id(project_id, robot_id)
+            if self._current_address(robot) != simulation.http_url:
+                raise SimulationMovedError(simulation.owner_name)
+            camera_service = ProjectCameraService(self._session, self._registry)
+            on_stream = await _reusable_cameras(camera_service, project_id, robot_id)
+            cameras: list[IPCamera] = []
+            created: list[IPCamera] = []
+            try:
+                for name in dict.fromkeys(names):
+                    source = by_name[name]
+                    camera = on_stream.get(source.stream_url)
+                    if camera is None:
+                        camera = _ip_camera(
+                            camera_names.get(name, "").strip() or f"{robot.name} {name}", source, robot_id
+                        )
+                        await camera_service.create_camera(project_id, camera)
+                        created.append(camera)
+                    elif camera.payload.simulation_robot_id is None:
+                        payload = camera.payload.model_copy(update={"simulation_robot_id": robot_id})
+                        camera = camera.model_copy(update={"payload": payload})
+                        await camera_service.update_camera(project_id, camera)
+                    cameras.append(camera)
 
-            # Appended, not written back from a snapshot of the environment: a camera that another
-            # request added in the meantime stays.
-            await environments.add_cameras(environment_id, [camera.id for camera in cameras])
-        except Exception:
-            # Each camera is committed on its own: remove the ones this call made, in a clean
-            # transaction (the failure may have left the session's one unusable).
-            await self._session.rollback()
-            for camera in created:
-                with contextlib.suppress(Exception):
-                    await camera_service.delete_camera(project_id, camera.id)
-            raise
-        return cameras
+                # Appended, not written back from a snapshot of the environment: a camera that
+                # another request added in the meantime stays.
+                await environments.add_cameras(environment_id, [camera.id for camera in cameras])
+            except Exception:
+                # Each camera is committed on its own: remove the ones this call made, in a clean
+                # transaction (the failure may have left the session's one unusable).
+                await self._session.rollback()
+                for camera in created:
+                    with contextlib.suppress(Exception):
+                        await camera_service.delete_camera(project_id, camera.id)
+                raise
+            return cameras
+
+    def _current_address(self, robot: Any) -> str | None:
+        """Return where the robot's simulation is now: Studio's address while Studio runs it."""
+        state = self._manager.state()
+        if state.robot_id == robot.id and state.status is SimulationStatus.RUNNING:
+            return state.http_url
+        http_url = getattr(robot.payload, "http_url", None)
+        return http_url if isinstance(http_url, str) else None
 
     def _owner_name(self, robot: Any) -> str:
         definition = None if isinstance(robot, UnavailableRobot) else self._registry.get_definition(robot.type)
@@ -210,6 +220,23 @@ async def _get_json(client: httpx.AsyncClient, url: str) -> Any:
     except (httpx.HTTPError, ValueError) as error:
         logger.debug("Simulation probe {} failed: {}", url, error)
         return None
+
+
+async def _reusable_cameras(cameras: ProjectCameraService, project_id: UUID, robot_id: UUID) -> dict[str, IPCamera]:
+    """Return the cameras an addition of the robot's cameras reuses, by stream URL.
+
+    A camera of this robot on the same stream is reused, not duplicated (e.g. a second click, or a
+    stale page), and so is one of no robot, which then becomes this robot's. A camera of another
+    robot is not: its simulation ran on this port before, and moves it when it restarts.
+    """
+    on_stream: dict[str, IPCamera] = {}
+    for camera in await cameras.get_camera_list(project_id):
+        if not isinstance(camera, IPCamera) or camera.payload.simulation_robot_id not in {robot_id, None}:
+            continue
+        known = on_stream.get(camera.payload.url)
+        if known is None or known.payload.simulation_robot_id is None:
+            on_stream[camera.payload.url] = camera
+    return on_stream
 
 
 def _ip_camera(name: str, source: SimulationCamera, robot_id: UUID) -> IPCamera:

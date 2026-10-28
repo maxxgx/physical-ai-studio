@@ -4,6 +4,7 @@
 """RobotSimulationService against a fake simulation HTTP API."""
 
 import asyncio
+import contextlib
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -18,7 +19,12 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import services.robot_simulation_service as module
 from db.schema import Base, EnvironmentCameraDB, ProjectDB, ProjectEnvironmentDB
-from exceptions import SimulationInvalidRequestError, SimulationNotRunningError, SimulationNotSupportedError
+from exceptions import (
+    SimulationInvalidRequestError,
+    SimulationMovedError,
+    SimulationNotRunningError,
+    SimulationNotSupportedError,
+)
 from repositories.project_environment_repo import ProjectEnvironmentRepository
 from robots.catalog.registry import RobotCatalogRegistry
 from schemas.environment import CameraEnvironmentConfiguration, Environment
@@ -86,6 +92,16 @@ def robot(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     return robot
 
 
+def fake_manager(state: Any) -> SimpleNamespace:
+    """The parts of ``SimulationManager`` the service uses; *state* returns the manager's state."""
+
+    @contextlib.asynccontextmanager
+    async def updating_robot(project_id: UUID, robot_id: UUID):
+        yield False
+
+    return SimpleNamespace(state=state, updating_robot=updating_robot)
+
+
 def service(
     responses: dict[str, Any], state: Simulation | None = None, simulated: bool = True
 ) -> RobotSimulationService:
@@ -95,8 +111,8 @@ def service(
             simulation=launch if simulated and robot_type.startswith("Sim") else None
         )
     )
-    manager = SimpleNamespace(state=lambda: state or Simulation())
-    session = SimpleNamespace(rollback=AsyncMock())
+    manager = fake_manager(lambda: state or Simulation())
+    session = SimpleNamespace(rollback=AsyncMock(), expire_all=lambda: None)
     return RobotSimulationService(session, registry, manager, transport=transport(responses))  # type: ignore[arg-type]
 
 
@@ -443,7 +459,7 @@ def two_camera_api(on_cameras_probe: Any) -> httpx.MockTransport:
 async def add_with_database(session: Any, transport: httpx.MockTransport, name: str) -> list[IPCamera]:
     launch = SimpleNamespace(owner_name=lambda payload: payload.name)
     registry = SimpleNamespace(get_definition=lambda robot_type: SimpleNamespace(simulation=launch))
-    manager = SimpleNamespace(state=Simulation)
+    manager = fake_manager(Simulation)
     simulations = RobotSimulationService(session, registry, manager, transport=transport)  # type: ignore[arg-type]
     return await simulations.add_cameras(PROJECT_ID, ENVIRONMENT_ID, ROBOT_ID, [name])
 
@@ -503,3 +519,37 @@ async def test_adding_cameras_keeps_a_change_made_to_the_environment_meanwhile(
         wrist = await add_with_database(session, two_camera_api(remove_the_other_camera), "wrist")
 
     assert await linked_cameras(studio_db) == [str(wrist[0].id)]
+
+
+async def test_adding_cameras_is_refused_once_a_replacement_moved_the_simulation(
+    robot: SimpleNamespace, environment_store: dict[str, Any]
+) -> None:
+    unowned = _ip_camera(f"{EXTERNAL}/cameras/wrist/mjpeg")
+    environment_store["existing"] = [unowned]
+    responses = sim_api(EXTERNAL)
+
+    async def handle(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if url == f"{EXTERNAL}/cameras":
+            # While the old simulation is probed, a replacement starts on another port and stores its
+            # address on the robot; its relocation skipped the camera, which had no robot yet.
+            robot.payload = Payload(http_url=STUDIO)
+        return httpx.Response(200, json=responses[url]) if url in responses else httpx.Response(404)
+
+    simulations = RobotSimulationService(
+        SimpleNamespace(rollback=AsyncMock(), expire_all=lambda: None),  # type: ignore[arg-type]
+        SimpleNamespace(
+            get_definition=lambda robot_type: SimpleNamespace(
+                simulation=SimpleNamespace(owner_name=lambda payload: "sim-a")
+            )
+        ),  # type: ignore[arg-type]
+        fake_manager(Simulation),  # type: ignore[arg-type]
+        transport=httpx.MockTransport(handle),
+    )
+
+    with pytest.raises(SimulationMovedError):
+        await simulations.add_cameras(PROJECT_ID, uuid4(), ROBOT_ID, ["wrist"])
+
+    assert environment_store["updated_cameras"] == []
+    assert environment_store["created"] == []
+    assert environment_store["linked"] == []
