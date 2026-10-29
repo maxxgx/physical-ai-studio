@@ -657,6 +657,13 @@ class SimulationMovedError(BaseException):
         )
 
 
+class SimulationNotServingError(BaseException):
+    """Raised when a robot's simulation does not serve what the browser asked Studio to pass on."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message=message, error_code="simulation_not_serving", http_status=http.HTTPStatus.CONFLICT)
+
+
 class SimulationNotRunningError(BaseException):
     """Raised when a simulated robot cannot attach because its simulation is not running.
 

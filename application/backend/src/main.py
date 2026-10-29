@@ -34,6 +34,7 @@ from api.runtime_sessions import router as runtime_sessions_router
 from api.runtime_ws import router as runtime_ws_router
 from api.settings import router as settings_router
 from api.simulation import router as simulation_router
+from api.simulation_proxy import router as simulation_proxy_router
 from api.system import system_router
 from api.webui import SPAStaticFiles
 from core.lifecycle import lifespan
@@ -69,6 +70,7 @@ app.include_router(remote_servers_router)
 app.include_router(settings_router)
 app.include_router(simulation_router)
 app.include_router(robot_simulation_router)
+app.include_router(simulation_proxy_router)
 app.include_router(models_router)
 app.include_router(policies_router)
 app.include_router(plugins_router)

@@ -140,6 +140,10 @@ async def test_studios_own_simulation_uses_the_managers_addresses(robot: SimpleN
     assert result.started_by == "studio"
     assert result.viewer_url == "http://127.0.0.1:56210"
     assert result.cameras[0].stream_url == f"{STUDIO}/cameras/wrist/mjpeg"
+    # The browser gets them through Studio's own address; Studio keeps the simulation's.
+    proxied = f"/api/projects/{PROJECT_ID}/robots/{ROBOT_ID}/simulation"
+    assert result.viewer_proxy_url == f"{proxied}/viewer/"
+    assert result.cameras[0].snapshot_proxy_url == f"{proxied}/http/cameras/wrist/frame.jpg"
 
 
 async def test_a_simulation_studio_is_still_starting_is_not_running_yet(robot: SimpleNamespace) -> None:

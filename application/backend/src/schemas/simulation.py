@@ -55,6 +55,9 @@ class Simulation(BaseModel):
     started_at: datetime | None = None
     http_url: str | None = Field(None, description="HTTP API of the running simulation")
     viewer_url: str | None = Field(None, description="3D viewer of the running simulation")
+    viewer_proxy_url: str | None = Field(
+        None, description="The 3D viewer through Studio, for the browser: a path on Studio's own address"
+    )
     cameras: list[str] = Field(default_factory=list, description="Cameras the running simulation streams")
     error: SimulationError | None = None
 
@@ -79,6 +82,9 @@ class SimulationCamera(BaseModel):
     source: str = Field(..., description="Where the camera comes from: override, model, default (robot) or scene")
     stream_url: str = Field(..., description="MJPEG stream of the camera")
     snapshot_url: str = Field(..., description="Latest frame of the camera as a JPEG")
+    snapshot_proxy_url: str | None = Field(
+        None, description="The latest frame through Studio, for the browser: a path on Studio's own address"
+    )
 
 
 class RobotSimulation(BaseModel):
@@ -89,6 +95,9 @@ class RobotSimulation(BaseModel):
     owner_name: str = Field(..., description="Name the robot attaches to")
     http_url: str | None = None
     viewer_url: str | None = None
+    viewer_proxy_url: str | None = Field(
+        None, description="The 3D viewer through Studio, for the browser: a path on Studio's own address"
+    )
     scene: str | None = None
     cameras: list[SimulationCamera] = Field(default_factory=list)
 
@@ -111,3 +120,13 @@ class AddSimulationCamerasRequest(BaseModel):
             "becomes '<robot name> <camera>'. A camera already on the stream keeps its name."
         ),
     )
+
+
+def simulation_proxy_path(project_id: UUID, robot_id: UUID) -> str:
+    """Return the path under which Studio serves a robot's simulation to the browser.
+
+    The simulation runs on its own ports, which the browser may not reach (e.g. in Docker, where only
+    Studio's port is published): ``<path>/viewer/`` serves its 3D viewer, ``<path>/http/...`` some of
+    its HTTP API.
+    """
+    return f"/api/projects/{project_id}/robots/{robot_id}/simulation"

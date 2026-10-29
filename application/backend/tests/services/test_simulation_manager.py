@@ -251,6 +251,7 @@ async def test_start_reports_phases_then_ready_and_stores_the_address(harness: H
 
     assert running.http_url == "http://127.0.0.1:56209"
     assert running.viewer_url == "http://127.0.0.1:56210"
+    assert running.viewer_proxy_url == f"/api/projects/{harness.project_id}/robots/{robot_id}/simulation/viewer/"
     assert running.cameras == ["wrist", "overview"]
     assert running.pid == 4242
     assert running.phase is None

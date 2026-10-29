@@ -17,6 +17,7 @@ from exceptions import (
     SimulationInvalidRequestError,
     SimulationMovedError,
     SimulationNotRunningError,
+    SimulationNotServingError,
     SimulationNotSupportedError,
 )
 from repositories.project_environment_repo import ProjectEnvironmentRepository
@@ -24,9 +25,16 @@ from robots.catalog.registry import RobotCatalogRegistry
 from robots.robot_service import RobotService
 from schemas.project_camera import IPCamera, IPCameraPayload
 from schemas.robot import UnavailableRobot
-from schemas.simulation import ProjectRobotSimulation, RobotSimulation, SimulationCamera, SimulationStatus
+from schemas.simulation import (
+    ProjectRobotSimulation,
+    RobotSimulation,
+    SimulationCamera,
+    SimulationStatus,
+    simulation_proxy_path,
+)
 from services.project_camera_service import ProjectCameraService
 from services.simulation_manager import SimulationManager
+from services.simulation_proxy import is_proxied_http_path, local_base_url
 
 PROBE_TIMEOUT_S = 1.0
 
@@ -53,7 +61,31 @@ class RobotSimulationService:
             SimulationNotSupportedError: The robot type has no simulation.
         """
         robot = await RobotService(self._session, self._registry).get_robot_by_id(project_id, robot_id)
-        return await self._probe(robot, self._owner_name(robot))
+        return _with_proxy_urls(project_id, robot_id, await self._probe(robot, self._owner_name(robot)))
+
+    async def proxy_addresses(self, project_id: UUID, robot_id: UUID) -> tuple[str | None, str | None]:
+        """Return where the robot's simulation serves its HTTP API and its viewer, for passing them on.
+
+        The addresses Studio knows for that simulation: its own while it runs it, else the robot's
+        address and the viewer the simulation there reports. Only addresses on this machine; ``None``
+        for one it does not serve, or not here.
+
+        Raises:
+            ResourceNotFoundError: The robot does not exist.
+            SimulationNotSupportedError: The robot type has no simulation.
+            SimulationNotServingError: The robot's simulation does not run.
+        """
+        robot = await RobotService(self._session, self._registry).get_robot_by_id(project_id, robot_id)
+        owner_name = self._owner_name(robot)
+        state = self._manager.state()
+        if state.robot_id == robot_id and state.project_id == project_id and state.status is SimulationStatus.RUNNING:
+            http_url, viewer_url = state.http_url, state.viewer_url
+        else:
+            simulation = await self._probe(robot, owner_name)
+            if not simulation.running:
+                raise SimulationNotServingError(f"The simulation {owner_name!r} is not running.")
+            http_url, viewer_url = simulation.http_url, simulation.viewer_url
+        return local_base_url(http_url), local_base_url(viewer_url)
 
     async def list_running(self, project_id: UUID) -> list[ProjectRobotSimulation]:
         """Return the running simulations of the project's simulated robots, probed in parallel."""
@@ -66,7 +98,10 @@ class RobotSimulationService:
         results = await asyncio.gather(*(self._probe_or_none(robot) for robot in robots))
         return [
             ProjectRobotSimulation(
-                **result.model_dump(), robot_id=robot.id, robot_name=robot.name, robot_type=robot.type
+                **_with_proxy_urls(project_id, robot.id, result).model_dump(),
+                robot_id=robot.id,
+                robot_name=robot.name,
+                robot_type=robot.type,
             )
             for robot, result in zip(robots, results, strict=True)
             if result is not None and result.running
@@ -251,6 +286,24 @@ def _ip_camera(name: str, source: SimulationCamera, robot_id: UUID) -> IPCamera:
             # So that starting the simulation again moves this camera, and no other robot's.
             simulation_robot_id=robot_id,
         ),
+    )
+
+
+def _with_proxy_urls(project_id: UUID, robot_id: UUID, simulation: RobotSimulation) -> RobotSimulation:
+    """Add the addresses through Studio the browser uses for the simulation's viewer and frames."""
+    if not simulation.running or simulation.http_url is None:
+        return simulation
+    path = simulation_proxy_path(project_id, robot_id)
+    cameras = []
+    for camera in simulation.cameras:
+        api_path = camera.snapshot_url.removeprefix(simulation.http_url)
+        proxied = f"{path}/http{api_path}" if is_proxied_http_path(api_path) else None
+        cameras.append(camera.model_copy(update={"snapshot_proxy_url": proxied}))
+    return simulation.model_copy(
+        update={
+            "viewer_proxy_url": f"{path}/viewer/" if simulation.viewer_url is not None else None,
+            "cameras": cameras,
+        }
     )
 
 

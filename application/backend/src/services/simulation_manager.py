@@ -48,6 +48,7 @@ from schemas.simulation import (
     SimulationPhase,
     SimulationStatus,
     StartSimulationRequest,
+    simulation_proxy_path,
 )
 from services.environment_service import EnvironmentService
 from services.project_camera_service import ProjectCameraService
@@ -479,6 +480,11 @@ class SimulationManager:
             "pid": pid if isinstance(pid, int) else child.process.pid,
             "http_url": http_url if isinstance(http_url, str) else None,
             "viewer_url": event.get("viewer_url") if isinstance(event.get("viewer_url"), str) else None,
+            "viewer_proxy_url": (
+                f"{simulation_proxy_path(self._state.project_id, self._state.robot_id)}/viewer/"
+                if isinstance(event.get("viewer_url"), str) and self._state.project_id and self._state.robot_id
+                else None
+            ),
             "cameras": [str(camera) for camera in cameras] if isinstance(cameras, list) else [],
         }
         task = self._spawn_background(self._finish_ready(child, running))
