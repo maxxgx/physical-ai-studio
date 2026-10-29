@@ -26,6 +26,7 @@ from exceptions import (
     SimulationNameInUseError,
     SimulationNotSupportedError,
 )
+from schemas.environment import Environment, RobotEnvironmentConfiguration, TeleoperatorNone, TeleoperatorRobot
 from schemas.project_camera import IPCamera
 from schemas.robot import UnavailableRobot
 from schemas.simulation import Simulation, SimulationPhase, SimulationStatus, StartSimulationRequest
@@ -752,6 +753,7 @@ async def test_the_database_store_writes_the_address_only_when_it_changes(
     monkeypatch.setattr(module, "RobotService", FakeService)
     monkeypatch.setattr(module, "ProjectCameraService", lambda *_args: SimpleNamespace(get_camera_list=_no_cameras))
     monkeypatch.setattr(module, "get_async_db_session_ctx", fake_session)
+    monkeypatch.setattr(module, "EnvironmentService", lambda *_args: SimpleNamespace(get_environment_list=_no_list))
     new_url = "http://127.0.0.1:9"
 
     await module.DatabaseSimulationRobots(SimpleNamespace()).set_http_url(uuid4(), uuid4(), new_url)  # type: ignore[arg-type]
@@ -763,6 +765,10 @@ async def test_the_database_store_writes_the_address_only_when_it_changes(
 
 
 async def _no_cameras(project_id: UUID) -> list[Any]:
+    return []
+
+
+async def _no_list(project_id: UUID) -> list[Any]:
     return []
 
 
@@ -820,6 +826,7 @@ async def test_the_database_store_moves_only_the_started_robots_cameras_after_se
     monkeypatch.setattr(module, "RobotService", FakeRobotService)
     monkeypatch.setattr(module, "ProjectCameraService", lambda *_args: FakeCameraService())
     monkeypatch.setattr(module, "get_async_db_session_ctx", fake_session)
+    monkeypatch.setattr(module, "EnvironmentService", lambda *_args: SimpleNamespace(get_environment_list=_no_list))
     store = module.DatabaseSimulationRobots(SimpleNamespace())  # type: ignore[arg-type]
 
     await store.set_http_url(uuid4(), a, "http://127.0.0.1:50001")
@@ -833,3 +840,129 @@ async def test_the_database_store_moves_only_the_started_robots_cameras_after_se
         "http://127.0.0.1:50001",
         "http://127.0.0.1:50002",
     ]
+
+
+class _StoredLeaderPayload(BaseModel):
+    http_port: int
+
+
+class _StoredLeader(BaseModel):
+    id: UUID
+    type: str = "Sim_Leader"
+    payload: _StoredLeaderPayload
+
+
+class LeaderWorld:
+    """A simulated follower and leaders in environments, behind ``DatabaseSimulationRobots``."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import services.simulation_manager as module
+
+        self.project_id, self.other_project_id = uuid4(), uuid4()
+        self.follower = uuid4()
+        self.robots: dict[UUID, Any] = {
+            self.follower: _StoredRobot(id=self.follower, payload=FakePayload(http_url="http://127.0.0.1:8080"))
+        }
+        self.environments: dict[UUID, list[Environment]] = {self.project_id: [], self.other_project_id: []}
+        robots, environments = self.robots, self.environments
+
+        class FakeRobotService:
+            def __init__(self, session: Any, registry: Any) -> None:
+                pass
+
+            async def get_robot_by_id(self, project_id: UUID, robot_id: UUID) -> Any:
+                return robots[robot_id]
+
+            async def update_robot(self, project_id: UUID, updated: Any) -> None:
+                robots[updated.id] = updated
+
+        class FakeEnvironmentService:
+            def __init__(self, session: Any, registry: Any) -> None:
+                pass
+
+            async def get_environment_list(self, project_id: UUID) -> list[Environment]:
+                return environments[project_id]
+
+        @contextlib.asynccontextmanager
+        async def fake_session():
+            yield None
+
+        roles = {"Sim_Follower": "follower", "Sim_Leader": "leader", "Real_Follower": "follower"}
+        registry = SimpleNamespace(get_definition=lambda robot_type: SimpleNamespace(role=roles[robot_type]))
+        monkeypatch.setattr(module, "RobotService", FakeRobotService)
+        monkeypatch.setattr(module, "EnvironmentService", FakeEnvironmentService)
+        monkeypatch.setattr(module, "ProjectCameraService", lambda *_args: SimpleNamespace(get_camera_list=_no_cameras))
+        monkeypatch.setattr(module, "get_async_db_session_ctx", fake_session)
+        self.store = module.DatabaseSimulationRobots(registry)  # type: ignore[arg-type]
+
+    def leader(self, http_port: int, *, robot_type: str = "Sim_Leader") -> UUID:
+        leader_id = uuid4()
+        self.robots[leader_id] = _StoredLeader(
+            id=leader_id, type=robot_type, payload=_StoredLeaderPayload(http_port=http_port)
+        )
+        return leader_id
+
+    def environment(
+        self, *robot_ids: UUID, teleoperated_by: UUID | None = None, project_id: UUID | None = None
+    ) -> None:
+        tele_operator = TeleoperatorRobot(robot_id=teleoperated_by) if teleoperated_by else TeleoperatorNone()
+        robots = [RobotEnvironmentConfiguration(robot_id=robot_ids[0], tele_operator=tele_operator)]
+        robots += [
+            RobotEnvironmentConfiguration(robot_id=other, tele_operator=TeleoperatorNone()) for other in robot_ids[1:]
+        ]
+        self.environments[project_id or self.project_id].append(Environment(id=uuid4(), name="Env", robots=robots))
+
+    async def start(self, http_url: str) -> None:
+        await self.store.set_http_url(self.project_id, self.follower, http_url)
+
+    def port(self, leader_id: UUID) -> int:
+        return self.robots[leader_id].payload.http_port
+
+
+@pytest.fixture
+def world(monkeypatch: pytest.MonkeyPatch) -> LeaderWorld:
+    return LeaderWorld(monkeypatch)
+
+
+async def test_a_start_moves_the_leader_that_reads_from_the_simulation(world: LeaderWorld) -> None:
+    leader = world.leader(8080)
+    world.environment(world.follower, teleoperated_by=leader)
+
+    await world.start("http://127.0.0.1:50001")
+
+    assert world.port(leader) == 50001
+    assert world.robots[world.follower].payload.http_url == "http://127.0.0.1:50001"
+
+
+async def test_a_leader_on_another_port_stays(world: LeaderWorld) -> None:
+    leader = world.leader(9999)
+    world.environment(world.follower, teleoperated_by=leader)
+
+    await world.start("http://127.0.0.1:50001")
+
+    assert world.port(leader) == 9999
+
+
+async def test_leaders_away_from_the_follower_or_not_leaders_stay(world: LeaderWorld) -> None:
+    elsewhere, other_project, follower_like = (
+        world.leader(8080),
+        world.leader(8080),
+        world.leader(8080, robot_type="Real_Follower"),
+    )
+    world.environment(world.follower, follower_like)
+    world.environment(uuid4(), teleoperated_by=elsewhere)
+    world.environment(world.follower, teleoperated_by=other_project, project_id=world.other_project_id)
+
+    await world.start("http://127.0.0.1:50001")
+
+    assert [world.port(elsewhere), world.port(other_project), world.port(follower_like)] == [8080, 8080, 8080]
+
+
+async def test_a_restart_moves_the_leader_again(world: LeaderWorld) -> None:
+    leader = world.leader(8080)
+    world.environment(world.follower, leader)
+
+    await world.start("http://127.0.0.1:50001")
+    await world.start("http://127.0.0.1:50002")
+
+    assert world.port(leader) == 50002

@@ -49,6 +49,7 @@ from schemas.simulation import (
     SimulationStatus,
     StartSimulationRequest,
 )
+from services.environment_service import EnvironmentService
 from services.project_camera_service import ProjectCameraService
 
 START_TIMEOUT_S = 180.0
@@ -103,6 +104,12 @@ class DatabaseSimulationRobots:
             )
             if robot.payload.http_url == http_url:
                 return
+            # Leaders next, while the robot still has the address they are matched on: if moving
+            # them fails, the next start moves the rest.
+            environments = EnvironmentService(session, self._registry)
+            await _move_simulation_leaders(
+                service, environments, self._registry, project_id, robot_id, robot.payload.http_url, http_url
+            )
             payload = robot.payload.model_copy(update={"http_url": http_url})
             await service.update_robot(project_id, robot.model_copy(update={"payload": payload}))
 
@@ -128,6 +135,66 @@ async def _move_simulation_cameras(
         await cameras.update_camera(
             project_id, camera.model_copy(update={"payload": payload, "fingerprint": {"url": url}})
         )
+
+
+async def _move_simulation_leaders(
+    robots: RobotService,
+    environments: EnvironmentService,
+    registry: RobotCatalogRegistry,
+    project_id: UUID,
+    robot_id: UUID,
+    old_url: str,
+    new_url: str,
+) -> None:
+    """Point the leaders that read from a robot's simulation at the simulation's new port.
+
+    A leader of any robot type (role ``leader``) with an integer ``http_port`` payload field reads
+    from a simulation on this machine. One in an environment with the robot, on the port of the
+    robot's previous address, reads from this simulation and moves with it. A leader on another
+    port was pointed elsewhere on purpose and stays.
+    """
+    old_port, new_port = _local_port(old_url), _local_port(new_url)
+    if old_port is None or new_port is None or old_port == new_port:
+        return
+    nearby: set[UUID] = set()
+    for environment in await environments.get_environment_list(project_id):
+        members = {
+            member
+            for configuration in environment.robots
+            for member in (configuration.robot_id, getattr(configuration.tele_operator, "robot_id", None))
+            if member is not None
+        }
+        if robot_id in members:
+            nearby |= members - {robot_id}
+    for leader_id in nearby:
+        leader = await robots.get_robot_by_id(project_id, leader_id)
+        if (
+            isinstance(leader, UnavailableRobot)
+            or getattr(registry.get_definition(leader.type), "role", None) != "leader"
+        ):
+            continue
+        port = getattr(leader.payload, "http_port", None)
+        if type(port) is not int or port != old_port:
+            continue
+        payload = leader.payload.model_copy(update={"http_port": new_port})
+        await robots.update_robot(project_id, leader.model_copy(update={"payload": payload}))
+
+
+def _local_port(http_url: str) -> int | None:
+    """Return the port of an address on this machine, or ``None`` for another host or no port."""
+    try:
+        url = urlsplit(http_url)
+        host, port = url.hostname or "", url.port
+    except ValueError:
+        return None
+    if port is None:
+        return None
+    if host == "localhost":
+        return port
+    try:
+        return port if ipaddress.ip_address(host).is_loopback else None
+    except ValueError:
+        return None
 
 
 @dataclass
