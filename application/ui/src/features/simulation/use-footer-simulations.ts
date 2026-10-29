@@ -32,7 +32,7 @@ export const useFooterSimulations = (): FooterSimulation[] => {
         label: simulation.robot_name,
         scene: simulation.scene ?? null,
         startedByStudio: simulation.started_by === 'studio',
-        viewerUrl: simulation.viewer_url ?? null,
+        viewerUrl: simulation.viewer_proxy_url ?? null,
     }));
 
     if (isActiveSimulation(studio) && !rows.some(({ key }) => key === studio.robot_id)) {
@@ -41,7 +41,7 @@ export const useFooterSimulations = (): FooterSimulation[] => {
             label: (studio.robot_type ?? 'Simulation').replaceAll('_', ' '),
             scene: studio.scene ?? null,
             startedByStudio: true,
-            viewerUrl: studio.viewer_url ?? null,
+            viewerUrl: studio.viewer_proxy_url ?? null,
         });
     }
 

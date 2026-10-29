@@ -98,8 +98,8 @@ const RunningSimulation = ({
                         <Text UNSAFE_className={classes.detail}>{simulation.scene}</Text>
                     ) : null}
                     <Flex marginStart='auto' gap='size-100' alignItems='center'>
-                        {simulation.viewer_url != null ? (
-                            <Link href={simulation.viewer_url} target='_blank' rel='noreferrer' isQuiet>
+                        {simulation.viewer_proxy_url != null ? (
+                            <Link href={simulation.viewer_proxy_url} target='_blank' rel='noreferrer' isQuiet>
                                 Open viewer ↗
                             </Link>
                         ) : null}
@@ -124,10 +124,11 @@ const RunningSimulation = ({
                     </Flex>
                 </Flex>
             </View>
-            {simulation.viewer_url != null ? (
+            {/* Through Studio's own address: the simulation's ports may be out of the browser's reach (Docker). */}
+            {simulation.viewer_proxy_url != null ? (
                 <iframe
                     className={classes.viewer}
-                    src={simulation.viewer_url}
+                    src={simulation.viewer_proxy_url}
                     title={`${robot.name} simulation viewer`}
                     allow='fullscreen'
                 />

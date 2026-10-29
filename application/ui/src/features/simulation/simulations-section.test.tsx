@@ -19,6 +19,7 @@ const projectSimulation = (robot_id: string, robot_name: string, started_by: 'st
     owner_name: robot_name,
     http_url: `http://127.0.0.1:${port}`,
     viewer_url: `http://127.0.0.1:${port + 1}`,
+    viewer_proxy_url: `/api/projects/project-1/robots/${robot_id}/simulation/viewer/`,
     scene: 'yahtzee',
     cameras: [],
     robot_id,
@@ -60,7 +61,10 @@ describe('SimulationsSection', () => {
         expect(await screen.findByText('Sim arm · yahtzee')).toBeInTheDocument();
         expect(screen.getByText('Started by Studio')).toBeInTheDocument();
         expect(screen.getByText('Started outside Studio (CLI)')).toBeInTheDocument();
-        expect(screen.getByRole('link', { name: 'Open ↗' })).toHaveAttribute('href', 'http://127.0.0.1:8081');
+        expect(screen.getByRole('link', { name: 'Open ↗' })).toHaveAttribute(
+            'href',
+            '/api/projects/project-1/robots/robot-b/simulation/viewer/'
+        );
         await user.click(screen.getByRole('button', { name: 'Stop' }));
         await waitFor(() => expect(stopped).toBe(true));
     });

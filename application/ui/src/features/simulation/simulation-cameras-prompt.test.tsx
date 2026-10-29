@@ -40,6 +40,7 @@ const camera = (name: string, source: string) => ({
     source,
     stream_url: `${SIM}/cameras/${name}/mjpeg`,
     snapshot_url: `${SIM}/cameras/${name}/frame.jpg`,
+    snapshot_proxy_url: `/api/projects/${PROJECT_ID}/robots/robot-1/simulation/http/cameras/${name}/frame.jpg`,
 });
 
 const mockSimulation = (running: boolean) =>
@@ -99,6 +100,11 @@ describe('SimulationCamerasPrompt', () => {
         expect(screen.getByRole('checkbox', { name: 'overview' })).toBeChecked();
         expect(screen.queryByRole('checkbox', { name: 'wrist' })).not.toBeInTheDocument();
         expect(screen.getByText('scene camera · 640×480 · 30 fps')).toBeInTheDocument();
+        // The preview comes through Studio's own address, not the simulation's port.
+        expect(screen.getByRole('img', { name: 'overview snapshot' })).toHaveAttribute(
+            'src',
+            `/api/projects/${PROJECT_ID}/robots/robot-1/simulation/http/cameras/overview/frame.jpg`
+        );
         await user.click(screen.getByRole('button', { name: 'Add 1 camera' }));
 
         await waitFor(() => expect(added).toEqual([{ robot_id: robot.id, cameras: ['overview'], names: {} }]));

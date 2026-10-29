@@ -96,6 +96,7 @@ describe('Robot page of a simulated robot', () => {
                     owner_name: 'sim',
                     http_url: 'http://127.0.0.1:8080',
                     viewer_url: 'http://127.0.0.1:8081',
+                    viewer_proxy_url: '/api/projects/project-1/robots/robot-1/simulation/viewer/',
                     scene: 'yahtzee',
                     cameras: [],
                 })
@@ -103,7 +104,15 @@ describe('Robot page of a simulated robot', () => {
         );
         renderRobotPage();
 
-        expect(await screen.findByTitle('Sim arm simulation viewer')).toHaveAttribute('src', 'http://127.0.0.1:8081');
+        // Through Studio's own address, not the simulation's port: the browser may not reach that (Docker).
+        expect(await screen.findByTitle('Sim arm simulation viewer')).toHaveAttribute(
+            'src',
+            '/api/projects/project-1/robots/robot-1/simulation/viewer/'
+        );
+        expect(screen.getByRole('link', { name: 'Open viewer ↗' })).toHaveAttribute(
+            'href',
+            '/api/projects/project-1/robots/robot-1/simulation/viewer/'
+        );
         expect(screen.getByText('started by someone else (CLI)')).toBeInTheDocument();
         expect(screen.queryByText(/real time/)).not.toBeInTheDocument();
         expect(screen.queryByText(':8080 / :8081')).not.toBeInTheDocument();

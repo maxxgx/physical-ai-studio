@@ -135,11 +135,14 @@ const RobotCamerasPrompt = ({
                             gap='size-50'
                             UNSAFE_className={classes.cameraChoice}
                         >
-                            <img
-                                src={camera.snapshot_url}
-                                alt={`${camera.name} snapshot`}
-                                className={classes.snapshot}
-                            />
+                            {/* Through Studio's own address, like the viewer. */}
+                            {camera.snapshot_proxy_url != null ? (
+                                <img
+                                    src={camera.snapshot_proxy_url}
+                                    alt={`${camera.name} snapshot`}
+                                    className={classes.snapshot}
+                                />
+                            ) : null}
                             <Checkbox
                                 isSelected={chosen.has(camera.name)}
                                 onChange={(value) => toggle(camera.name, value)}
