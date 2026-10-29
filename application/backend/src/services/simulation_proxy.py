@@ -175,7 +175,7 @@ async def _upstream_to_browser(upstream: websockets.asyncio.client.ClientConnect
             else:
                 await browser.send_text(message)
     code = upstream.close_code
-    if code not in _PASSED_CLOSE_CODES:
+    if code is None or code not in _PASSED_CLOSE_CODES:
         code = 1000
     with contextlib.suppress(RuntimeError, WebSocketDisconnect):
         await browser.close(code=code, reason=upstream.close_reason or "")
