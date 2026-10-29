@@ -220,7 +220,7 @@ def environment_store(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
             store["created"].append(camera)
             return camera
 
-        async def update_camera(self, project_id: UUID, camera: IPCamera) -> IPCamera:
+        async def update_camera(self, project_id: UUID, camera: IPCamera, commit: bool = True) -> IPCamera:
             store["updated_cameras"].append(camera)
             return camera
 
@@ -308,7 +308,7 @@ async def _move(cameras: list[IPCamera]) -> list[IPCamera]:
         async def get_camera_list(self, project_id: UUID) -> list[IPCamera]:
             return cameras
 
-        async def update_camera(self, project_id: UUID, camera: IPCamera) -> None:
+        async def update_camera(self, project_id: UUID, camera: IPCamera, commit: bool = True) -> None:
             updates.append(camera)
 
     await _move_simulation_cameras(FakeCameraService(), PROJECT_ID, ROBOT_ID, STUDIO)  # type: ignore[arg-type]

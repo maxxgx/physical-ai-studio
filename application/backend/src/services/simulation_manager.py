@@ -99,24 +99,23 @@ class DatabaseSimulationRobots:
             robot = await service.get_robot_by_id(project_id, robot_id)
             if isinstance(robot, UnavailableRobot) or "http_url" not in type(robot.payload).model_fields:
                 return
-            # Cameras first: if moving them fails, the next start moves the rest.
-            await _move_simulation_cameras(
-                ProjectCameraService(session, self._registry), project_id, robot_id, http_url
-            )
-            if robot.payload.http_url == http_url:
-                return
-            # Leaders next, while the robot still has the address they are matched on: if moving
-            # them fails, the next start moves the rest.
-            environments = EnvironmentService(session, self._registry)
-            await _move_simulation_leaders(
-                service, environments, self._registry, project_id, robot_id, robot.payload.http_url, http_url
-            )
-            payload = robot.payload.model_copy(update={"http_url": http_url})
-            await service.update_robot(project_id, robot.model_copy(update={"payload": payload}))
+            # One transaction for the cameras, the leaders and the robot: the leaders are matched on
+            # the robot's previous address, so they must not move without it. If any of it fails,
+            # none of it is kept, and the next start moves them all from the address still stored.
+            cameras = ProjectCameraService(session, self._registry)
+            await _move_simulation_cameras(cameras, project_id, robot_id, http_url, commit=False)
+            if robot.payload.http_url != http_url:
+                environments = EnvironmentService(session, self._registry)
+                await _move_simulation_leaders(
+                    service, environments, self._registry, project_id, robot_id, robot.payload.http_url, http_url
+                )
+                payload = robot.payload.model_copy(update={"http_url": http_url})
+                await service.update_robot(project_id, robot.model_copy(update={"payload": payload}), commit=False)
+            await session.commit()
 
 
 async def _move_simulation_cameras(
-    cameras: ProjectCameraService, project_id: UUID, robot_id: UUID, new_url: str
+    cameras: ProjectCameraService, project_id: UUID, robot_id: UUID, new_url: str, *, commit: bool = True
 ) -> None:
     """Point the IP cameras added from a robot's simulation at the simulation's new address.
 
@@ -134,7 +133,7 @@ async def _move_simulation_cameras(
         url = f"{new_url}/cameras/{stream}"
         payload = camera.payload.model_copy(update={"url": url})
         await cameras.update_camera(
-            project_id, camera.model_copy(update={"payload": payload, "fingerprint": {"url": url}})
+            project_id, camera.model_copy(update={"payload": payload, "fingerprint": {"url": url}}), commit=commit
         )
 
 
@@ -152,7 +151,7 @@ async def _move_simulation_leaders(
     A leader of any robot type (role ``leader``) with an integer ``http_port`` payload field reads
     from a simulation on this machine. One in an environment with the robot, on the port of the
     robot's previous address, reads from this simulation and moves with it. A leader on another
-    port was pointed elsewhere on purpose and stays.
+    port was pointed elsewhere on purpose and stays. Only flushed: the caller commits.
     """
     old_port, new_port = _local_port(old_url), _local_port(new_url)
     if old_port is None or new_port is None or old_port == new_port:
@@ -178,7 +177,7 @@ async def _move_simulation_leaders(
         if type(port) is not int or port != old_port:
             continue
         payload = leader.payload.model_copy(update={"http_port": new_port})
-        await robots.update_robot(project_id, leader.model_copy(update={"payload": payload}))
+        await robots.update_robot(project_id, leader.model_copy(update={"payload": payload}), commit=False)
 
 
 def _local_port(http_url: str) -> int | None:

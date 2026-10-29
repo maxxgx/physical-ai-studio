@@ -36,7 +36,7 @@ class FakeCameras:
     async def get_camera_list(self, project_id: UUID) -> list[IPCamera]:
         return list(self.cameras.values())
 
-    async def update_camera(self, project_id: UUID, camera: IPCamera) -> IPCamera:
+    async def update_camera(self, project_id: UUID, camera: IPCamera, commit: bool = True) -> IPCamera:
         self.cameras[camera.id] = camera
         return camera
 

@@ -17,7 +17,10 @@ from uuid import UUID, uuid4
 
 import pytest
 from pydantic import BaseModel
+from sqlalchemy import event
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from db.schema import Base, EnvironmentRobotDB, ProjectDB, ProjectEnvironmentDB
 from exceptions import (
     ResourceNotFoundError,
     ResourceType,
@@ -26,9 +29,11 @@ from exceptions import (
     SimulationNameInUseError,
     SimulationNotSupportedError,
 )
+from robots.catalog.registry import RobotCatalogRegistry
+from robots.robot_service import RobotService
 from schemas.environment import Environment, RobotEnvironmentConfiguration, TeleoperatorNone, TeleoperatorRobot
 from schemas.project_camera import IPCamera
-from schemas.robot import UnavailableRobot
+from schemas.robot import RobotAdapter, UnavailableRobot
 from schemas.simulation import Simulation, SimulationPhase, SimulationStatus, StartSimulationRequest
 from services.simulation_manager import SimulationManager
 
@@ -744,12 +749,12 @@ async def test_the_database_store_writes_the_address_only_when_it_changes(
         async def get_robot_by_id(self, project_id: UUID, robot_id: UUID) -> Any:
             return robot
 
-        async def update_robot(self, project_id: UUID, updated: Any) -> None:
+        async def update_robot(self, project_id: UUID, updated: Any, commit: bool = True) -> None:
             updates.append(updated)
 
     @contextlib.asynccontextmanager
     async def fake_session():
-        yield None
+        yield SimpleNamespace(commit=_nothing)
 
     monkeypatch.setattr(module, "RobotService", FakeService)
     monkeypatch.setattr(module, "ProjectCameraService", lambda *_args: SimpleNamespace(get_camera_list=_no_cameras))
@@ -767,6 +772,10 @@ async def test_the_database_store_writes_the_address_only_when_it_changes(
 
 async def _no_cameras(project_id: UUID) -> list[Any]:
     return []
+
+
+async def _nothing() -> None:
+    pass
 
 
 async def _no_list(project_id: UUID) -> list[Any]:
@@ -810,19 +819,19 @@ async def test_the_database_store_moves_only_the_started_robots_cameras_after_se
         async def get_robot_by_id(self, project_id: UUID, robot_id: UUID) -> Any:
             return robots[robot_id]
 
-        async def update_robot(self, project_id: UUID, updated: Any) -> None:
+        async def update_robot(self, project_id: UUID, updated: Any, commit: bool = True) -> None:
             robots[updated.id] = updated
 
     class FakeCameraService:
         async def get_camera_list(self, project_id: UUID) -> list[IPCamera]:
             return list(cameras.values())
 
-        async def update_camera(self, project_id: UUID, updated: IPCamera) -> None:
+        async def update_camera(self, project_id: UUID, updated: IPCamera, commit: bool = True) -> None:
             cameras[updated.name] = updated
 
     @contextlib.asynccontextmanager
     async def fake_session():
-        yield None
+        yield SimpleNamespace(commit=_nothing)
 
     monkeypatch.setattr(module, "RobotService", FakeRobotService)
     monkeypatch.setattr(module, "ProjectCameraService", lambda *_args: FakeCameraService())
@@ -874,7 +883,7 @@ class LeaderWorld:
             async def get_robot_by_id(self, project_id: UUID, robot_id: UUID) -> Any:
                 return robots[robot_id]
 
-            async def update_robot(self, project_id: UUID, updated: Any) -> None:
+            async def update_robot(self, project_id: UUID, updated: Any, commit: bool = True) -> None:
                 robots[updated.id] = updated
 
         class FakeEnvironmentService:
@@ -886,7 +895,7 @@ class LeaderWorld:
 
         @contextlib.asynccontextmanager
         async def fake_session():
-            yield None
+            yield SimpleNamespace(commit=_nothing)
 
         roles = {"Sim_Follower": "follower", "Sim_Leader": "leader", "Real_Follower": "follower"}
         registry = SimpleNamespace(get_definition=lambda robot_type: SimpleNamespace(role=roles[robot_type]))
@@ -967,3 +976,95 @@ async def test_a_restart_moves_the_leader_again(world: LeaderWorld) -> None:
     await world.start("http://127.0.0.1:50002")
 
     assert world.port(leader) == 50002
+
+
+async def test_a_failed_address_write_keeps_nothing_and_the_next_start_moves_every_leader(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import services.simulation_manager as module
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'studio.db'}")
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def enable_foreign_keys(connection: Any, _record: Any) -> None:
+        connection.execute("PRAGMA foreign_keys=ON")
+
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+
+    @contextlib.asynccontextmanager
+    async def session_ctx():
+        async with sessions() as session:
+            yield session
+
+    registry = RobotCatalogRegistry()
+    project_id, environment_id = uuid4(), uuid4()
+    follower, first, second = uuid4(), uuid4(), uuid4()
+
+    def robot(robot_id: UUID, robot_type: str, payload: dict[str, Any]) -> Any:
+        return RobotAdapter.validate_python(
+            {"id": str(robot_id), "name": robot_type, "type": robot_type, "payload": payload}
+        )
+
+    try:
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        async with sessions() as session:
+            session.add(ProjectDB(id=str(project_id), name="Project"))
+            await session.commit()
+            robots = RobotService(session, registry)
+            await robots.create_robot(
+                project_id, robot(follower, "MuJoCo_SO101_Follower", {"http_url": "http://127.0.0.1:50001"})
+            )
+            for leader in (first, second):
+                await robots.create_robot(
+                    project_id, robot(leader, "MuJoCo_SO101_Virtual_Leader", {"http_port": 50001})
+                )
+            session.add(ProjectEnvironmentDB(id=str(environment_id), project_id=str(project_id), name="Rig"))
+            session.add(
+                EnvironmentRobotDB(
+                    environment_id=str(environment_id),
+                    robot_id=str(follower),
+                    tele_operator_type="robot",
+                    tele_operator_robot_id=str(first),
+                )
+            )
+            session.add(EnvironmentRobotDB(environment_id=str(environment_id), robot_id=str(second)))
+            await session.commit()
+
+        monkeypatch.setattr(module, "get_async_db_session_ctx", session_ctx)
+        update_robot = RobotService.update_robot
+        leader_updates = 0
+
+        async def fail_on_the_second_leader(self: RobotService, project_id: UUID, updated: Any, **kwargs: Any) -> Any:
+            nonlocal leader_updates
+            if updated.id != follower:
+                leader_updates += 1
+                if leader_updates == 2:
+                    raise RuntimeError("database is gone")
+            return await update_robot(self, project_id, updated, **kwargs)
+
+        store = module.DatabaseSimulationRobots(registry)
+        monkeypatch.setattr(module.RobotService, "update_robot", fail_on_the_second_leader)
+        with pytest.raises(RuntimeError):
+            await store.set_http_url(project_id, follower, "http://127.0.0.1:50002")
+        monkeypatch.setattr(module.RobotService, "update_robot", update_robot)
+
+        async with sessions() as session:
+            stored = {r.id: r.payload for r in await RobotService(session, registry).get_robot_list(project_id)}
+        assert [stored[follower].http_url, stored[first].http_port, stored[second].http_port] == [
+            "http://127.0.0.1:50001",
+            50001,
+            50001,
+        ]
+
+        await store.set_http_url(project_id, follower, "http://127.0.0.1:50003")
+
+        async with sessions() as session:
+            stored = {r.id: r.payload for r in await RobotService(session, registry).get_robot_list(project_id)}
+        assert [stored[follower].http_url, stored[first].http_port, stored[second].http_port] == [
+            "http://127.0.0.1:50003",
+            50003,
+            50003,
+        ]
+    finally:
+        await engine.dispose()
