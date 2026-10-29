@@ -33,6 +33,8 @@ PROXIED_HTTP_PATH = re.compile(r"/cameras/[A-Za-z0-9][A-Za-z0-9_.-]*/(frame\.jpg
 _VIEWER_PATH = re.compile(r"[A-Za-z0-9_.~/-]*")
 """Paths of the viewer's page and files: no ``..`` segment, no query, nothing to escape."""
 CONNECT_TIMEOUT_S = 5.0
+HEADERS_TIMEOUT_S = 5.0
+"""How long the simulation may take to start its answer (connecting included)."""
 _PASSED_HEADERS = ("content-type", "cache-control", "last-modified", "etag")
 _PASSED_CLOSE_CODES = {1000, 1001, 1002, 1003, 1007, 1008, 1009, 1010, 1011, 1012, 1013, 1014, *range(3000, 5000)}
 """Close codes that may be sent on (1005, 1006 and 1015 only say how a connection ended)."""
@@ -69,14 +71,31 @@ def is_proxied_http_path(path: str) -> bool:
 
 
 async def proxy_get(url: str, *, read_timeout_s: float | None) -> Response:
-    """GET *url* and stream the response on; the upstream closes when the browser goes away."""
-    client = httpx.AsyncClient(timeout=httpx.Timeout(CONNECT_TIMEOUT_S, read=read_timeout_s))
+    """GET *url* and stream the response on; the upstream closes when the browser goes away.
+
+    The response's headers must arrive within ``HEADERS_TIMEOUT_S``; *read_timeout_s* bounds each
+    read of the body after that (``None`` for a stream). A redirect is not followed, nor passed on:
+    it could lead off this machine.
+    """
+    client = httpx.AsyncClient(timeout=httpx.Timeout(CONNECT_TIMEOUT_S, read=read_timeout_s), follow_redirects=False)
     try:
-        upstream = await client.send(client.build_request("GET", url), stream=True)
+        upstream = await asyncio.wait_for(client.send(client.build_request("GET", url), stream=True), HEADERS_TIMEOUT_S)
+    except TimeoutError:
+        await client.aclose()
+        logger.debug("Simulation proxy GET {}: no response within {} s", url, HEADERS_TIMEOUT_S)
+        return Response("The simulation does not answer in time.", status_code=504, media_type="text/plain")
     except httpx.HTTPError as error:
         await client.aclose()
         logger.debug("Simulation proxy GET {} failed: {}", url, error)
         return Response("The simulation does not answer.", status_code=502, media_type="text/plain")
+    except BaseException:
+        await client.aclose()
+        raise
+    if upstream.is_redirect:
+        await upstream.aclose()
+        await client.aclose()
+        logger.warning("Simulation proxy GET {} answered with a redirect; not following it", url)
+        return Response("The simulation redirected elsewhere.", status_code=502, media_type="text/plain")
 
     async def body() -> AsyncIterator[bytes]:
         try:
@@ -100,7 +119,7 @@ async def proxy_websocket(browser: WebSocket, url: str) -> None:
     """
     requested = [Subprotocol(protocol) for protocol in browser.scope.get("subprotocols", [])]
     try:
-        upstream = await websockets.asyncio.client.connect(
+        upstream = await _ConnectWithoutRedirects(
             url, subprotocols=requested or None, max_size=None, open_timeout=CONNECT_TIMEOUT_S, compression=None
         )
     except (OSError, TimeoutError, websockets.exceptions.WebSocketException) as error:
@@ -118,6 +137,17 @@ async def proxy_websocket(browser: WebSocket, url: str) -> None:
             for task in (to_upstream, to_browser):
                 task.cancel()
             await asyncio.gather(to_upstream, to_browser, return_exceptions=True)
+
+
+class _ConnectWithoutRedirects(websockets.asyncio.client.connect):
+    """``websockets``' ``connect``, which takes a redirect of the handshake for a failure.
+
+    It would follow one, to another host or port too: the simulation's address is checked to be on
+    this machine, a redirect's target is not.
+    """
+
+    def process_redirect(self, exc: Exception) -> Exception | str:
+        return exc
 
 
 async def _browser_to_upstream(browser: WebSocket, upstream: websockets.asyncio.client.ClientConnection) -> None:

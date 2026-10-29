@@ -5,7 +5,9 @@
 
 import contextlib
 import http.server
+import socket
 import threading
+import time
 from collections.abc import AsyncIterator, Iterator
 from types import SimpleNamespace
 from typing import Any
@@ -38,6 +40,7 @@ class SimulationApi(http.server.BaseHTTPRequestHandler):
     """The simulation's HTTP API: a camera frame and stream, and a path the browser must not get."""
 
     requests: list[str] = []
+    redirect_to: str | None = None
 
     def do_GET(self) -> None:
         SimulationApi.requests.append(self.path)
@@ -50,6 +53,11 @@ class SimulationApi(http.server.BaseHTTPRequestHandler):
             for _ in range(3):
                 self.wfile.write(b"--frame\r\nContent-Type: image/jpeg\r\n\r\njpeg\r\n")
                 self.wfile.flush()
+        elif self.path == "/cameras/moved/frame.jpg" and SimulationApi.redirect_to:
+            self.send_response(302)
+            self.send_header("Location", SimulationApi.redirect_to)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
         elif self.path == "/":
             self._send(b'{"service": "sim-a"}', "application/json")
         else:
@@ -66,8 +74,41 @@ class SimulationApi(http.server.BaseHTTPRequestHandler):
         pass
 
 
+class Listener:
+    """A TCP port that accepts connections and never answers; records them and when they close."""
+
+    def __init__(self) -> None:
+        self.socket = socket.create_server(("127.0.0.1", 0))
+        self.url = f"http://127.0.0.1:{self.socket.getsockname()[1]}"
+        self.accepted = 0
+        self.closed = threading.Event()
+        threading.Thread(target=self._serve, daemon=True).start()
+
+    def _serve(self) -> None:
+        with contextlib.suppress(OSError):
+            while True:
+                connection, _ = self.socket.accept()
+                self.accepted += 1
+                threading.Thread(target=self._hold, args=(connection,), daemon=True).start()
+
+    def _hold(self, connection: socket.socket) -> None:
+        with connection, contextlib.suppress(OSError):
+            while connection.recv(65536):
+                pass
+        self.closed.set()
+
+
+@pytest.fixture
+def listener() -> Iterator[Listener]:
+    listener = Listener()
+    yield listener
+    listener.socket.close()
+
+
 class Viewer:
     """A viser-like viewer: its page over HTTP, and a WebSocket that echoes, on one port."""
+
+    redirect_to: str | None = None
 
     def __init__(self) -> None:
         self.closed = threading.Event()
@@ -82,10 +123,13 @@ class Viewer:
         self.url = f"http://127.0.0.1:{self.server.socket.getsockname()[1]}"
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
-    @staticmethod
-    def _page(connection: ServerConnection, request: Request) -> Response | None:
+    def _page(self, connection: ServerConnection, request: Request) -> Response | None:
         if request.headers.get("Upgrade", "").lower() == "websocket":
-            return None
+            if self.redirect_to is None:
+                return None
+            response = connection.respond(302, "")
+            response.headers["Location"] = self.redirect_to
+            return response
         return connection.respond(200, "<html>viewer</html>")
 
     def _handle(self, connection: ServerConnection) -> None:
@@ -162,6 +206,7 @@ def studio(monkeypatch: pytest.MonkeyPatch, simulation_api: str, viewer: Viewer)
     app.dependency_overrides[get_simulation_manager] = lambda: studio
     app.dependency_overrides[get_robot_catalog_service] = lambda: SimpleNamespace(registry=registry)
     SimulationApi.requests.clear()
+    SimulationApi.redirect_to = None
     yield studio
     app.dependency_overrides.clear()
 
@@ -284,3 +329,41 @@ def test_the_path_rules() -> None:
     assert not is_proxied_http_path("/scene")
     assert is_viewer_path("") and is_viewer_path("assets/index.js")
     assert not is_viewer_path("../secret") and not is_viewer_path("a/%2e%2e/b")
+
+
+def test_a_redirect_of_the_viewers_websocket_is_not_followed(
+    studio: Studio, viewer: Viewer, listener: Listener
+) -> None:
+    viewer.redirect_to = "ws" + listener.url.removeprefix("http") + "/"
+
+    with pytest.raises(WebSocketDisconnect), TestClient(app).websocket_connect(f"{BASE}/viewer") as socket_:
+        socket_.receive_bytes()
+
+    assert listener.accepted == 0
+
+
+def test_a_redirect_of_a_camera_frame_is_not_followed(studio: Studio, listener: Listener) -> None:
+    SimulationApi.redirect_to = f"{listener.url}/cameras/wrist/frame.jpg"
+
+    response = TestClient(app).get(f"{BASE}/http/cameras/moved/frame.jpg", follow_redirects=False)
+
+    assert response.status_code == 502
+    assert "location" not in response.headers
+    assert listener.accepted == 0
+
+
+def test_a_simulation_that_never_answers_times_out_and_is_let_go(
+    studio: Studio, listener: Listener, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import services.simulation_proxy as proxy
+
+    monkeypatch.setattr(proxy, "HEADERS_TIMEOUT_S", 0.5)
+    studio.current = studio.current.model_copy(update={"http_url": listener.url})
+    started = time.monotonic()
+
+    response = TestClient(app).get(f"{BASE}/http/cameras/wrist/mjpeg")
+
+    assert response.status_code == 504
+    assert time.monotonic() - started < 3.0
+    assert listener.accepted == 1
+    assert listener.closed.wait(2.0), "Studio kept the connection to the simulation open"
