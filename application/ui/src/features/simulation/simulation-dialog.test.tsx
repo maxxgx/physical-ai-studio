@@ -146,6 +146,60 @@ describe('SimulationDialog', () => {
         expect(await screen.findByRole('radio', { name: 'Fixed' })).toBeInTheDocument();
     });
 
+    it('offers the command for the chosen scene and seed to run it yourself', async () => {
+        mockSimulation(idle);
+        server.use(
+            http.get('/api/projects/{project_id}/robots/{robot_id}/simulation/command', ({ request }) => {
+                const query = new URL(request.url).searchParams;
+                const argv = ['physicalai-mujoco', 'start', '--scene', query.get('scene') ?? ''];
+                const seed = query.get('seed');
+                const full = seed === null ? argv : [...argv, '--seed', seed];
+                return HttpResponse.json({ argv: full, command: full.join(' ') });
+            })
+        );
+        const user = userEvent.setup();
+        renderDialog();
+
+        await user.click(await screen.findByRole('button', { name: 'Run it yourself' }));
+        expect(screen.getByText(/Studio connects to it, scripts can too/)).toBeVisible();
+        expect(await screen.findByText('physicalai-mujoco start --scene single_pick_place')).toBeVisible();
+
+        await user.click(screen.getByRole('button', { name: /Scene/ }));
+        await user.click(await screen.findByRole('option', { name: 'Yahtzee' }));
+        expect(await screen.findByText('physicalai-mujoco start --scene yahtzee')).toBeVisible();
+
+        await user.click(screen.getByRole('button', { name: 'Advanced' }));
+        await user.click(await screen.findByRole('radio', { name: 'Fixed' }));
+        expect(await screen.findByText('physicalai-mujoco start --scene yahtzee --seed 0')).toBeVisible();
+
+        await user.click(screen.getByRole('button', { name: 'Copy command' }));
+        expect(await navigator.clipboard.readText()).toBe('physicalai-mujoco start --scene yahtzee --seed 0');
+        expect(screen.getByText('Copied!')).toBeInTheDocument();
+    });
+
+    it('has no command to run it yourself when the plugin offers none', async () => {
+        mockSimulation(idle);
+        const asked: string[] = [];
+        server.use(
+            http.get('/api/projects/{project_id}/robots/{robot_id}/simulation/command', ({ request }) => {
+                asked.push(request.url);
+                return HttpResponse.json(
+                    {
+                        error_code: 'simulation_command_unavailable',
+                        message: 'No command',
+                        http_status: 404,
+                    } as never,
+                    { status: 404 }
+                );
+            })
+        );
+        renderDialog();
+
+        expect(await screen.findByRole('button', { name: 'Start simulation' })).toBeInTheDocument();
+        await waitFor(() => expect(asked).toHaveLength(1));
+        expect(screen.queryByRole('button', { name: 'Run it yourself' })).not.toBeInTheDocument();
+    });
+
     it('shows the download progress of a starting simulation', async () => {
         mockSimulation({
             ...idle,

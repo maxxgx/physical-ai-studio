@@ -4,6 +4,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 
 import {
+    ActionButton,
     Button,
     ButtonGroup,
     Content,
@@ -15,6 +16,7 @@ import {
     Divider,
     Flex,
     Heading,
+    Icon,
     Item,
     NumberField,
     Picker,
@@ -22,14 +24,17 @@ import {
     Radio,
     RadioGroup,
     Text,
+    toast,
     View,
 } from '@geti-ui/ui';
+import { Copy } from '@geti-ui/ui/icons';
 
 import { getApiErrorMessage } from '../../api/errors';
 import { useProjectId } from '../projects/use-project';
 import { useRobotCatalogQuery } from '../robots/robot-catalog.hooks';
 import { InlineAlert } from '../robots/setup-wizard/shared/inline-alert';
 import { rememberedScene, rememberScene, RobotSimulationLaunch, useRobotSimulationLaunch } from './robot-simulation';
+import { useSimulationCommand } from './use-robot-simulation';
 import {
     isActiveSimulation,
     Simulation,
@@ -48,6 +53,64 @@ interface SimulatedRobot {
 }
 
 const robotTypeLabel = (type: string | null | undefined) => (type ?? 'robot').replaceAll('_', ' ');
+
+/**
+ * The command that starts the chosen scene in a terminal instead, which Studio attaches to as a
+ * simulation started outside Studio. Hidden when the robot type's plugin offers none.
+ */
+const RunItYourself = ({
+    project_id,
+    robot_id,
+    scene,
+    seed,
+}: {
+    project_id: string;
+    robot_id: string;
+    scene: string;
+    seed: number | null;
+}) => {
+    const { data } = useSimulationCommand(project_id, robot_id, scene, seed);
+    const [copied, setCopied] = useState(false);
+
+    if (data === undefined) {
+        return null;
+    }
+
+    const copy = async () => {
+        try {
+            await navigator.clipboard.writeText(data.command);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 2000);
+        } catch {
+            toast.negative('Could not copy the command.');
+        }
+    };
+
+    return (
+        <Disclosure isQuiet>
+            <DisclosureTitle>Run it yourself</DisclosureTitle>
+            <DisclosurePanel>
+                <Flex direction='column' gap='size-100'>
+                    <Text UNSAFE_className={classes.detail}>
+                        Start this simulation in a terminal instead. Studio connects to it, scripts can too, and it
+                        keeps running when Studio stops.
+                    </Text>
+                    <Flex gap='size-100' alignItems='start'>
+                        <View flex UNSAFE_className={classes.command}>
+                            <pre>{data.command}</pre>
+                        </View>
+                        <ActionButton aria-label='Copy command' onPress={copy}>
+                            <Icon>
+                                <Copy />
+                            </Icon>
+                            <Text>{copied ? 'Copied!' : 'Copy'}</Text>
+                        </ActionButton>
+                    </Flex>
+                </Flex>
+            </DisclosurePanel>
+        </Disclosure>
+    );
+};
 
 const StartForm = ({
     robot,
@@ -73,6 +136,7 @@ const StartForm = ({
     const { data: catalog } = useRobotCatalogQuery();
     const displayName = catalog.find(({ type }) => type === robot.type)?.display_name ?? robotTypeLabel(robot.type);
     const sceneDescription = launch.scenes.find(({ id }) => id === scene)?.description;
+    const chosenSeed = launch.max_seed !== null && seedMode === 'fixed' ? seed : null;
 
     const start = () => {
         rememberScene(robot.id, scene);
@@ -82,7 +146,7 @@ const StartForm = ({
                     project_id,
                     robot_id: robot.id,
                     scene,
-                    seed: launch.max_seed !== null && seedMode === 'fixed' ? seed : null,
+                    seed: chosenSeed,
                     // Also this robot's own simulation, e.g. one still stopping after a failed start.
                     replace: isActiveSimulation(simulation),
                 },
@@ -148,6 +212,7 @@ const StartForm = ({
                             </DisclosurePanel>
                         </Disclosure>
                     ) : null}
+                    <RunItYourself project_id={project_id} robot_id={robot.id} scene={scene} seed={chosenSeed} />
                     {other !== undefined ? (
                         <InlineAlert variant='warning'>
                             <strong>Another simulation is running</strong>
