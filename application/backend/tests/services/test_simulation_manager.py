@@ -1330,7 +1330,7 @@ async def test_a_session_stores_the_simulations_port_on_a_virtual_leader_in_the_
             robots = RobotService(session, registry)
             for robot_id, robot_type, payload in (
                 (follower_id, "MuJoCo_SO101_Follower", {"http_url": "http://127.0.0.1:50488"}),
-                (leader_id, "MuJoCo_SO101_Virtual_Leader", {"http_port": 8080}),
+                (leader_id, "MuJoCo_Virtual_Leader", {"http_port": 8080}),
             ):
                 await robots.create_robot(
                     project_id,
@@ -1391,9 +1391,7 @@ async def test_a_failed_address_write_keeps_nothing_and_the_next_start_moves_eve
                 project_id, robot(follower, "MuJoCo_SO101_Follower", {"http_url": "http://127.0.0.1:50001"})
             )
             for leader in (first, second):
-                await robots.create_robot(
-                    project_id, robot(leader, "MuJoCo_SO101_Virtual_Leader", {"http_port": 50001})
-                )
+                await robots.create_robot(project_id, robot(leader, "MuJoCo_Virtual_Leader", {"http_port": 50001}))
             session.add(ProjectEnvironmentDB(id=str(environment_id), project_id=str(project_id), name="Rig"))
             session.add(
                 EnvironmentRobotDB(
