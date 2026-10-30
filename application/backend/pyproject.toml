@@ -81,6 +81,7 @@ cuda = [
 xpu = [
     "torch>=2.11,<2.12",
     "torchvision>=0.26,<0.27",
+    "torchao>=0.17.0,<0.18.0; sys_platform == 'linux' and platform_machine == 'x86_64'",
 ]
 
 tests = [
@@ -127,7 +128,7 @@ explicit = false
 
 [tool.uv.sources]
 physicalai-train = { path = "../../library", editable = true }
-physicalai = { git = "https://github.com/openvinotoolkit/physicalai.git", rev = "0ca5b8e06c132aa2c83aa7a92bc6dfb79a7b231f" }
+physicalai = { git = "https://github.com/openvinotoolkit/physicalai.git", rev = "b4cc2cf569c24f92424001dde7aca4081096ebd1" }
 # Keep torchao on PyPI for all extras.
 # The XPU index publishes `torchao` local-version wheels (e.g. `+xpu`) that can
 # be selected via unsafe-best-match even for non-XPU installs (like `--extra cuda`),
