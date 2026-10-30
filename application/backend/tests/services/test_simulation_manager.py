@@ -852,6 +852,67 @@ async def test_the_database_store_moves_only_the_started_robots_cameras_after_se
     ]
 
 
+async def test_a_start_on_the_robots_own_port_moves_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The simulation reuses the robot's port when it is free: cameras, leaders and payload stay put."""
+    import services.simulation_manager as module
+
+    address = "http://127.0.0.1:8765"
+    robot_id, leader_id = uuid4(), uuid4()
+    robots: dict[UUID, Any] = {
+        robot_id: _StoredRobot(id=robot_id, payload=FakePayload(name="sim-a", http_url=address)),
+        leader_id: _StoredLeader(id=leader_id, payload=_StoredLeaderPayload(http_port=8765)),
+    }
+    url = f"{address}/cameras/wrist/mjpeg"
+    camera = IPCamera(
+        id=uuid4(),
+        name="wrist",
+        fingerprint={"url": url},
+        hardware_name="wrist",
+        payload={"url": url, "simulation_robot_id": robot_id},
+    )
+    environment = Environment(
+        id=uuid4(),
+        name="Env",
+        robots=[RobotEnvironmentConfiguration(robot_id=robot_id, tele_operator=TeleoperatorRobot(robot_id=leader_id))],
+    )
+    updates: list[Any] = []
+
+    class FakeRobotService:
+        def __init__(self, session: Any, registry: Any) -> None:
+            pass
+
+        async def get_robot_by_id(self, project_id: UUID, robot_id: UUID) -> Any:
+            return robots[robot_id]
+
+        async def update_robot(self, project_id: UUID, updated: Any, commit: bool = True) -> None:
+            updates.append(updated)
+
+    class FakeCameraService:
+        async def get_camera_list(self, project_id: UUID) -> list[IPCamera]:
+            return [camera]
+
+        async def update_camera(self, project_id: UUID, updated: IPCamera, commit: bool = True) -> None:
+            updates.append(updated)
+
+    async def environments(project_id: UUID) -> list[Environment]:
+        return [environment]
+
+    @contextlib.asynccontextmanager
+    async def fake_session():
+        yield SimpleNamespace(commit=_nothing)
+
+    roles = {"Sim_Follower": "follower", "Sim_Leader": "leader"}
+    registry = SimpleNamespace(get_definition=lambda robot_type: SimpleNamespace(role=roles[robot_type]))
+    monkeypatch.setattr(module, "RobotService", FakeRobotService)
+    monkeypatch.setattr(module, "ProjectCameraService", lambda *_args: FakeCameraService())
+    monkeypatch.setattr(module, "get_async_db_session_ctx", fake_session)
+    monkeypatch.setattr(module, "EnvironmentService", lambda *_args: SimpleNamespace(get_environment_list=environments))
+
+    await module.DatabaseSimulationRobots(registry).set_http_url(uuid4(), robot_id, address)  # type: ignore[arg-type]
+
+    assert updates == []
+
+
 class _StoredLeaderPayload(BaseModel):
     http_port: int
 

@@ -31,9 +31,12 @@ const launch: RobotSimulationLaunch = {
 
 const idle: Simulation = { status: 'idle', cameras: [] };
 
+const ROBOT_SIMULATION_PATH = '/api/projects/{project_id}/robots/{robot_id}/simulation';
+
 const mockSimulation = (simulation: Simulation) => {
     server.use(
         http.get('/api/simulation', () => HttpResponse.json(simulation)),
+        http.get(ROBOT_SIMULATION_PATH, () => HttpResponse.json({ running: false, owner_name: 'sim-a', cameras: [] })),
         http.get('/api/robots/catalog', () =>
             HttpResponse.json([
                 {
@@ -198,6 +201,33 @@ describe('SimulationDialog', () => {
         expect(await screen.findByRole('button', { name: 'Start simulation' })).toBeInTheDocument();
         await waitFor(() => expect(asked).toHaveLength(1));
         expect(screen.queryByRole('button', { name: 'Run it yourself' })).not.toBeInTheDocument();
+    });
+
+    it('shows that Studio is connected once the simulation runs, started outside Studio', async () => {
+        mockSimulation(idle);
+        let running = false;
+        server.use(
+            http.get(ROBOT_SIMULATION_PATH, () =>
+                HttpResponse.json(
+                    running
+                        ? { running: true, started_by: 'external', owner_name: 'sim-a', scene: 'yahtzee', cameras: [] }
+                        : { running: false, owner_name: 'sim-a', cameras: [] }
+                )
+            )
+        );
+        const { close } = renderDialog();
+
+        expect(await screen.findByRole('heading', { name: 'Start simulation' })).toBeInTheDocument();
+        running = true;
+
+        // The robot's simulation is probed every 2 s while the form shows.
+        expect(
+            await screen.findByRole('heading', { name: 'Simulation running' }, { timeout: 4_000 })
+        ).toBeInTheDocument();
+        expect(screen.getByText('SO101 Follower · yahtzee')).toBeInTheDocument();
+        expect(screen.getByText('Started outside Studio')).toBeInTheDocument();
+        await userEvent.setup().click(screen.getByRole('button', { name: 'Close' }));
+        expect(close).toHaveBeenCalled();
     });
 
     it('shows the download progress of a starting simulation', async () => {

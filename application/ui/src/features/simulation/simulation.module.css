@@ -52,7 +52,8 @@
     margin: 0;
     font-size: var(--spectrum-global-dimension-font-size-75);
     white-space: pre-wrap;
-    word-break: break-all;
+    /* Break between arguments; inside one only when it is wider than the box. */
+    overflow-wrap: anywhere;
     user-select: all;
 }
 

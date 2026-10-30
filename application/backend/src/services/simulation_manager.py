@@ -119,7 +119,8 @@ async def _move_simulation_cameras(
 ) -> None:
     """Point the IP cameras added from a robot's simulation at the simulation's new address.
 
-    Simulations start on free ports, so the address changes on every start. A camera added from a
+    A simulation reuses its robot's port while that port is free and takes a free one otherwise, so
+    the address can change from one start to the next. A camera added from a
     simulation records its robot, and only that robot's cameras move, from whatever address they
     were on (the robot's stored address may have changed since). A camera without a robot never
     moves: its address cannot tell which simulation it came from.

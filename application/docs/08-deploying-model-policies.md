@@ -15,29 +15,30 @@ After the environment and model load, you will see a screen similar to the recor
 
 ## Run a policy on a simulation from your own script
 
-A simulation that Studio starts picks new ports every time and stops when Studio stops. To drive a simulated robot from your own script, start its simulation yourself:
+A simulation that Studio starts stops when Studio stops. To drive a simulated robot from your own script, start its simulation yourself:
 
 1. Open the robot's start simulation dialog and pick the scene, and a seed under Advanced if you want one.
 2. Open **Run it yourself** and copy the command.
-3. Run the command in a terminal on the machine Studio runs on, with Studio's Python environment active (`source .venv/bin/activate` in `backend`). The simulation runs until you stop it with Ctrl+C.
+3. In a terminal on the machine Studio runs on, activate the Python environment Studio runs in: `source .venv/bin/activate` in `backend` for a source checkout, or the environment you installed Studio into with pip.
+4. Run the command. The simulation runs until you stop it with Ctrl+C.
 
-Studio connects to it as it is: the robot shows `Running · external`, with its 3D viewer and cameras.
+Studio connects to it as it is: the robot shows `Running · outside Studio`, with its 3D viewer and cameras, and the start dialog, if it is still open, says so.
 
 To run a trained policy on it from a script:
 
 1. On the Models screen, open the model and click **Runtime export** on its OpenVINO format.
 2. Pick an environment with that simulated robot and a device, and download the zip.
-3. Unzip it and run the policy from that folder:
+3. Unzip it and, with the same Python environment active (`runtime.yaml` loads the simulation plugin from it), run the policy from that folder:
 
 ```bash
-physicalai run --config runtime.yaml
+physicalai run --config runtime.yaml --run.duration_s=60
 ```
 
 Limits:
 
 - This works with a native install only. A simulation accepts robot connections from its own machine only, so Studio in Docker can't reach a simulation started on the host, and a script on the host can't reach one that Studio started in its container.
-- One Studio session or one script drives the robot at a time. Stop one before you start the other.
-- Keep the port the robot is configured with. The command uses the robot's name and address, and Studio's cameras and `runtime.yaml` point at that address. If you change the port in the command, change the robot's address in Studio to match.
+- Nothing stops Studio and your script from driving the robot at the same time. Before you run a script, stop Studio's session on the robot and leave its environment page: the session keeps the robot for about 45 seconds after you leave.
+- Keep the port the robot is configured with. The command uses the robot's name and address, and Studio's cameras and `runtime.yaml` point at that address. If you change the port in the command, change the robot's address in Studio to match. A simulation that Studio starts reuses that port too, unless another program has it.
 
 ## Next
 

@@ -34,7 +34,7 @@ import { useProjectId } from '../projects/use-project';
 import { useRobotCatalogQuery } from '../robots/robot-catalog.hooks';
 import { InlineAlert } from '../robots/setup-wizard/shared/inline-alert';
 import { rememberedScene, rememberScene, RobotSimulationLaunch, useRobotSimulationLaunch } from './robot-simulation';
-import { useSimulationCommand } from './use-robot-simulation';
+import { useRobotSimulation, useSimulationCommand } from './use-robot-simulation';
 import {
     isActiveSimulation,
     Simulation,
@@ -99,7 +99,8 @@ const RunItYourself = ({
                         <View flex UNSAFE_className={classes.command}>
                             <pre>{data.command}</pre>
                         </View>
-                        <ActionButton aria-label='Copy command' onPress={copy}>
+                        {/* A fixed width, so "Copied!" does not move the command box. */}
+                        <ActionButton aria-label='Copy command' onPress={copy} width='size-1200'>
                             <Icon>
                                 <Copy />
                             </Icon>
@@ -371,6 +372,42 @@ const SimulationProgress = ({
 };
 
 /**
+ * The robot's simulation runs, started outside Studio (e.g. with the "Run it yourself" command
+ * while the dialog was open): Studio is connected to it, so there is nothing left to start.
+ */
+const ExternalSimulationRunning = ({
+    robot,
+    scene,
+    close,
+}: {
+    robot: SimulatedRobot;
+    scene: string | null | undefined;
+    close: () => void;
+}) => (
+    <Dialog width='size-6000'>
+        <Heading>Simulation running</Heading>
+        <Divider />
+        <Content>
+            <Flex direction='column' gap='size-150'>
+                <Text>
+                    {robotTypeLabel(robot.type)}
+                    {scene != null ? ` · ${scene}` : ''}
+                </Text>
+                <Step state='done'>
+                    <Text>Started outside Studio</Text>
+                    <Text UNSAFE_className={classes.detail}>Studio is connected to it</Text>
+                </Step>
+            </Flex>
+        </Content>
+        <ButtonGroup>
+            <Button variant='accent' onPress={close}>
+                Close
+            </Button>
+        </ButtonGroup>
+    </Dialog>
+);
+
+/**
  * Starts a simulated robot's simulation and follows it until it runs or fails. Opens on the
  * progress view when the robot's simulation is already starting.
  */
@@ -390,6 +427,9 @@ export const SimulationDialog = ({
     const { data: simulation } = useSimulation();
     const isThisRobot = simulation?.robot_id === robot.id && simulation.status !== 'idle';
     const [showForm, setShowForm] = useState(!isThisRobot);
+    // Probed while the form shows: a simulation started in a terminal is only known from probes.
+    const { data: robotSimulation } = useRobotSimulation(project_id, robot.id, showForm && !isThisRobot);
+    const runsOutsideStudio = robotSimulation?.running === true && robotSimulation.started_by === 'external';
     // Undefined until the state has loaded, so a simulation already running on open is not news.
     const wasRunning = useRef<boolean | undefined>(undefined);
 
@@ -419,6 +459,10 @@ export const SimulationDialog = ({
                 onBack={() => setShowForm(true)}
             />
         );
+    }
+
+    if (showForm && !isThisRobot && runsOutsideStudio) {
+        return <ExternalSimulationRunning robot={robot} scene={robotSimulation?.scene} close={close} />;
     }
 
     return (
