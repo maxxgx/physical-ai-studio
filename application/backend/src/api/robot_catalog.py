@@ -34,7 +34,10 @@ class RobotCatalogDefinitionResponse(BaseModel):
     type: str = Field(..., description="Stable backend robot type identifier")
     display_name: str = Field(..., description="Human-readable robot type label")
     role: Literal["follower", "leader"] = Field(..., description="Default robot role")
-    urdf_path: str = Field(description="URDF URL used by the UI model loader")
+    urdf_path: str | None = Field(
+        default=None,
+        description="URDF URL used by the UI model loader, or null when the robot type has no 3D model",
+    )
     package_map: dict[str, str] = Field(default_factory=dict, description="URDF package name to URL prefix map")
     joint_map: dict[str, list[str]] = Field(
         description="Observation joint name to URDF joint(s) mapping",
@@ -52,9 +55,11 @@ class RobotCatalogDefinitionResponse(BaseModel):
 def _to_response(definition: RobotCatalogDefinition) -> RobotCatalogDefinitionResponse:
     catalog_root = f"/api/robots/catalog/{definition.type}"
 
+    urdf_path = None
     package_map = {}
     joint_map = {}
     if definition.asset is not None:
+        urdf_path = f"{catalog_root}/urdf"
         package_map = dict.fromkeys(definition.asset.packages, f"{catalog_root}")
         joint_map = definition.asset.joint_map
 
@@ -62,7 +67,7 @@ def _to_response(definition: RobotCatalogDefinition) -> RobotCatalogDefinitionRe
         type=definition.type,
         display_name=definition.display_name,
         role=definition.role,
-        urdf_path=f"{catalog_root}/urdf",
+        urdf_path=urdf_path,
         package_map=package_map,
         joint_map=joint_map,
         zero_calibration=None

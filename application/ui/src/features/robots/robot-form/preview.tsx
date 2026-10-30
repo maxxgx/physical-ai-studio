@@ -2,6 +2,7 @@ import { Content, Flex, Heading, IllustratedMessage, Text, View } from '@geti-ui
 
 import { RobotViewer } from '../controller/robot-viewer';
 import { useRobotCatalogQuery } from '../robot-catalog.hooks';
+import { robotModelPath } from '../robot-models-context';
 import { ReactComponent as RobotIllustration } from './../../../assets/illustrations/INTEL_08_NO-TESTS.svg';
 import { useRobotForm } from './provider';
 
@@ -42,7 +43,7 @@ export const Preview = () => {
     const { activeType } = useRobotForm();
     const { data: catalog } = useRobotCatalogQuery();
     const definition = catalog.find(({ type }) => type === activeType);
-    const hasModel = definition !== undefined && Object.keys(definition.package_map ?? {}).length > 0;
+    const hasModel = definition !== undefined && robotModelPath(definition) !== null;
 
     return (
         <View backgroundColor={'gray-200'} height={'100%'}>
