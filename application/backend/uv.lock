@@ -3249,7 +3249,7 @@ transport = [
 
 [[package]]
 name = "physicalai-mujoco-plugin"
-version = "0.4.0"
+version = "0.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "defusedxml" },
@@ -3266,9 +3266,9 @@ dependencies = [
     { name = "uvicorn" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/42/9a/e20545865bcffc368a10fa688b27ae4eef730ec32270145f03e8d0cd324f/physicalai_mujoco_plugin-0.4.0.tar.gz", hash = "sha256:1d4f1f802f8cd68debc33f9b266eda010bf2eb2e227858efebd66e31a10530a3", size = 6810599, upload-time = "2026-10-20T14:43:54.301Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/1c/d8/3738bd96e7a73f5eacb6e03f510bd0776531949b6cede3f7e808b16ba2e8/physicalai_mujoco_plugin-0.5.0.tar.gz", hash = "sha256:b7a01910a2724b5f558b42d3fca8a73b69836ee198a5bff68b432317e7685f23", size = 7226211, upload-time = "2026-10-30T19:36:59.39Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/94/7f/90d569e11dbe7d1a5c6f5bc88d33bc4acc74b6496bd8d6ddcb599b8790e3/physicalai_mujoco_plugin-0.4.0-py3-none-any.whl", hash = "sha256:b5687b1ca1217125d28d0b4fe3bd53317a6ef7f8b3ff05a6a80bbf751fe54061", size = 6822613, upload-time = "2026-10-20T14:43:51.826Z" },
+    { url = "https://files.pythonhosted.org/packages/ee/c7/a3efbfc033b0b2e20c7d27a9465f1028e37755519e16cbf185119e2e76fc/physicalai_mujoco_plugin-0.5.0-py3-none-any.whl", hash = "sha256:f360d3904b3a0857e9b479ef4f8c724468dc0e1d32fdd780648c1d7f1018efaa", size = 7241500, upload-time = "2026-10-30T19:36:57.374Z" },
 ]
 
 [[package]]
@@ -3399,9 +3399,9 @@ requires-dist = [
     { name = "omegaconf", specifier = ">=2.3.0" },
     { name = "opencv-python" },
     { name = "physicalai", extras = ["capture", "transport"], git = "https://github.com/openvinotoolkit/physicalai.git?rev=b4cc2cf569c24f92424001dde7aca4081096ebd1" },
-    { name = "physicalai-mujoco-plugin", specifier = ">=0.4.0" },
+    { name = "physicalai-mujoco-plugin", specifier = ">=0.5.0" },
     { name = "physicalai-so101-plugin", specifier = "~=0.2.0" },
-    { name = "physicalai-studio-plugin", specifier = ">=0.4.0" },
+    { name = "physicalai-studio-plugin", specifier = ">=0.5.0" },
     { name = "physicalai-train", extras = ["executorch"], marker = "extra == 'cpu'", editable = "../../library" },
     { name = "physicalai-train", extras = ["executorch"], marker = "extra == 'cuda'", editable = "../../library" },
     { name = "physicalai-train", extras = ["molmoact2", "pi05", "rldx1", "smolvla", "xr0"], editable = "../../library" },
@@ -3452,15 +3452,15 @@ lint = [
 
 [[package]]
 name = "physicalai-studio-plugin"
-version = "0.4.0"
+version = "0.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "physicalai" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d0/c5/ef3a4956d5e0be1a8b0a7a4a34b64f2a702017084b520be701ff3ae3145d/physicalai_studio_plugin-0.4.0.tar.gz", hash = "sha256:777ba1a8ebd461102726def5270c687949223c4e544fb74f9df17c60ca4d52ef", size = 19882, upload-time = "2026-10-20T09:22:05.279Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/7f/68/acc1209091f33b6574f4b7937eaa7c4c7eeaf9ab35b52c5fd848c704c08e/physicalai_studio_plugin-0.5.0.tar.gz", hash = "sha256:605a587f709420ac3b48436fa9662538ae16b00fb272d7ddd080cfac43b65c2e", size = 21932, upload-time = "2026-10-30T17:15:26.028Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/59/9a/a712c1b193ef356f885bc9a630ffa10f608154913da20af63972076cf649/physicalai_studio_plugin-0.4.0-py3-none-any.whl", hash = "sha256:c74859b49d985c592a1b5169c613d1f343b8191673b5883a08f8ad310161b0ba", size = 13715, upload-time = "2026-10-20T09:22:04.204Z" },
+    { url = "https://files.pythonhosted.org/packages/85/79/dd1b8f5904c4b00715b435f89cbcef8a7c81e29a707a16237bf919de0d61/physicalai_studio_plugin-0.5.0-py3-none-any.whl", hash = "sha256:b5ac1cf997c3f59d52e5c52389d3c28bf8f5d4eebe7c7e5d8d14d287ecf06368", size = 14711, upload-time = "2026-10-30T17:15:24.772Z" },
 ]
 
 [[package]]
