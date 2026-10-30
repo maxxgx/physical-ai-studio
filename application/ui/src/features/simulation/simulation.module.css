@@ -50,11 +50,15 @@
 
 .command pre {
     margin: 0;
+    overflow-x: auto;
     font-size: var(--spectrum-global-dimension-font-size-75);
     white-space: pre-wrap;
-    /* Break between arguments; inside one only when it is wider than the box. */
-    overflow-wrap: anywhere;
     user-select: all;
+}
+
+/* Lines break between arguments only, never inside one (e.g. after "--" or a hyphen in a name). */
+.argument {
+    white-space: nowrap;
 }
 
 .chips {

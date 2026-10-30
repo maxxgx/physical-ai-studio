@@ -54,6 +54,10 @@ const mockSimulation = (simulation: Simulation) => {
     );
 };
 
+/** The command block, whose arguments are separate spans, by its whole text. */
+const findCommand = (command: string) =>
+    screen.findByText((_content, element) => element?.tagName === 'PRE' && element.textContent === command);
+
 const renderDialog = (close = rs.fn(), onRunning = rs.fn()) => {
     render(
         <SimulationDialog robot={robot} project_id={PROJECT_ID} launch={launch} close={close} onRunning={onRunning} />,
@@ -165,19 +169,36 @@ describe('SimulationDialog', () => {
 
         await user.click(await screen.findByRole('button', { name: 'Run it yourself' }));
         expect(screen.getByText(/Studio connects to it, scripts can too/)).toBeVisible();
-        expect(await screen.findByText('physicalai-mujoco start --scene single_pick_place')).toBeVisible();
+        expect(await findCommand('physicalai-mujoco start --scene single_pick_place')).toBeVisible();
 
         await user.click(screen.getByRole('button', { name: /Scene/ }));
         await user.click(await screen.findByRole('option', { name: 'Yahtzee' }));
-        expect(await screen.findByText('physicalai-mujoco start --scene yahtzee')).toBeVisible();
+        expect(await findCommand('physicalai-mujoco start --scene yahtzee')).toBeVisible();
 
         await user.click(screen.getByRole('button', { name: 'Advanced' }));
         await user.click(await screen.findByRole('radio', { name: 'Fixed' }));
-        expect(await screen.findByText('physicalai-mujoco start --scene yahtzee --seed 0')).toBeVisible();
+        expect(await findCommand('physicalai-mujoco start --scene yahtzee --seed 0')).toBeVisible();
 
         await user.click(screen.getByRole('button', { name: 'Copy command' }));
         expect(await navigator.clipboard.readText()).toBe('physicalai-mujoco start --scene yahtzee --seed 0');
-        expect(screen.getByText('Copied!')).toBeInTheDocument();
+        expect(screen.getByText('Copied')).toBeInTheDocument();
+    });
+
+    it('quotes an argument with a space and keeps each argument on one line', async () => {
+        mockSimulation(idle);
+        const argv = ['physicalai-mujoco', 'start', '--scene', 'bucket_sort', '--name=my sim'];
+        server.use(
+            http.get('/api/projects/{project_id}/robots/{robot_id}/simulation/command', () =>
+                HttpResponse.json({ argv, command: "physicalai-mujoco start --scene bucket_sort '--name=my sim'" })
+            )
+        );
+        const user = userEvent.setup();
+        renderDialog();
+
+        await user.click(await screen.findByRole('button', { name: 'Run it yourself' }));
+        expect(await findCommand("physicalai-mujoco start --scene bucket_sort '--name=my sim'")).toBeVisible();
+        expect(screen.getByText("'--name=my sim'")).toBeInTheDocument();
+        expect(screen.getByText('--scene')).toBeInTheDocument();
     });
 
     it('has no command to run it yourself when the plugin offers none', async () => {
@@ -224,7 +245,7 @@ describe('SimulationDialog', () => {
         expect(
             await screen.findByRole('heading', { name: 'Simulation running' }, { timeout: 4_000 })
         ).toBeInTheDocument();
-        expect(screen.getByText('SO101 Follower · yahtzee')).toBeInTheDocument();
+        expect(screen.getByText('SO101 Follower (experimental) · Yahtzee')).toBeInTheDocument();
         expect(screen.getByText('Started outside Studio')).toBeInTheDocument();
         await userEvent.setup().click(screen.getByRole('button', { name: 'Close' }));
         expect(close).toHaveBeenCalled();
@@ -293,6 +314,43 @@ describe('SimulationDialog', () => {
 
         await waitFor(() => expect(started[0]?.replace).toBe(true));
         expect(await screen.findByRole('heading', { name: 'Starting simulation' })).toBeInTheDocument();
+    });
+
+    it('says when the port of the robot was taken and the simulation moved to another one', async () => {
+        mockSimulation({
+            ...idle,
+            status: 'running',
+            robot_id: robot.id,
+            robot_type: 'SO101_Follower',
+            scene: 'yahtzee',
+            cameras: ['wrist'],
+            robot_http_url: 'http://127.0.0.1:8765',
+            http_url: 'http://127.0.0.1:58153',
+        });
+        renderDialog();
+
+        expect(await screen.findByRole('heading', { name: 'Simulation running' })).toBeInTheDocument();
+        expect(screen.getByText('SO101 Follower (experimental) · Yahtzee')).toBeInTheDocument();
+        expect(
+            screen.getByText(
+                'Port 8765 was in use; the simulation runs on 58153, and the robot and its cameras now use it.'
+            )
+        ).toBeInTheDocument();
+    });
+
+    it('says nothing about the port when the simulation kept the port of the robot', async () => {
+        mockSimulation({
+            ...idle,
+            status: 'running',
+            robot_id: robot.id,
+            cameras: ['wrist'],
+            robot_http_url: 'http://127.0.0.1:8765',
+            http_url: 'http://127.0.0.1:8765',
+        });
+        renderDialog();
+
+        expect(await screen.findByRole('heading', { name: 'Simulation running' })).toBeInTheDocument();
+        expect(screen.queryByText(/was in use/)).not.toBeInTheDocument();
     });
 
     it('reports when the simulation is running', async () => {

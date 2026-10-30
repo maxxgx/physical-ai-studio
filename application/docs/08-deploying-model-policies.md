@@ -38,7 +38,7 @@ Limits:
 
 - This works with a native install only. A simulation accepts robot connections from its own machine only, so Studio in Docker can't reach a simulation started on the host, and a script on the host can't reach one that Studio started in its container.
 - Nothing stops Studio and your script from driving the robot at the same time. Before you run a script, stop Studio's session on the robot and leave its environment page: the session keeps the robot for about 45 seconds after you leave.
-- Keep the port the robot is configured with. The command uses the robot's name and address, and Studio's cameras and `runtime.yaml` point at that address. If you change the port in the command, change the robot's address in Studio to match. A simulation that Studio starts reuses that port too, unless another program has it.
+- Keep the port the robot is configured with. The command uses the robot's name and address, and Studio's cameras and `runtime.yaml` point at that address. If you change the port in the command, change the robot's address in Studio to match. A simulation that Studio starts reuses that port too. If another program has it, Studio starts the simulation on a free port, says so in the start dialog, and moves the robot and its cameras to that port, so the **Run it yourself** command and new runtime exports use it from then on.
 
 ## Next
 
