@@ -784,6 +784,7 @@ async def _no_list(project_id: UUID) -> list[Any]:
 
 class _StoredRobot(BaseModel):
     id: UUID
+    name: str = "Sim"
     type: str = "Sim_Follower"
     payload: FakePayload
 
@@ -858,8 +859,20 @@ class _StoredLeaderPayload(BaseModel):
 
 class _StoredLeader(BaseModel):
     id: UUID
+    name: str = "Leader"
     type: str = "Sim_Leader"
     payload: _StoredLeaderPayload
+
+
+class _HardwareLeaderPayload(BaseModel):
+    port: str = "/dev/ttyACM0"
+
+
+class _HardwareLeader(BaseModel):
+    id: UUID
+    name: str = "Arm"
+    type: str = "Real_Leader"
+    payload: _HardwareLeaderPayload = _HardwareLeaderPayload()
 
 
 class LeaderWorld:
@@ -873,8 +886,9 @@ class LeaderWorld:
         self.robots: dict[UUID, Any] = {
             self.follower: _StoredRobot(id=self.follower, payload=FakePayload(http_url="http://127.0.0.1:8080"))
         }
+        self.updates: list[UUID] = []
         self.environments: dict[UUID, list[Environment]] = {self.project_id: [], self.other_project_id: []}
-        robots, environments = self.robots, self.environments
+        robots, environments, updates = self.robots, self.environments, self.updates
 
         class FakeRobotService:
             def __init__(self, session: Any, registry: Any) -> None:
@@ -885,6 +899,7 @@ class LeaderWorld:
 
             async def update_robot(self, project_id: UUID, updated: Any, commit: bool = True) -> None:
                 robots[updated.id] = updated
+                updates.append(updated.id)
 
         class FakeEnvironmentService:
             def __init__(self, session: Any, registry: Any) -> None:
@@ -897,13 +912,23 @@ class LeaderWorld:
         async def fake_session():
             yield SimpleNamespace(commit=_nothing)
 
-        roles = {"Sim_Follower": "follower", "Sim_Leader": "leader", "Real_Follower": "follower"}
-        registry = SimpleNamespace(get_definition=lambda robot_type: SimpleNamespace(role=roles[robot_type]))
+        roles = {
+            "Sim_Follower": "follower",
+            "Sim_Leader": "leader",
+            "Real_Follower": "follower",
+            "Real_Leader": "leader",
+        }
+        registry = SimpleNamespace(
+            get_definition=lambda robot_type: SimpleNamespace(
+                role=roles[robot_type], simulation=object() if robot_type == "Sim_Follower" else None
+            )
+        )
         monkeypatch.setattr(module, "RobotService", FakeRobotService)
         monkeypatch.setattr(module, "EnvironmentService", FakeEnvironmentService)
         monkeypatch.setattr(module, "ProjectCameraService", lambda *_args: SimpleNamespace(get_camera_list=_no_cameras))
         monkeypatch.setattr(module, "get_async_db_session_ctx", fake_session)
         self.store = module.DatabaseSimulationRobots(registry)  # type: ignore[arg-type]
+        self.manager = SimulationManager(registry, self.store)  # type: ignore[arg-type]
 
     def leader(self, http_port: int, *, robot_type: str = "Sim_Leader") -> UUID:
         leader_id = uuid4()
@@ -922,8 +947,18 @@ class LeaderWorld:
         ]
         self.environments[project_id or self.project_id].append(Environment(id=uuid4(), name="Env", robots=robots))
 
+    def simulated_follower(self, http_url: str, *, robot_type: str = "Sim_Follower") -> UUID:
+        follower_id = uuid4()
+        self.robots[follower_id] = _StoredRobot(id=follower_id, type=robot_type, payload=FakePayload(http_url=http_url))
+        return follower_id
+
     async def start(self, http_url: str) -> None:
         await self.store.set_http_url(self.project_id, self.follower, http_url)
+
+    async def session(self, leader_id: UUID, follower_id: UUID | None = None) -> tuple[Any, Any]:
+        """Start a session of the follower and the leader the way the runtime websocket does."""
+        follower = self.robots[follower_id or self.follower]
+        return await self.manager.point_leader_at_follower(self.project_id, follower, self.robots[leader_id])
 
     def port(self, leader_id: UUID) -> int:
         return self.robots[leader_id].payload.http_port
@@ -944,13 +979,22 @@ async def test_a_start_moves_the_leader_that_reads_from_the_simulation(world: Le
     assert world.robots[world.follower].payload.http_url == "http://127.0.0.1:50001"
 
 
-async def test_a_leader_on_another_port_stays(world: LeaderWorld) -> None:
+async def test_a_start_moves_the_followers_teleoperator_from_any_port(world: LeaderWorld) -> None:
     leader = world.leader(9999)
     world.environment(world.follower, teleoperated_by=leader)
 
     await world.start("http://127.0.0.1:50001")
 
-    assert world.port(leader) == 9999
+    assert world.port(leader) == 50001
+
+
+async def test_another_leader_near_the_follower_on_another_port_stays(world: LeaderWorld) -> None:
+    on_previous, elsewhere = world.leader(8080), world.leader(9999)
+    world.environment(world.follower, on_previous, elsewhere)
+
+    await world.start("http://127.0.0.1:50001")
+
+    assert [world.port(on_previous), world.port(elsewhere)] == [50001, 9999]
 
 
 async def test_leaders_away_from_the_follower_or_not_leaders_stay(world: LeaderWorld) -> None:
@@ -976,6 +1020,156 @@ async def test_a_restart_moves_the_leader_again(world: LeaderWorld) -> None:
     await world.start("http://127.0.0.1:50002")
 
     assert world.port(leader) == 50002
+
+
+async def test_a_session_points_a_leader_added_after_the_start_at_the_simulation(world: LeaderWorld) -> None:
+    await world.start("http://127.0.0.1:50488")
+    leader = world.leader(8080)
+    world.environment(world.follower, teleoperated_by=leader)
+
+    follower, session_leader = await world.session(leader)
+
+    assert session_leader.payload.http_port == 50488
+    assert follower.payload.http_url == "http://127.0.0.1:50488"
+    assert world.port(leader) == 50488
+
+
+async def test_a_session_on_the_simulations_port_stores_nothing(world: LeaderWorld) -> None:
+    leader = world.leader(8080)
+
+    _, session_leader = await world.session(leader)
+
+    assert session_leader.payload.http_port == 8080
+    assert world.updates == []
+
+
+async def test_a_session_waits_for_an_address_write_and_reads_both_robots_again(world: LeaderWorld) -> None:
+    leader = world.leader(8080)
+    stale_follower, stale_leader = world.robots[world.follower], world.robots[leader]
+
+    async with world.manager.holding_addresses():
+        session = asyncio.create_task(
+            world.manager.point_leader_at_follower(world.project_id, stale_follower, stale_leader)
+        )
+        await asyncio.sleep(0.05)
+        assert not session.done()
+        await world.start("http://127.0.0.1:50001")  # a simulation's start, while it holds the lock
+
+    follower, session_leader = await session
+
+    assert follower.payload.http_url == "http://127.0.0.1:50001"
+    assert session_leader.payload.http_port == world.port(leader) == 50001
+
+
+async def test_a_leader_shared_by_two_environments_reads_from_each_sessions_follower(world: LeaderWorld) -> None:
+    await world.start("http://127.0.0.1:50488")
+    other = world.simulated_follower("http://127.0.0.1:50500")
+    leader = world.leader(8080)
+    world.environment(world.follower, teleoperated_by=leader)
+    world.environment(other, teleoperated_by=leader)
+
+    ports = []
+    for follower in (world.follower, other, world.follower, other):
+        _, session_leader = await world.session(leader, follower)
+        ports.append((session_leader.payload.http_port, world.port(leader)))
+    await world.start("http://127.0.0.1:50600")  # moves it off the other follower's port
+    moved = world.port(leader)
+    _, session_leader = await world.session(leader, other)
+
+    assert ports == [(50488, 50488), (50500, 50500), (50488, 50488), (50500, 50500)]
+    assert moved == 50600
+    assert session_leader.payload.http_port == world.port(leader) == 50500
+    assert world.robots[other].payload.http_url == "http://127.0.0.1:50500"
+
+
+@pytest.mark.parametrize("pair", ["hardware-leader", "hardware-follower"])
+async def test_a_session_leaves_hardware_alone(world: LeaderWorld, pair: str) -> None:
+    if pair == "hardware-leader":
+        leader = uuid4()
+        world.robots[leader] = _HardwareLeader(id=leader)
+        follower = world.follower
+    else:
+        leader = world.leader(8080)
+        follower = world.simulated_follower("http://127.0.0.1:50488", robot_type="Real_Follower")
+    given = (world.robots[follower], world.robots[leader])
+
+    assert await world.session(leader, follower) == given
+    assert world.updates == []
+
+
+@pytest.mark.parametrize(
+    "http_url", ["http://192.168.1.20:50488", "http://sim.example:50488", "http://127.0.0.1", "not a url:x"]
+)
+async def test_a_session_of_a_follower_not_on_a_local_port_leaves_the_leader_alone(
+    world: LeaderWorld, http_url: str
+) -> None:
+    follower = world.simulated_follower(http_url)
+    leader = world.leader(8080)
+
+    _, session_leader = await world.session(leader, follower)
+
+    assert session_leader.payload.http_port == world.port(leader) == 8080
+    assert world.updates == []
+
+
+async def test_a_failed_leader_store_starts_the_session_with_the_robots_as_given(
+    world: LeaderWorld, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await world.start("http://127.0.0.1:50488")
+    leader = world.leader(8080)
+
+    async def fail(*_args: Any) -> None:
+        raise RuntimeError("database is gone")
+
+    monkeypatch.setattr(world.store, "point_leader", fail)
+
+    assert await world.session(leader) == (world.robots[world.follower], world.robots[leader])
+
+
+async def test_a_session_stores_the_simulations_port_on_a_virtual_leader_in_the_database(tmp_path: Path) -> None:
+    """The reported case: a virtual leader added after the follower's simulation started keeps 8080."""
+    import services.simulation_manager as module
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'studio.db'}")
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+
+    @contextlib.asynccontextmanager
+    async def session_ctx():
+        async with sessions() as session:
+            yield session
+
+    registry = RobotCatalogRegistry()
+    project_id, follower_id, leader_id = uuid4(), uuid4(), uuid4()
+    try:
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        async with sessions() as session:
+            session.add(ProjectDB(id=str(project_id), name="Project"))
+            await session.commit()
+            robots = RobotService(session, registry)
+            for robot_id, robot_type, payload in (
+                (follower_id, "MuJoCo_SO101_Follower", {"http_url": "http://127.0.0.1:50488"}),
+                (leader_id, "MuJoCo_SO101_Virtual_Leader", {"http_port": 8080}),
+            ):
+                await robots.create_robot(
+                    project_id,
+                    RobotAdapter.validate_python(
+                        {"id": str(robot_id), "name": robot_type, "type": robot_type, "payload": payload}
+                    ),
+                )
+            follower = await robots.get_robot_by_id(project_id, follower_id)
+            leader = await robots.get_robot_by_id(project_id, leader_id)
+
+        with pytest.MonkeyPatch.context() as monkeypatch:
+            monkeypatch.setattr(module, "get_async_db_session_ctx", session_ctx)
+            manager = SimulationManager(registry)
+            _, session_leader = await manager.point_leader_at_follower(project_id, follower, leader)
+
+        async with sessions() as session:
+            stored = await RobotService(session, registry).get_robot_by_id(project_id, leader_id)
+        assert session_leader.payload.http_port == stored.payload.http_port == 50488
+    finally:
+        await engine.dispose()
 
 
 async def test_a_failed_address_write_keeps_nothing_and_the_next_start_moves_every_leader(

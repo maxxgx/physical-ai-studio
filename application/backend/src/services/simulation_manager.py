@@ -82,6 +82,14 @@ class SimulationRobots(Protocol):
         """Store *http_url* on the robot's payload."""
         ...
 
+    async def point_leader(self, project_id: UUID, follower_id: UUID, leader_id: UUID) -> tuple[Any, Any] | None:
+        """Store the port of the follower's simulation on a leader that reads from a simulation.
+
+        Returns the follower and the leader as stored, or ``None`` if the follower is not simulated
+        on this machine or the leader does not read from a simulation.
+        """
+        ...
+
 
 class DatabaseSimulationRobots:
     """Read and update robots through ``RobotService`` with a session of their own."""
@@ -112,6 +120,27 @@ class DatabaseSimulationRobots:
                 payload = robot.payload.model_copy(update={"http_url": http_url})
                 await service.update_robot(project_id, robot.model_copy(update={"payload": payload}), commit=False)
             await session.commit()
+
+    async def point_leader(self, project_id: UUID, follower_id: UUID, leader_id: UUID) -> tuple[Any, Any] | None:
+        async with get_async_db_session_ctx() as session:
+            service = RobotService(session, self._registry)
+            follower = await service.get_robot_by_id(project_id, follower_id)
+            leader = await service.get_robot_by_id(project_id, leader_id)
+            port, new_port = _virtual_leader_port(self._registry, leader), _simulation_port(self._registry, follower)
+            if port is None or new_port is None:
+                return None
+            if port != new_port:
+                payload = leader.payload.model_copy(update={"http_port": new_port})
+                leader = leader.model_copy(update={"payload": payload})
+                await service.update_robot(project_id, leader)
+                logger.info(
+                    "Pointed leader {!r} at the simulation of {!r}: port {}, was {}",
+                    leader.name,
+                    follower.name,
+                    new_port,
+                    port,
+                )
+            return follower, leader
 
 
 async def _move_simulation_cameras(
@@ -149,14 +178,18 @@ async def _move_simulation_leaders(
     """Point the leaders that read from a robot's simulation at the simulation's new port.
 
     A leader of any robot type (role ``leader``) with an integer ``http_port`` payload field reads
-    from a simulation on this machine. One in an environment with the robot, on the port of the
-    robot's previous address, reads from this simulation and moves with it. A leader on another
-    port was pointed elsewhere on purpose and stays. Only flushed: the caller commits.
+    from a simulation on this machine. The robot's teleoperator in an environment reads from this
+    simulation and moves with it, from any port: a session of the robot points it here anyway (see
+    ``SimulationManager.point_leader_at_follower``), so the form shows the port it will read from.
+    Another leader in an environment with the robot moves only from the port of the robot's
+    previous address; one on another port reads from another simulation and stays. Only flushed:
+    the caller commits.
     """
     old_port, new_port = _local_port(old_url), _local_port(new_url)
-    if old_port is None or new_port is None or old_port == new_port:
+    if new_port is None or old_port == new_port:
         return
     nearby: set[UUID] = set()
+    teleoperators: set[UUID] = set()
     for environment in await environments.get_environment_list(project_id):
         members = {
             member
@@ -166,18 +199,45 @@ async def _move_simulation_leaders(
         }
         if robot_id in members:
             nearby |= members - {robot_id}
+        teleoperators |= {
+            teleoperator
+            for configuration in environment.robots
+            if configuration.robot_id == robot_id
+            and (teleoperator := getattr(configuration.tele_operator, "robot_id", None)) is not None
+        }
     for leader_id in nearby:
         leader = await robots.get_robot_by_id(project_id, leader_id)
-        if (
-            isinstance(leader, UnavailableRobot)
-            or getattr(registry.get_definition(leader.type), "role", None) != "leader"
-        ):
-            continue
-        port = getattr(leader.payload, "http_port", None)
-        if type(port) is not int or port != old_port:
+        port = _virtual_leader_port(registry, leader)
+        if port is None or port == new_port or (leader_id not in teleoperators and port != old_port):
             continue
         payload = leader.payload.model_copy(update={"http_port": new_port})
         await robots.update_robot(project_id, leader.model_copy(update={"payload": payload}), commit=False)
+        logger.info("Moved leader {!r} from port {} to its simulation's port {}", leader.name, port, new_port)
+
+
+def _virtual_leader_port(registry: RobotCatalogRegistry, robot: Any) -> int | None:
+    """Return the port a leader reads from a simulation on, or ``None`` for any other robot.
+
+    A leader of any robot type (role ``leader``) with an integer ``http_port`` payload field reads
+    from a simulation on this machine; a hardware leader has no such field.
+    """
+    if isinstance(robot, UnavailableRobot) or getattr(registry.get_definition(robot.type), "role", None) != "leader":
+        return None
+    port = getattr(robot.payload, "http_port", None)
+    return port if type(port) is int else None
+
+
+def _simulation_port(registry: RobotCatalogRegistry, robot: Any) -> int | None:
+    """Return the port of a simulated robot's simulation on this machine, or ``None``.
+
+    ``None`` for a robot type without a simulation, and for an address on another host or without a
+    port. The stored address is the simulation's: Studio stores it once a simulation it started is
+    ready, and one started outside Studio runs on the address the robot is configured with.
+    """
+    if isinstance(robot, UnavailableRobot) or getattr(registry.get_definition(robot.type), "simulation", None) is None:
+        return None
+    http_url = getattr(robot.payload, "http_url", None)
+    return _local_port(http_url) if isinstance(http_url, str) else None
 
 
 def _local_port(http_url: str) -> int | None:
@@ -277,6 +337,32 @@ class SimulationManager:
         """
         async with self._address_lock:
             yield self._simulated_by_studio
+
+    async def point_leader_at_follower(self, project_id: UUID, follower: Any, leader: Any) -> tuple[Any, Any]:
+        """Point a leader that reads from a simulation at the follower's, for a session of the two.
+
+        Returns the follower and the leader to start the session with. If the follower is simulated
+        on this machine (its type has a simulation and its address is on this machine, with a port)
+        and the leader reads from a simulation (see ``_virtual_leader_port``), the leader reads from
+        the port of the follower's address, stored on it if it changed, and both are read again
+        under the address lock, so that a simulation's start cannot move either in between. A leader
+        added, linked or edited after the simulation started, or shared with an environment of
+        another follower, is so pointed at this session's follower; a session of the other follower
+        points it back. Otherwise, or if storing fails, both are returned as given.
+        """
+        if _virtual_leader_port(self._registry, leader) is None or (
+            getattr(self._registry.get_definition(follower.type), "simulation", None) is None
+        ):
+            return follower, leader
+        try:
+            async with self._address_lock:
+                stored = await asyncio.wait_for(
+                    self._robots.point_leader(project_id, follower.id, leader.id), STORE_ADDRESS_TIMEOUT_S
+                )
+        except Exception:
+            logger.exception("Could not point leader {!r} at the simulation of {!r}", leader.name, follower.name)
+            return follower, leader
+        return stored if stored is not None else (follower, leader)
 
     def _simulated_by_studio(self, project_id: UUID, robot_id: UUID) -> bool:
         state = self._state
