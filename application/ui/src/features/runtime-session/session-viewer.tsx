@@ -103,7 +103,8 @@ const StartSimulation = ({
     compact: boolean;
 }) => {
     const { project_id } = useProjectId();
-    const { draft, retry, send } = useRuntimeSession();
+    const { draft, retry } = useRuntimeSession();
+    const { loadEnvironmentDraft } = usePartControls();
     const { data: simulation } = useRobotSimulation(project_id, robot.id);
     const { data: studioSimulation } = useSimulation();
     const isRunning = simulation?.running === true;
@@ -112,15 +113,16 @@ const StartSimulation = ({
         (studioSimulation.status === 'starting' || studioSimulation.status === 'stopping');
     // The page's own environment loads with the page's dataset or model; one loaded from the workspace on its own.
     const isPageEnvironment = JSON.stringify(load) === JSON.stringify(draft);
-    const latest = useRef({ isPageEnvironment, load });
-    latest.current = { isPageEnvironment, load };
+    const latest = useRef({ isPageEnvironment, load, loadEnvironmentDraft });
+    latest.current = { isPageEnvironment, load, loadEnvironmentDraft };
     const loadAgain = useCallback(() => {
         if (latest.current.isPageEnvironment) {
             retry();
         } else {
-            void send({ command: 'load_environment', environment: latest.current.load, unload_incompatible: false });
+            // As the workspace loaded it: a refusal is shown, and unloading parts that no longer fit is asked first.
+            latest.current.loadEnvironmentDraft(latest.current.load);
         }
-    }, [retry, send]);
+    }, [retry]);
     const dialog = useSimulationDialog(robot, compact ? loadAgain : undefined);
 
     useEffect(() => {

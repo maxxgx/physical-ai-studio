@@ -18,7 +18,7 @@ import {
 } from '@geti-ui/ui';
 
 import { $api } from '../../../api/client';
-import { SchemaModel } from '../../../api/openapi-spec';
+import { SchemaEnvironmentDraft, SchemaModel } from '../../../api/openapi-spec';
 import {
     BackendSelection,
     defaultBackend,
@@ -221,6 +221,8 @@ interface PartControlsValue {
     /** The part a command or the page's own load is busy with. */
     pendingPart: SessionPartName | null;
     act: (part: SessionPartName, action: PartAction) => void;
+    /** Load an environment as a swap does: a refusal is shown, and unloading parts that do not fit is asked first. */
+    loadEnvironmentDraft: (draft: SchemaEnvironmentDraft) => void;
 }
 
 const PartControlsContext = createContext<PartControlsValue | null>(null);
@@ -259,14 +261,14 @@ export const PartControlsProvider = ({ children }: { children: ReactNode }) => {
         }
     };
 
+    const loadEnvironmentDraft = (draft: SchemaEnvironmentDraft) => {
+        void runFor('environment', { command: 'load_environment', environment: draft, unload_incompatible: false });
+    };
+
     const loadEnvironment = (environment_id: string) => {
         const saved = environments.find((candidate) => candidate.id === environment_id);
         if (saved !== undefined) {
-            void runFor('environment', {
-                command: 'load_environment',
-                environment: savedEnvironmentDraft(saved),
-                unload_incompatible: false,
-            });
+            loadEnvironmentDraft(savedEnvironmentDraft(saved));
         }
     };
 
@@ -306,7 +308,7 @@ export const PartControlsProvider = ({ children }: { children: ReactNode }) => {
     const close = () => setSwapping(null);
 
     return (
-        <PartControlsContext.Provider value={{ pendingPart: commandPart ?? loading, act }}>
+        <PartControlsContext.Provider value={{ pendingPart: commandPart ?? loading, act, loadEnvironmentDraft }}>
             {children}
             <DialogContainer onDismiss={close}>
                 {swapping === 'environment' && (

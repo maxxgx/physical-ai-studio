@@ -18,7 +18,10 @@ const ROBOT_ID = 'robot-1';
 
 rs.mock('dockview-react', () => ({ DockviewReact: () => <div>Dock</div> }));
 
-rs.mock('./workspace/part-controls', () => ({ usePartControls: () => ({ pendingPart: null, act: rs.fn() }) }));
+const loadEnvironmentDraft = rs.fn();
+rs.mock('./workspace/part-controls', () => ({
+    usePartControls: () => ({ pendingPart: null, act: rs.fn(), loadEnvironmentDraft }),
+}));
 
 const retry = rs.fn();
 const send = rs.fn(async () => ({ type: 'ack', request_id: '', ok: true }));
@@ -118,6 +121,7 @@ const setRunning = (queryClient: ReturnType<typeof createQueryClient>) =>
 beforeEach(() => {
     retry.mockClear();
     send.mockClear();
+    loadEnvironmentDraft.mockClear();
     session.lastDraft = PAGE_DRAFT;
     session.loaded = true;
     session.error = null;
@@ -172,13 +176,7 @@ describe('SessionViewer when the simulation of its cameras does not run', () => 
 
         setRunning(queryClient);
 
-        await waitFor(() =>
-            expect(send).toHaveBeenCalledWith({
-                command: 'load_environment',
-                environment: swapped,
-                unload_incompatible: false,
-            })
-        );
+        await waitFor(() => expect(loadEnvironmentDraft).toHaveBeenCalledWith(swapped));
         expect(retry).not.toHaveBeenCalled();
     });
 
@@ -198,12 +196,8 @@ describe('SessionViewer when the simulation of its cameras does not run', () => 
         // Started elsewhere: it asks before replacing the loaded environment.
         setRunning(queryClient);
         await userEvent.setup().click(await screen.findByRole('button', { name: 'Load Other bench' }));
-        expect(send).toHaveBeenCalledTimes(1);
-        expect(send).toHaveBeenCalledWith({
-            command: 'load_environment',
-            environment: swapped,
-            unload_incompatible: false,
-        });
+        expect(loadEnvironmentDraft).toHaveBeenCalledTimes(1);
+        expect(loadEnvironmentDraft).toHaveBeenCalledWith(swapped);
         expect(retry).not.toHaveBeenCalled();
     });
 
