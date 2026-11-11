@@ -27,7 +27,9 @@ type Session = ReturnType<typeof useRuntimeSession>;
 let session: Session;
 const Probe = ({ onSession }: { onSession: (value: Session) => void }) => {
     const value = useRuntimeSession();
-    useEffect(() => onSession(value));
+    useEffect(() => {
+        onSession(value);
+    });
     return <span>{JSON.stringify(value.environmentLoad)}</span>;
 };
 
@@ -35,7 +37,11 @@ describe('RuntimeSessionProvider environment loads', () => {
     it('keeps the newest load, whichever answers last', () => {
         render(
             <RuntimeSessionProvider project_id='project-1' environment={null}>
-                <Probe onSession={(value) => (session = value)} />
+                <Probe
+                    onSession={(value) => {
+                        session = value;
+                    }}
+                />
             </RuntimeSessionProvider>
         );
 
