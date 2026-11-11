@@ -21,17 +21,26 @@ rs.mock('dockview-react', () => ({ DockviewReact: () => <div>Dock</div> }));
 rs.mock('./workspace/part-controls', () => ({ usePartControls: () => ({ pendingPart: null, act: rs.fn() }) }));
 
 const retry = rs.fn();
+const send = rs.fn(async () => ({ type: 'ack', request_id: '', ok: true }));
+const PAGE_DRAFT = { name: 'Bench', robots: [{ robot_id: ROBOT_ID, tele_operator: { type: 'none' } }], cameras: [] };
 /** What the mocked session holds: by default an environment that loaded, failed. */
-const session: { loaded: boolean; error: { message: string; error_code: string } | null } = {
+const session: {
+    loaded: boolean;
+    error: { message: string; error_code: string } | null;
+    /** What the last environment load asked for, the page's draft unless a test says otherwise. */
+    lastDraft: object;
+} = {
     loaded: true,
     error: null,
+    lastDraft: PAGE_DRAFT,
 };
 
 rs.mock('./runtime-session-provider', () => ({
     failureOf: (statuses: Record<string, { state: string; error?: string }>, component: string) =>
         statuses[component]?.state === 'failed' ? (statuses[component].error ?? 'failed') : null,
     useRuntimeSession: () => ({
-        draft: { name: 'Bench', robots: [{ robot_id: ROBOT_ID, tele_operator: { type: 'none' } }], cameras: [] },
+        draft: PAGE_DRAFT,
+        environmentLoad: session.error ? { draft: session.lastDraft, error: session.error } : null,
         state: {
             environment: session.loaded
                 ? { environment_id: null, robot_id: ROBOT_ID, leader_id: null, cameras: [] }
@@ -50,6 +59,7 @@ rs.mock('./runtime-session-provider', () => ({
               }
             : {},
         retry,
+        send,
     }),
 }));
 
@@ -95,8 +105,20 @@ const renderViewer = (queryClient = createQueryClient()) =>
         queryClient,
     });
 
+const setRunning = (queryClient: ReturnType<typeof createQueryClient>) =>
+    act(() => {
+        queryClient.setQueryData(
+            $api.queryOptions('get', '/api/projects/{project_id}/robots/{robot_id}/simulation', {
+                params: { path: { project_id: PROJECT_ID, robot_id: ROBOT_ID } },
+            }).queryKey,
+            { running: true, started_by: 'studio', owner_name: 'arm', cameras: [] } as never
+        );
+    });
+
 beforeEach(() => {
     retry.mockClear();
+    send.mockClear();
+    session.lastDraft = PAGE_DRAFT;
     session.loaded = true;
     session.error = null;
 });
@@ -134,16 +156,30 @@ describe('SessionViewer when the simulation of its cameras does not run', () => 
         await screen.findByRole('heading', { name: 'Simulation not running' });
         expect(retry).not.toHaveBeenCalled();
 
-        act(() => {
-            queryClient.setQueryData(
-                $api.queryOptions('get', '/api/projects/{project_id}/robots/{robot_id}/simulation', {
-                    params: { path: { project_id: PROJECT_ID, robot_id: ROBOT_ID } },
-                }).queryKey,
-                { running: true, started_by: 'studio', owner_name: 'arm', cameras: [] } as never
-            );
-        });
+        setRunning(queryClient);
 
         await waitFor(() => expect(retry).toHaveBeenCalledTimes(1));
+    });
+
+    it('loads an environment the workspace loaded again once the simulation runs', async () => {
+        mockFollower(true);
+        refuseLoading();
+        const swapped = { id: 'environment-2', name: 'Other bench', robots: PAGE_DRAFT.robots, cameras: [] };
+        session.lastDraft = swapped;
+        const queryClient = createQueryClient();
+        renderViewer(queryClient);
+        await screen.findByRole('heading', { name: 'Simulation not running' });
+
+        setRunning(queryClient);
+
+        await waitFor(() =>
+            expect(send).toHaveBeenCalledWith({
+                command: 'load_environment',
+                environment: swapped,
+                unload_incompatible: false,
+            })
+        );
+        expect(retry).not.toHaveBeenCalled();
     });
 
     it('offers nothing for a follower without a simulation', async () => {

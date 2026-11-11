@@ -26,10 +26,13 @@ def build_control(
     leader: Robot | None,
     model: ProcessModel | None = None,
     bus: Bus | None = None,
+    *,
+    autopilot: bool = False,
 ) -> Control:
     """Raises ``ValueError`` when the session cannot run ``config``.
 
     A model control needs the loaded ``model``. A control serves its own commands on ``bus``.
+    With ``autopilot``, teleop follows a simulation's autopilot through ``leader``.
     """
     if isinstance(config, ModelControlConfig):
         if model is None:
@@ -37,4 +40,4 @@ def build_control(
         return ModelControl(store, model, config)
     if leader is None:
         raise ValueError("Teleoperation needs a connected leader arm; connect one and reload the environment")
-    return TeleopControl(store, leader, config, bus)
+    return TeleopControl(store, leader, config, bus, autopilot=autopilot)

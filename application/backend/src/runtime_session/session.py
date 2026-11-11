@@ -481,7 +481,14 @@ class RuntimeSession:
                 "The autopilot's simulation did not answer when the environment loaded; "
                 "start the simulation and load the environment again"
             )
-        control = build_control(config, environment.store, environment.leader, self._model.value, self.bus)
+        control = build_control(
+            config,
+            environment.store,
+            environment.leader,
+            self._model.value,
+            self.bus,
+            autopilot=autopilot_url is not None,
+        )
         async with self._autopilot_leading(autopilot_url), self._reported(_CONTROL, control):
             yield control
 
@@ -499,8 +506,9 @@ class RuntimeSession:
         if http_url is None:
             yield
             return
-        await set_autopilot_mode(http_url, "leader")
         try:
+            # Within the cleanup: a request that fails or is cancelled may still have switched it.
+            await set_autopilot_mode(http_url, "leader")
             yield
         finally:
             with anyio.CancelScope(shield=True):

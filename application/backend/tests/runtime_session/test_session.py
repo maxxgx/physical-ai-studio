@@ -372,3 +372,27 @@ async def test_an_autopilot_whose_simulation_did_not_answer_cannot_lead(
     finally:
         await session.stop()
     assert autopilot_modes == []
+
+
+async def test_a_failed_switch_to_leader_mode_is_switched_off_again(new_session, monkeypatch) -> None:
+    """The simulation may have taken the request although its answer failed."""
+    from exceptions import SimulationNotServingError
+    from runtime_session import session as runtime_session
+    from schemas.runtime_session import TeleopControlConfig
+
+    switched: list[str] = []
+
+    async def switch(_http_url: str, mode: str) -> None:
+        switched.append(mode)
+        if mode == "leader":
+            raise SimulationNotServingError("The simulation at http://127.0.0.1:50488 does not answer: timed out")
+
+    monkeypatch.setattr(runtime_session, "set_autopilot_mode", switch)
+    session = await new_session()
+    await session.load_environment(make_environment(cameras=0, autopilot_url=SIMULATION))
+    try:
+        with pytest.raises(SimulationNotServingError):
+            await session.set_control(TeleopControlConfig())
+    finally:
+        await session.stop()
+    assert switched == ["leader", "off"]

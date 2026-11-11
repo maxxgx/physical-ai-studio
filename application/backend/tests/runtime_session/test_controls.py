@@ -5,6 +5,7 @@ import time
 import uuid
 from typing import TYPE_CHECKING
 
+import numpy as np
 import pytest
 
 from runtime_session.controls import TeleopControl, build_control
@@ -99,3 +100,52 @@ async def test_teleop_starts_with_a_leader_whose_idle_connection_closed(store: S
         await asyncio.sleep(0.1)
         assert not control.failure
     assert store.read(ACTION).value.tolist() == [5.0, 6.0]
+
+
+def _autopilot_leader(tmp_path: Path, leads: list[bool | None]) -> FakeRobot:
+    """A leader whose readings say, one after the other, whether the autopilot leads; the last one stays."""
+    leader = _leader(tmp_path)
+    read = leader.get_observation
+
+    def get_observation():
+        observation = read()
+        lead = leads.pop(0) if len(leads) > 1 else leads[0]
+        observation.sensor_data = None if lead is None else {"autopilot": np.asarray([lead], dtype=np.float32)}
+        return observation
+
+    leader.get_observation = get_observation  # type: ignore[method-assign]
+    return leader
+
+
+def test_teleop_stops_once_the_autopilot_stops_leading(store: Store, tmp_path: Path) -> None:
+    control = TeleopControl(
+        store, _autopilot_leader(tmp_path, [False, True, True, False]), TeleopControlConfig(), autopilot=True
+    )
+    control.on_start()  # reads the leader once: not leading yet, the switch is queued
+    control.on_tick()
+    control.on_tick()
+    with pytest.raises(RuntimeError, match="stopped leading"):
+        control.on_tick()
+
+
+def test_teleop_stops_if_the_autopilot_never_starts_leading(store: Store, tmp_path: Path) -> None:
+    control = TeleopControl(store, _autopilot_leader(tmp_path, [False]), TeleopControlConfig(), autopilot=True)
+    control.on_start()
+    control.on_tick()  # still within the time it gets to start
+    control.started_at -= TeleopControl.AUTOPILOT_START_S + 1
+    with pytest.raises(RuntimeError, match="did not start leading"):
+        control.on_tick()
+
+
+def test_teleop_of_a_leader_arm_ignores_the_autopilot(store: Store, tmp_path: Path) -> None:
+    control = TeleopControl(store, _autopilot_leader(tmp_path, [True, False]), TeleopControlConfig())
+    control.on_start()
+    control.on_tick()
+    control.on_tick()
+
+
+def test_a_leader_that_does_not_say_whether_the_autopilot_leads_is_followed(store: Store, tmp_path: Path) -> None:
+    control = TeleopControl(store, _autopilot_leader(tmp_path, [None]), TeleopControlConfig(), autopilot=True)
+    control.on_start()
+    control.started_at -= TeleopControl.AUTOPILOT_START_S + 1
+    control.on_tick()

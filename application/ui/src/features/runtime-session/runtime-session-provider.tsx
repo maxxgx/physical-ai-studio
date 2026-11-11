@@ -123,12 +123,19 @@ class Channel<T> {
     }
 }
 
+/** The last environment the session was asked to load, by the page or the workspace, and why it failed if it did. */
+export interface EnvironmentLoad {
+    draft: SchemaEnvironmentDraft;
+    error: SchemaErrorMessage | null;
+}
+
 /** The parts a session loads: the environment, and what records from it or runs on it. */
 export type SessionPartName = 'environment' | 'dataset' | 'model';
 
 interface RuntimeSessionContextValue {
     /** What the page asked the session to load, which ``retry`` loads again. */
     draft: SchemaEnvironmentDraft | null;
+    environmentLoad: EnvironmentLoad | null;
     state: SchemaSessionState | null;
     /** The last command or worker error, until the next successful load. */
     error: SchemaErrorMessage | null;
@@ -202,6 +209,7 @@ export const RuntimeSessionProvider = ({
     const [error, setError] = useState<SchemaErrorMessage | null>(null);
     const [statuses, setStatuses] = useState<Statuses>({});
     const [loading, setLoading] = useState<SessionPartName | null>(null);
+    const [environmentLoad, setEnvironmentLoad] = useState<EnvironmentLoad | null>(null);
     const [attempt, setAttempt] = useState(0);
     const retry = useCallback(() => setAttempt((previous) => previous + 1), []);
     const observations = useRef(new Channel<SchemaObservationMessage>()).current;
@@ -231,6 +239,7 @@ export const RuntimeSessionProvider = ({
         onClose: () => {
             latestState.current = null;
             setState(null);
+            setEnvironmentLoad(null);
             setStatuses({});
             pending.forEach((resolve, request_id) =>
                 resolve({
@@ -282,7 +291,12 @@ export const RuntimeSessionProvider = ({
         (command: Command) =>
             new Promise<SchemaAckMessage>((resolve) => {
                 const request_id = uuidv4();
-                pending.set(request_id, resolve);
+                pending.set(request_id, (ack) => {
+                    if (command.command === 'load_environment') {
+                        setEnvironmentLoad({ draft: command.environment, error: ack.ok ? null : commandError(ack) });
+                    }
+                    resolve(ack);
+                });
                 sendJsonMessage({ ...command, request_id });
             }),
         [pending, sendJsonMessage]
@@ -340,6 +354,7 @@ export const RuntimeSessionProvider = ({
     const value = useMemo(
         () => ({
             draft,
+            environmentLoad,
             state,
             error,
             statuses,
@@ -350,7 +365,7 @@ export const RuntimeSessionProvider = ({
             send,
             retry,
         }),
-        [draft, state, error, statuses, loading, observations, frame, send, retry]
+        [draft, environmentLoad, state, error, statuses, loading, observations, frame, send, retry]
     );
 
     return <RuntimeSessionContext.Provider value={value}>{children}</RuntimeSessionContext.Provider>;

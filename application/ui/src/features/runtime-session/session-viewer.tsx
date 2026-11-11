@@ -10,7 +10,7 @@ import {
 } from 'dockview-react';
 
 import { $api } from '../../api/client';
-import { SchemaSessionEnvironment } from '../../api/openapi-spec';
+import { SchemaEnvironmentDraft, SchemaSessionEnvironment } from '../../api/openapi-spec';
 import { physicalAiTheme } from '../dockview';
 import { useProjectId } from '../projects/use-project';
 import { AvailableSchemaRobot, isUnavailableRobot } from '../robots/robot-types';
@@ -86,12 +86,12 @@ const SessionDock = ({ environment }: { environment: SchemaSessionEnvironment })
 };
 
 /**
- * The page's simulated follower, whose simulation must run before the environment loads (its
- * simulation cameras stream from it): start it from here, and load the environment again once it runs.
+ * The simulated follower of an environment that could not load because its simulation does not run
+ * (its simulation cameras stream from it): start it from here, and load that environment again once it runs.
  */
-const StartSimulation = ({ robot }: { robot: AvailableSchemaRobot }) => {
+const StartSimulation = ({ robot, load }: { robot: AvailableSchemaRobot; load: SchemaEnvironmentDraft }) => {
     const { project_id } = useProjectId();
-    const { retry } = useRuntimeSession();
+    const { draft, retry, send } = useRuntimeSession();
     const { data: simulation } = useRobotSimulation(project_id, robot.id);
     const { data: studioSimulation } = useSimulation();
     const dialog = useSimulationDialog(robot);
@@ -99,12 +99,21 @@ const StartSimulation = ({ robot }: { robot: AvailableSchemaRobot }) => {
     const isStarting =
         studioSimulation?.robot_id === robot.id &&
         (studioSimulation.status === 'starting' || studioSimulation.status === 'stopping');
+    // The page's own environment loads with the page's dataset or model; one loaded from the workspace on its own.
+    const isPageEnvironment = JSON.stringify(load) === JSON.stringify(draft);
+    const latest = useRef({ isPageEnvironment, load });
+    latest.current = { isPageEnvironment, load };
 
     useEffect(() => {
-        if (isRunning) {
-            retry();
+        if (!isRunning) {
+            return;
         }
-    }, [isRunning, retry]);
+        if (latest.current.isPageEnvironment) {
+            retry();
+        } else {
+            void send({ command: 'load_environment', environment: latest.current.load, unload_incompatible: false });
+        }
+    }, [isRunning, retry, send]);
 
     return (
         <>
@@ -119,24 +128,30 @@ const StartSimulation = ({ robot }: { robot: AvailableSchemaRobot }) => {
     );
 };
 
-/** The page's follower, when loading its environment failed because its simulation does not run. */
+/** The follower of the environment the session last failed to load because its simulation does not run. */
 const FollowerSimulation = () => {
     const { project_id } = useProjectId();
-    const { draft, error } = useRuntimeSession();
-    const follower_id = draft?.robots[0]?.robot_id;
-    const isNotRunning = error?.error_code === 'simulation_not_running' && follower_id !== undefined;
+    const { environmentLoad } = useRuntimeSession();
+    const load = environmentLoad?.error?.error_code === 'simulation_not_running' ? environmentLoad.draft : undefined;
+    const follower_id = load?.robots[0]?.robot_id;
     const { data: robot } = $api.useQuery(
         'get',
         '/api/projects/{project_id}/robots/{robot_id}',
         { params: { path: { project_id, robot_id: follower_id ?? '' } } },
-        { enabled: isNotRunning }
+        { enabled: follower_id !== undefined }
     );
     const isSimulated = useRobotSimulationLaunch(robot?.type ?? '') !== null;
 
-    if (!isNotRunning || robot === undefined || isUnavailableRobot(robot) || !isSimulated) {
+    if (
+        load === undefined ||
+        robot === undefined ||
+        robot.id !== follower_id ||
+        isUnavailableRobot(robot) ||
+        !isSimulated
+    ) {
         return null;
     }
-    return <StartSimulation robot={robot} />;
+    return <StartSimulation robot={robot} load={load} />;
 };
 
 /** Until the environment is up: what it is doing, or a way to load one when the session has none. */
