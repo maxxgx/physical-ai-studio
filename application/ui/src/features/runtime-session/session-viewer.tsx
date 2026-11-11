@@ -89,24 +89,25 @@ const SessionDock = ({ environment }: { environment: SchemaSessionEnvironment })
  * The simulated follower of an environment that could not load because its simulation does not run
  * (its simulation cameras stream from it): start it from here, and load that environment again once it runs.
  *
- * In place of the dock (``compact`` is off) the session has nothing else, so the environment loads again
- * once the simulation runs, however it was started. Over the dock of another environment it loads again
- * only when the user starts the simulation from here, or asks to once it runs.
+ * In place of the dock (with ``cancelHref``) the session has nothing else, so the environment loads
+ * again once the simulation runs, however it was started. Over the dock of another environment it loads
+ * again only when the user starts the simulation from here, or asks to once it runs.
  */
 const StartSimulation = ({
     robot,
     load,
-    compact,
+    cancelHref,
 }: {
     robot: AvailableSchemaRobot;
     load: SchemaEnvironmentDraft;
-    compact: boolean;
+    cancelHref?: string;
 }) => {
     const { project_id } = useProjectId();
-    const { draft, retry } = useRuntimeSession();
-    const { loadEnvironmentDraft } = usePartControls();
+    const { draft, retry, isLoading } = useRuntimeSession();
+    const { loadEnvironmentDraft, pendingPart } = usePartControls();
     const { data: simulation } = useRobotSimulation(project_id, robot.id);
     const { data: studioSimulation } = useSimulation();
+    const compact = cancelHref === undefined;
     const isRunning = simulation?.running === true;
     const isStarting =
         studioSimulation?.robot_id === robot.id &&
@@ -152,21 +153,54 @@ const StartSimulation = ({
             </View>
         );
     }
+    let content: ReactNode;
+    if (!isRunning) {
+        content = (
+            <SimulationNotRunning
+                robot={robot}
+                isStarting={isStarting}
+                onStart={dialog.open}
+                description={`Start the simulation of ${robot.name} to load ${load.name}.`}
+                actions={
+                    <Button variant='secondary' href={cancelHref}>
+                        Cancel
+                    </Button>
+                }
+            />
+        );
+    } else if (isLoading || pendingPart === 'environment') {
+        content = (
+            <Flex width='100%' height='100%' alignItems='center' justifyContent='center'>
+                <Heading level={2}>
+                    <Text>Loading {load.name}</Text>
+                    <ProgressCircle marginStart='size-200' size='S' isIndeterminate alignSelf='center' />
+                </Heading>
+            </Flex>
+        );
+    } else {
+        // Runs, yet the last load still found it stopped: it started between the two.
+        content = (
+            <SimulationNotRunning
+                robot={robot}
+                description={`The simulation of ${robot.name} runs now.`}
+                actions={
+                    <Button variant='accent' onPress={loadAgain}>
+                        Load {load.name}
+                    </Button>
+                }
+            />
+        );
+    }
     return (
         <>
-            {/* Its own box: the prompt fills its parent's height otherwise. */}
-            {!isRunning && (
-                <View>
-                    <SimulationNotRunning robot={robot} isStarting={isStarting} onStart={dialog.open} />
-                </View>
-            )}
+            {content}
             {dialog.dialog}
         </>
     );
 };
 
-/** The follower of the environment the session last failed to load because its simulation does not run. */
-const FollowerSimulation = ({ compact = false }: { compact?: boolean }) => {
+/** The simulated follower of the environment the session last failed to load because its simulation does not run. */
+const useFailedSimulation = (): { robot: AvailableSchemaRobot; load: SchemaEnvironmentDraft } | null => {
     const { project_id } = useProjectId();
     const { environmentLoad } = useRuntimeSession();
     const load = environmentLoad?.error?.error_code === 'simulation_not_running' ? environmentLoad.draft : undefined;
@@ -188,11 +222,17 @@ const FollowerSimulation = ({ compact = false }: { compact?: boolean }) => {
     ) {
         return null;
     }
-    return <StartSimulation robot={robot} load={load} compact={compact} />;
+    return { robot, load };
 };
 
-/** Until the environment is up: what it is doing, or a way to load one when the session has none. */
-const Initializing = ({ cancelHref }: { cancelHref: string }) => {
+/** Over the dock: an environment the workspace could not load over this one, for its simulation does not run. */
+const FailedSimulationBar = () => {
+    const failed = useFailedSimulation();
+    return failed === null ? null : <StartSimulation robot={failed.robot} load={failed.load} />;
+};
+
+/** What the environment is doing, or a way to load one when the session has none. */
+const InitializingStatus = ({ cancelHref }: { cancelHref: string }) => {
     const { state, error, statuses, loading, retry } = useRuntimeSession();
     const { pendingPart, act } = usePartControls();
     const failure = failureOf(statuses, 'environment');
@@ -210,9 +250,6 @@ const Initializing = ({ cancelHref }: { cancelHref: string }) => {
                 {failure !== null && <InlineAlert variant='error'>{failure}</InlineAlert>}
                 {error !== null && <InlineAlert variant='error'>{error.message}</InlineAlert>}
             </Flex>
-            <Suspense fallback={null}>
-                <FollowerSimulation />
-            </Suspense>
             <Flex gap='size-100'>
                 <Button variant={'secondary'} href={cancelHref}>
                     Cancel
@@ -234,6 +271,23 @@ const Initializing = ({ cancelHref }: { cancelHref: string }) => {
         </Flex>
     );
 };
+
+/** Until the environment is up. When it could not load because its simulation does not run, only how to start it. */
+const InitializingOrStart = ({ cancelHref }: { cancelHref: string }) => {
+    const failed = useFailedSimulation();
+    return failed === null ? (
+        <InitializingStatus cancelHref={cancelHref} />
+    ) : (
+        <StartSimulation robot={failed.robot} load={failed.load} cancelHref={cancelHref} />
+    );
+};
+
+const Initializing = ({ cancelHref }: { cancelHref: string }) => (
+    // The robot catalog may still load: show the status meanwhile.
+    <Suspense fallback={<InitializingStatus cancelHref={cancelHref} />}>
+        <InitializingOrStart cancelHref={cancelHref} />
+    </Suspense>
+);
 
 /**
  * The dock once shown, and before that only for a simulated follower: its cell offers to start the
@@ -298,7 +352,7 @@ export const SessionViewer = ({ toolbar, cancelHref }: { toolbar?: ReactNode; ca
                     {toolbar}
                     {/* An environment the workspace could not load over this one, for its simulation does not run. */}
                     <Suspense fallback={null}>
-                        <FollowerSimulation compact />
+                        <FailedSimulationBar />
                     </Suspense>
                     {/* The cells suspend while they load; this keeps that inside the viewer. */}
                     <Suspense fallback={<Loading mode='inline' />}>

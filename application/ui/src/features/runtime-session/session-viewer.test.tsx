@@ -148,6 +148,11 @@ describe('SessionViewer when the simulation of its cameras does not run', () => 
         renderViewer();
 
         expect(await screen.findByRole('heading', { name: 'Simulation not running' })).toBeInTheDocument();
+        expect(screen.getByText('Start the simulation of Arm to load Bench.')).toBeInTheDocument();
+        // Only how to start it: the refusal and a plain retry say nothing more.
+        expect(screen.queryByText(/to use its camera/)).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
+        expect(screen.getByText('Cancel')).toBeInTheDocument();
         await userEvent.setup().click(screen.getByRole('button', { name: 'Start simulation…' }));
         expect(await screen.findByRole('dialog')).toBeInTheDocument();
     });
