@@ -293,9 +293,17 @@ export const RuntimeSessionProvider = ({
             new Promise<SchemaAckMessage>((resolve) => {
                 const request_id = uuidv4();
                 if (command.command === 'load_environment') {
-                    // A newer load replaces what an older one asked for, even before either answers.
+                    // A newer load replaces what an older one asked for, even before either answers. Loading the
+                    // same environment again keeps why it failed until it answers, so what recovers it stays shown.
                     latestLoad.current = request_id;
-                    setEnvironmentLoad({ draft: command.environment, error: null });
+                    const requested = command.environment;
+                    setEnvironmentLoad((previous) => ({
+                        draft: requested,
+                        error:
+                            previous !== null && JSON.stringify(previous.draft) === JSON.stringify(requested)
+                                ? previous.error
+                                : null,
+                    }));
                 }
                 pending.set(request_id, (ack) => {
                     if (command.command === 'load_environment' && latestLoad.current === request_id) {

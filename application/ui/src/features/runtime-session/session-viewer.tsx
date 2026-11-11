@@ -182,6 +182,7 @@ const StartSimulation = ({
         content = (
             <SimulationNotRunning
                 robot={robot}
+                title='Simulation running'
                 description={`The simulation of ${robot.name} runs now.`}
                 actions={
                     <Button variant='accent' onPress={loadAgain}>

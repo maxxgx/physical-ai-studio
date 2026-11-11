@@ -14,6 +14,7 @@ export const SimulationNotRunning = ({
     onStart,
     onReconnect,
     isStarting = false,
+    title,
     description,
     actions,
 }: {
@@ -23,6 +24,8 @@ export const SimulationNotRunning = ({
     onReconnect?: () => void;
     /** Studio is starting (or stopping) the simulation: offer its progress instead. */
     isStarting?: boolean;
+    /** In place of the heading the simulation's state gives. */
+    title?: string;
     /** What the simulation is needed for, in place of the default. */
     description?: ReactNode;
     /** More buttons, after the start button. */
@@ -39,7 +42,7 @@ export const SimulationNotRunning = ({
                 gap='size-200'
             >
                 <Heading level={3} margin={0}>
-                    {isStarting ? 'Simulation starting' : 'Simulation not running'}
+                    {title ?? (isStarting ? 'Simulation starting' : 'Simulation not running')}
                 </Heading>
                 <Text>
                     {description ??

@@ -65,4 +65,31 @@ describe('RuntimeSessionProvider environment loads', () => {
         expect(session.environmentLoad).toEqual({ draft: draft('B'), error: null });
         expect(screen.getByText(/"B"/)).toBeInTheDocument();
     });
+
+    it('keeps why an environment failed while it loads again, until it answers', () => {
+        socket.sent = [];
+        render(
+            <RuntimeSessionProvider project_id='project-1' environment={null}>
+                <Probe
+                    onSession={(value) => {
+                        session = value;
+                    }}
+                />
+            </RuntimeSessionProvider>
+        );
+        const notRunning = { message: 'Start the simulation', error_code: 'simulation_not_running' };
+
+        act(() => {
+            void session.send({ command: 'load_environment', environment: draft('A'), unload_incompatible: false });
+        });
+        act(() => socket.receive({ type: 'ack', request_id: socket.sent[0].request_id, ok: false, error: notRunning }));
+        act(() => {
+            void session.send({ command: 'load_environment', environment: draft('A'), unload_incompatible: false });
+        });
+        // Its simulation was started, and A loads again: what recovers it stays shown meanwhile.
+        expect(session.environmentLoad?.error?.error_code).toBe('simulation_not_running');
+
+        act(() => socket.receive({ type: 'ack', request_id: socket.sent[1].request_id, ok: true }));
+        expect(session.environmentLoad).toEqual({ draft: draft('A'), error: null });
+    });
 });
