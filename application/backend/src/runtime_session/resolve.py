@@ -10,6 +10,7 @@ from runtime_session.session import Resolvers
 from schemas.environment import (
     EnvironmentWithRelations,
     RobotWithTeleoperator,
+    TeleoperatorAutopilotWithRobot,
     TeleoperatorNoneWithRobot,
     TeleoperatorRobotWithRobot,
 )
@@ -37,16 +38,22 @@ def project_resolvers(
 ) -> Resolvers:
     """Resolvers backed by the database, scoped to ``project_id``.
 
-    With ``simulations``, a leader that reads from a simulation is pointed at its follower's. With
+    With ``simulations``, a leader that reads from a simulation is pointed at its follower's, and an
+    autopilot gets the leader it leads through (see ``SimulationManager.autopilot_leader``). With
     ``robot_simulations``, a simulation camera streams from where its simulation runs now.
     """
 
     async def environment(draft: EnvironmentDraft) -> EnvironmentWithRelations:
         configured = []
         for robot in draft.robots:
-            teleoperator: TeleoperatorRobotWithRobot | TeleoperatorNoneWithRobot = TeleoperatorNoneWithRobot()
+            teleoperator: TeleoperatorRobotWithRobot | TeleoperatorNoneWithRobot | TeleoperatorAutopilotWithRobot
+            teleoperator = TeleoperatorNoneWithRobot()
             follower = await robots.get_robot_by_id(project_id, robot.robot_id)
-            if robot.tele_operator.type == "robot":
+            if robot.tele_operator.type == "autopilot":
+                if simulations is None:
+                    raise ValueError("The autopilot needs Studio's simulations")
+                teleoperator = TeleoperatorAutopilotWithRobot(robot=simulations.autopilot_leader(follower))
+            elif robot.tele_operator.type == "robot":
                 leader = await robots.get_robot_by_id(project_id, robot.tele_operator.robot_id)
                 if simulations is not None:
                     follower, leader = await simulations.point_leader_at_follower(project_id, follower, leader)

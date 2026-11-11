@@ -13,8 +13,13 @@ import { $api } from '../../api/client';
 import { SchemaSessionEnvironment } from '../../api/openapi-spec';
 import { physicalAiTheme } from '../dockview';
 import { useProjectId } from '../projects/use-project';
+import { AvailableSchemaRobot, isUnavailableRobot } from '../robots/robot-types';
 import { InlineAlert } from '../robots/setup-wizard/shared/inline-alert';
 import { useRobotSimulationLaunch } from '../simulation/robot-simulation';
+import { useSimulationDialog } from '../simulation/simulation-dialog';
+import { SimulationNotRunning } from '../simulation/simulation-not-running';
+import { useRobotSimulation } from '../simulation/use-robot-simulation';
+import { useSimulation } from '../simulation/use-simulation';
 import { CameraCell } from './cells/camera-cell';
 import { RobotCell } from './cells/robot-cell';
 import { failureOf, useRuntimeSession } from './runtime-session-provider';
@@ -80,6 +85,60 @@ const SessionDock = ({ environment }: { environment: SchemaSessionEnvironment })
     );
 };
 
+/**
+ * The page's simulated follower, whose simulation must run before the environment loads (its
+ * simulation cameras stream from it): start it from here, and load the environment again once it runs.
+ */
+const StartSimulation = ({ robot }: { robot: AvailableSchemaRobot }) => {
+    const { project_id } = useProjectId();
+    const { retry } = useRuntimeSession();
+    const { data: simulation } = useRobotSimulation(project_id, robot.id);
+    const { data: studioSimulation } = useSimulation();
+    const dialog = useSimulationDialog(robot);
+    const isRunning = simulation?.running === true;
+    const isStarting =
+        studioSimulation?.robot_id === robot.id &&
+        (studioSimulation.status === 'starting' || studioSimulation.status === 'stopping');
+
+    useEffect(() => {
+        if (isRunning) {
+            retry();
+        }
+    }, [isRunning, retry]);
+
+    return (
+        <>
+            {/* Its own box: the prompt fills its parent's height otherwise. */}
+            {!isRunning && (
+                <View>
+                    <SimulationNotRunning robot={robot} isStarting={isStarting} onStart={dialog.open} />
+                </View>
+            )}
+            {dialog.dialog}
+        </>
+    );
+};
+
+/** The page's follower, when loading its environment failed because its simulation does not run. */
+const FollowerSimulation = () => {
+    const { project_id } = useProjectId();
+    const { draft, error } = useRuntimeSession();
+    const follower_id = draft?.robots[0]?.robot_id;
+    const isNotRunning = error?.error_code === 'simulation_not_running' && follower_id !== undefined;
+    const { data: robot } = $api.useQuery(
+        'get',
+        '/api/projects/{project_id}/robots/{robot_id}',
+        { params: { path: { project_id, robot_id: follower_id ?? '' } } },
+        { enabled: isNotRunning }
+    );
+    const isSimulated = useRobotSimulationLaunch(robot?.type ?? '') !== null;
+
+    if (!isNotRunning || robot === undefined || isUnavailableRobot(robot) || !isSimulated) {
+        return null;
+    }
+    return <StartSimulation robot={robot} />;
+};
+
 /** Until the environment is up: what it is doing, or a way to load one when the session has none. */
 const Initializing = ({ cancelHref }: { cancelHref: string }) => {
     const { state, error, statuses, loading, retry } = useRuntimeSession();
@@ -99,6 +158,9 @@ const Initializing = ({ cancelHref }: { cancelHref: string }) => {
                 {failure !== null && <InlineAlert variant='error'>{failure}</InlineAlert>}
                 {error !== null && <InlineAlert variant='error'>{error.message}</InlineAlert>}
             </Flex>
+            <Suspense fallback={null}>
+                <FollowerSimulation />
+            </Suspense>
             <Flex gap='size-100'>
                 <Button variant={'secondary'} href={cancelHref}>
                     Cancel

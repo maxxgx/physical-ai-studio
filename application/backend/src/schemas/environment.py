@@ -28,7 +28,19 @@ class TeleoperatorNone(BaseModel):
     model_config = ConfigDict(json_schema_extra={"example": {"type": "none"}})
 
 
-Teleoperator = Annotated[TeleoperatorRobot | TeleoperatorNone, Field(discriminator="type")]
+class TeleoperatorAutopilot(BaseModel):
+    """The simulation's autopilot leads a simulated follower, as a leader arm would.
+
+    Only for a follower whose robot type has a simulation. Nothing else is stored: a session builds
+    the leader that reads the autopilot's targets from the follower's simulation when it loads.
+    """
+
+    type: Literal["autopilot"] = "autopilot"
+
+    model_config = ConfigDict(json_schema_extra={"example": {"type": "autopilot"}})
+
+
+Teleoperator = Annotated[TeleoperatorRobot | TeleoperatorNone | TeleoperatorAutopilot, Field(discriminator="type")]
 
 
 class RobotEnvironmentConfiguration(BaseModel):
@@ -118,7 +130,19 @@ class TeleoperatorNoneWithRobot(BaseModel):
     type: Literal["none"] = "none"
 
 
-TeleoperatorWithRobot = Annotated[TeleoperatorRobotWithRobot | TeleoperatorNoneWithRobot, Field(discriminator="type")]
+class TeleoperatorAutopilotWithRobot(BaseModel):
+    """The simulation's autopilot as teleoperator, with the leader a session reads it through."""
+
+    type: Literal["autopilot"] = "autopilot"
+    robot: ReadableRobot | None = Field(
+        None, description="The virtual leader reading the follower's simulation, built when a session loads"
+    )
+
+
+TeleoperatorWithRobot = Annotated[
+    TeleoperatorRobotWithRobot | TeleoperatorNoneWithRobot | TeleoperatorAutopilotWithRobot,
+    Field(discriminator="type"),
+]
 
 
 class RobotWithTeleoperator(BaseModel):

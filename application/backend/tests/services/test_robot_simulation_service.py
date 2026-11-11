@@ -4,6 +4,7 @@
 """RobotSimulationService against a fake simulation HTTP API."""
 
 import asyncio
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -649,3 +650,65 @@ def test_a_camera_without_a_source_is_a_scene_camera_and_one_with_an_unknown_sou
     )
 
     assert [(camera.name, camera.source) for camera in cameras] == [("overview", "scene")]
+
+
+async def test_the_simulation_reports_its_autopilot(robot: SimpleNamespace) -> None:
+    responses = sim_api(EXTERNAL)
+    responses[f"{EXTERNAL}/health"] = {
+        "scene": "bucket_sort",
+        "autopilot": {
+            "available": True,
+            "unavailable_reason": None,
+            "mode": "leader",
+            "phase": "picking",
+            "target": "cpu",
+            "attempt": 1,
+            "max_attempts": 2,
+            "outcome": "running",
+            "failure": None,
+            "instruction": "Put the cpu in the bucket",
+        },
+    }
+
+    result = await service(responses).get(PROJECT_ID, ROBOT_ID)
+
+    assert result.autopilot is not None
+    assert (result.autopilot.mode, result.autopilot.phase, result.autopilot.target) == ("leader", "picking", "cpu")
+    assert (result.autopilot.attempt, result.autopilot.max_attempts) == (1, 2)
+
+
+async def test_a_simulation_without_an_autopilot_status_reports_none(robot: SimpleNamespace) -> None:
+    responses = sim_api(EXTERNAL)
+    responses[f"{EXTERNAL}/health"] = {"scene": "yahtzee", "autopilot": {"mode": 3}}
+
+    assert (await service(responses).get(PROJECT_ID, ROBOT_ID)).autopilot is None
+
+
+async def test_switching_the_autopilot_posts_its_mode() -> None:
+    posted: list[tuple[str, Any]] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        posted.append((str(request.url), json.loads(request.content)))
+        return httpx.Response(200, json={"status": "queued"})
+
+    await module.set_autopilot_mode(EXTERNAL, "leader", transport=httpx.MockTransport(handle))
+
+    assert posted == [(f"{EXTERNAL}/autopilot", {"mode": "leader"})]
+
+
+async def test_a_scene_without_an_autopilot_says_why() -> None:
+    reason = "The bucket_sort autopilot drives the Franka arms, not 'MuJoCo_SO101_Follower'"
+    refuse = httpx.MockTransport(lambda _request: httpx.Response(409, json={"detail": reason}))
+
+    with pytest.raises(SimulationNotServingError, match="cannot switch to 'leader'") as error:
+        await module.set_autopilot_mode(EXTERNAL, "leader", transport=refuse)
+
+    assert reason in error.value.message
+
+
+async def test_a_simulation_that_does_not_answer_cannot_switch_its_autopilot() -> None:
+    def fail(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused", request=request)
+
+    with pytest.raises(SimulationNotServingError, match="does not answer"):
+        await module.set_autopilot_mode(EXTERNAL, "off", transport=httpx.MockTransport(fail))

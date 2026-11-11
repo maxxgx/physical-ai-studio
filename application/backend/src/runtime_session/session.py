@@ -64,11 +64,13 @@ from schemas.runtime_session import (
     SetControlCommand,
     StateMessage,
     StatusMessage,
+    TeleopControlConfig,
     UnloadDatasetCommand,
     UnloadEnvironmentCommand,
     UnloadModelCommand,
 )
 from services.camera_claims import CameraClaim, settings_from_camera
+from services.robot_simulation_service import set_autopilot_mode
 from workers import dataset_worker as dataset_rpc
 from workers.base import WorkerStartupError
 from workers.dataset_worker import RecordingStatus
@@ -473,9 +475,39 @@ class RuntimeSession:
 
     @asynccontextmanager
     async def _watched_control(self, config: ControlConfig, environment: Environment) -> AsyncIterator[Control]:
+        autopilot_url = environment.description.autopilot_url if isinstance(config, TeleopControlConfig) else None
+        if autopilot_url is not None and environment.leader is None:
+            raise ValueError(
+                "The autopilot's simulation did not answer when the environment loaded; "
+                "start the simulation and load the environment again"
+            )
         control = build_control(config, environment.store, environment.leader, self._model.value, self.bus)
-        async with self._reported(_CONTROL, control):
+        async with self._autopilot_leading(autopilot_url), self._reported(_CONTROL, control):
             yield control
+
+    @asynccontextmanager
+    async def _autopilot_leading(self, http_url: str | None) -> AsyncIterator[None]:
+        """Switch the simulation's autopilot to ``leader`` mode at ``http_url`` for as long as teleop follows it.
+
+        In ``leader`` mode only a client moves the arm, so the autopilot leads only while teleop runs.
+        It is switched off again afterwards, best effort: a ``leader`` mode left behind moves nothing,
+        and the autopilot stops as stalled. Nothing is switched without ``http_url``.
+
+        Raises:
+            SimulationNotServingError: The simulation does not answer, or its scene has no autopilot.
+        """
+        if http_url is None:
+            yield
+            return
+        await set_autopilot_mode(http_url, "leader")
+        try:
+            yield
+        finally:
+            with anyio.CancelScope(shield=True):
+                try:
+                    await set_autopilot_mode(http_url, "off")
+                except Exception as error:
+                    logger.warning("Session {} could not switch the autopilot off: {}", self.id, error)
 
     async def reload_environment(self) -> None:
         """Ask the environment to connect its devices again; the store and the dataset stay.

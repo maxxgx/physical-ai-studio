@@ -62,6 +62,8 @@ class EnvironmentDescription:
     """Connected as a plain driver by the session, for controls to borrow."""
     cameras: Mapping[str, Camera]
     """Camera rows by store key, the key a dataset records them under."""
+    autopilot_url: str | None = None
+    """With the simulation's autopilot as teleoperator: the simulation's HTTP API, where it is switched."""
 
     def session_environment(self) -> SessionEnvironment:
         """What the session's ``state`` message says about this environment."""
@@ -70,6 +72,7 @@ class EnvironmentDescription:
             name=self.name,
             robot_id=self.follower.robot_id,
             leader_id=self.leader.robot_id if self.leader is not None else None,
+            autopilot=self.autopilot_url is not None,
             joint_names=list(self.spec.joint_names),
             cameras=[
                 SessionCamera(
@@ -89,6 +92,9 @@ async def describe_environment(
 ) -> EnvironmentDescription:
     """Build the follower's driver (unconnected) and derive the session's spec.
 
+    The leader is the teleoperator's robot: a leader arm, or the one through which the simulation's
+    autopilot leads (built when the session resolved the environment).
+
     Raises:
         ValueError: The environment does not have exactly one robot, or two
             cameras share a store key.
@@ -102,8 +108,9 @@ async def describe_environment(
     driver, _definition = await factory.build_robot_driver(robot, factory)
     follower = RobotRecipe.from_driver(robot.id, driver)
     robot_names = {robot.id: robot.name}
+    tele_operator = environment.robots[0].tele_operator
     leader = None
-    if (leader_robot := getattr(environment.robots[0].tele_operator, "robot", None)) is not None:
+    if (leader_robot := getattr(tele_operator, "robot", None)) is not None:
         leader_driver, _definition = await factory.build_robot_driver(leader_robot, factory)
         leader = RobotRecipe.from_driver(leader_robot.id, leader_driver)
         robot_names[leader_robot.id] = leader_robot.name
@@ -123,6 +130,8 @@ async def describe_environment(
         follower=follower,
         leader=leader,
         cameras=cameras,
+        # The leader reads the autopilot from the follower's simulation, which serves at the follower's address.
+        autopilot_url=getattr(robot.payload, "http_url", None) if tele_operator.type == "autopilot" else None,
     )
 
 

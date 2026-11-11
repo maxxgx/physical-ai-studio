@@ -1,13 +1,17 @@
 import { FormEvent, useEffect, useState } from 'react';
 
-import { Button, Flex, Form, Keyboard, Slider, Text, TextArea, toast } from '@geti-ui/ui';
+import { Button, Flex, Form, Item, Keyboard, Picker, Slider, Text, TextArea, toast } from '@geti-ui/ui';
 
 import { $api } from '../../../api/client';
-import { SchemaSessionDataset } from '../../../api/openapi-spec';
+import { SchemaSessionDataset, SchemaSessionEnvironment } from '../../../api/openapi-spec';
 import { formatKeyCombo, getEffectiveBindings } from '../../hotkeys/key-combo';
 import { useHotkey } from '../../hotkeys/use-hotkey';
+import { useProjectId } from '../../projects/use-project';
+import { AUTOPILOT_LABEL } from '../../robots/environment-form/robot-form';
+import { AutopilotStatus } from '../../simulation/autopilot-status';
+import { useRobotSimulationLaunch } from '../../simulation/robot-simulation';
 import { TeleopSwitch } from '../cells/robot-cell';
-import { ERROR_TOAST, failureOf, useRuntimeSession } from '../runtime-session-provider';
+import { ERROR_TOAST, failureOf, savedEnvironmentDraft, useRuntimeSession } from '../runtime-session-provider';
 
 import classes from './record-mode.module.css';
 
@@ -106,6 +110,74 @@ const RecordingRate = ({ dataset }: { dataset: SchemaSessionDataset }) => {
     );
 };
 
+/**
+ * Who leads a simulated follower in this session: the saved environment's teleoperator, or the
+ * simulation's autopilot, without editing the saved environment. Choosing loads the environment again.
+ */
+const TeleoperatorChoice = ({ environment }: { environment: SchemaSessionEnvironment }) => {
+    const { project_id } = useProjectId();
+    const { state, send } = useRuntimeSession();
+    const [isPending, setIsPending] = useState(false);
+    const { data: robots } = $api.useSuspenseQuery('get', '/api/projects/{project_id}/robots', {
+        params: { path: { project_id } },
+    });
+    const { data: environments = [] } = $api.useQuery('get', '/api/projects/{project_id}/environments', {
+        params: { path: { project_id } },
+    });
+    const follower = robots.find(({ id }) => id === environment.robot_id);
+    const isSimulated = useRobotSimulationLaunch(follower?.type ?? '') !== null;
+    const saved = environments.find(({ id }) => id === environment.environment_id);
+    const savedTeleoperator = saved?.robots?.find(({ robot_id }) => robot_id === environment.robot_id)?.tele_operator;
+
+    // An environment saved with the autopilot has nothing else to offer.
+    if (
+        !isSimulated ||
+        saved === undefined ||
+        savedTeleoperator === undefined ||
+        savedTeleoperator.type === 'autopilot'
+    ) {
+        return null;
+    }
+    const savedLabel =
+        savedTeleoperator.type === 'robot'
+            ? (robots.find(({ id }) => id === savedTeleoperator.robot_id)?.name ?? 'Leader arm')
+            : 'None';
+
+    const choose = async (autopilot: boolean) => {
+        setIsPending(true);
+        try {
+            const ack = await send({
+                command: 'load_environment',
+                environment: savedEnvironmentDraft(saved, autopilot),
+                unload_incompatible: false,
+            });
+            if (!ack.ok) {
+                toast.negative(ack.error?.message ?? 'Could not change the teleoperator.', ERROR_TOAST);
+            }
+        } finally {
+            setIsPending(false);
+        }
+    };
+
+    return (
+        <Picker
+            label='Teleoperator'
+            width='100%'
+            selectedKey={environment.autopilot ? 'autopilot' : 'saved'}
+            onSelectionChange={(key) => {
+                if (key !== null && (key === 'autopilot') !== environment.autopilot) {
+                    void choose(key === 'autopilot');
+                }
+            }}
+            // Loading the environment again stops teleop, and would discard the episode being recorded.
+            isDisabled={isPending || state?.dataset?.is_recording}
+        >
+            <Item key='saved'>{savedLabel}</Item>
+            <Item key='autopilot'>{AUTOPILOT_LABEL}</Item>
+        </Picker>
+    );
+};
+
 /** Record mode's side bar: teleoperation, the task, and start / accept / discard with their hotkeys. */
 export const RecordMode = () => {
     const { state, statuses } = useRuntimeSession();
@@ -144,7 +216,9 @@ export const RecordMode = () => {
 
     return (
         <Flex direction='column' gap='size-200'>
+            {state?.environment != null && <TeleoperatorChoice environment={state.environment} />}
             {state?.environment?.leader_id != null && <TeleopSwitch />}
+            {state?.environment?.autopilot && <AutopilotStatus robot_id={state.environment.robot_id} />}
             <Form validationBehavior='native' onSubmit={onStart}>
                 <Flex direction='column' gap='size-150'>
                     <TextArea

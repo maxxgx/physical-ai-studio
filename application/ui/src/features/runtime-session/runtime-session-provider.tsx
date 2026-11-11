@@ -19,6 +19,7 @@ import {
     SchemaAckMessage,
     SchemaDiscardEpisodeCommand,
     SchemaEnvironmentDraft,
+    SchemaEnvironmentOutput,
     SchemaEnvironmentWithRelations,
     SchemaErrorMessage,
     SchemaLoadDatasetCommand,
@@ -36,6 +37,7 @@ import {
     SchemaUnloadEnvironmentCommand,
     SchemaUnloadModelCommand,
 } from '../../api/openapi-spec';
+import { toTeleoperator } from '../robots/environment-form/provider';
 import { JointsState } from '../robots/use-robot-observations';
 
 /** Session errors go away by themselves; the parts panel keeps showing what is still failed. */
@@ -66,10 +68,22 @@ export const environmentDraft = (environment: SchemaEnvironmentWithRelations): S
     name: environment.name,
     robots: (environment.robots ?? []).map(({ robot, tele_operator }) => ({
         robot_id: robot.id,
-        tele_operator:
-            tele_operator.type === 'robot' ? { type: 'robot', robot_id: tele_operator.robot_id } : { type: 'none' },
+        tele_operator: toTeleoperator(tele_operator),
     })),
     cameras: (environment.cameras ?? []).flatMap((camera) => (camera.id ? [{ camera_id: camera.id }] : [])),
+});
+
+/**
+ * The draft a session loads, from a saved environment as the environments list gives it. With
+ * ``autopilot``, the simulation's autopilot leads its follower instead of the saved teleoperator.
+ */
+export const savedEnvironmentDraft = (saved: SchemaEnvironmentOutput, autopilot = false): SchemaEnvironmentDraft => ({
+    id: saved.id,
+    name: saved.name,
+    robots: (saved.robots ?? []).map((robot) =>
+        autopilot ? { ...robot, tele_operator: { type: 'autopilot' } } : robot
+    ),
+    cameras: saved.cameras ?? [],
 });
 
 /** Why ``component`` failed, while it is failed. */
@@ -113,6 +127,8 @@ class Channel<T> {
 export type SessionPartName = 'environment' | 'dataset' | 'model';
 
 interface RuntimeSessionContextValue {
+    /** What the page asked the session to load, which ``retry`` loads again. */
+    draft: SchemaEnvironmentDraft | null;
     state: SchemaSessionState | null;
     /** The last command or worker error, until the next successful load. */
     error: SchemaErrorMessage | null;
@@ -320,9 +336,21 @@ export const RuntimeSessionProvider = ({
         };
     }, [environmentKey, dataset_id, modelKey, hasSession, send, attempt]);
 
+    const draft = useMemo(() => JSON.parse(environmentKey) as SchemaEnvironmentDraft | null, [environmentKey]);
     const value = useMemo(
-        () => ({ state, error, statuses, loading, isLoading: loading !== null, observations, frame, send, retry }),
-        [state, error, statuses, loading, observations, frame, send, retry]
+        () => ({
+            draft,
+            state,
+            error,
+            statuses,
+            loading,
+            isLoading: loading !== null,
+            observations,
+            frame,
+            send,
+            retry,
+        }),
+        [draft, state, error, statuses, loading, observations, frame, send, retry]
     );
 
     return <RuntimeSessionContext.Provider value={value}>{children}</RuntimeSessionContext.Provider>;

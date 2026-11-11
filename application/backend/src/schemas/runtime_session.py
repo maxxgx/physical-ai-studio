@@ -207,6 +207,8 @@ class SessionEnvironment(BaseModel):
     name: str
     robot_id: UUID
     leader_id: UUID | None
+    autopilot: bool = False
+    """Whether the leader is the simulation's autopilot, which teleop switches to ``leader`` mode."""
     joint_names: list[str]
     cameras: list[SessionCamera]
 

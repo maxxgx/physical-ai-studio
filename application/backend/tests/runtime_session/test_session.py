@@ -265,8 +265,8 @@ async def test_a_failing_control_reports_and_falls_back_to_hold(new_session) -> 
         def unplugged():
             raise ConnectionError("leader unplugged")
 
-        session.leader.get_observation = unplugged
         await session.set_control(TeleopControlConfig())
+        session.leader.get_observation = unplugged  # while it runs
         status = await next_status(statuses, "control", within=5)
         assert status.state == "failed" and "leader unplugged" in status.error
         await _until(lambda: session.state().control is None)
@@ -281,3 +281,94 @@ async def test_a_stopped_session_loads_nothing(new_session, registry) -> None:
     assert registry.get(session.id) is None
     with pytest.raises(RuntimeSessionCommandError, match="closed"):
         await session.load_environment(make_environment(cameras=0))
+
+
+SIMULATION = "http://127.0.0.1:50488"
+
+
+@pytest.fixture
+def autopilot_modes(monkeypatch) -> list[tuple[str, str]]:
+    """The autopilot modes the session switches to, by simulation address."""
+    from runtime_session import session as runtime_session
+
+    switched: list[tuple[str, str]] = []
+
+    async def switch(http_url: str, mode: str) -> None:
+        switched.append((http_url, mode))
+
+    monkeypatch.setattr(runtime_session, "set_autopilot_mode", switch)
+    return switched
+
+
+async def test_the_autopilot_leads_while_teleop_follows_it(new_session, autopilot_modes) -> None:
+    from schemas.runtime_session import TeleopControlConfig
+
+    session = await new_session()
+    await session.load_environment(make_environment(cameras=0, autopilot_url=SIMULATION))
+    assert session.state().environment.autopilot
+    try:
+        await session.set_control(TeleopControlConfig(hz=50, grace_s=0.2))
+        assert autopilot_modes == [(SIMULATION, "leader")]
+        await session.set_control(None)
+        assert autopilot_modes[-1] == (SIMULATION, "off")
+        await session.set_control(TeleopControlConfig(hz=50, grace_s=0.2))
+    finally:
+        await session.stop()
+    # The session ending stops teleop, and the autopilot with it.
+    assert autopilot_modes == [(SIMULATION, mode) for mode in ("leader", "off", "leader", "off")]
+
+
+async def test_a_leader_arm_leaves_the_autopilot_alone(new_session, autopilot_modes) -> None:
+    from schemas.runtime_session import TeleopControlConfig
+
+    session = await new_session()
+    await session.load_environment(make_environment(cameras=0))
+    assert not session.state().environment.autopilot
+    try:
+        await session.set_control(TeleopControlConfig(hz=50, grace_s=0.2))
+        await session.set_control(None)
+    finally:
+        await session.stop()
+    assert autopilot_modes == []
+
+
+async def test_a_scene_without_an_autopilot_refuses_teleop_and_says_why(new_session, monkeypatch) -> None:
+    from exceptions import SimulationNotServingError
+    from runtime_session import session as runtime_session
+    from schemas.runtime_session import TeleopControlConfig
+
+    async def refuse(_http_url: str, _mode: str) -> None:
+        raise SimulationNotServingError("The simulation's autopilot cannot switch to 'leader': no autopilot here")
+
+    monkeypatch.setattr(runtime_session, "set_autopilot_mode", refuse)
+    session = await new_session()
+    await session.load_environment(make_environment(cameras=0, autopilot_url=SIMULATION))
+    try:
+        with pytest.raises(SimulationNotServingError, match="no autopilot here"):
+            await session.set_control(TeleopControlConfig())
+        assert session.state().control is None
+    finally:
+        await session.stop()
+
+
+async def test_an_autopilot_whose_simulation_did_not_answer_cannot_lead(
+    new_session, robot_factory, tmp_path, autopilot_modes
+) -> None:
+    from schemas.runtime_session import TeleopControlConfig
+    from tests.workers.fake_robot import FakeRobot
+
+    async def build(robot, _port_finder):
+        connect = robot.id == LEADER_ID
+        return FakeRobot(str(tmp_path / f"{robot.id}"), ["shoulder_pan"], [0.0], fail_connect=connect), object()
+
+    robot_factory.build_robot_driver.side_effect = build
+    session = await new_session()
+    statuses = subscribe_statuses(session)
+    await session.load_environment(make_environment(cameras=0, autopilot_url=SIMULATION))
+    assert (await next_status(statuses, "environment/leader", within=1)).state == "failed"
+    try:
+        with pytest.raises(ValueError, match="start the simulation and load the environment again"):
+            await session.set_control(TeleopControlConfig())
+    finally:
+        await session.stop()
+    assert autopilot_modes == []

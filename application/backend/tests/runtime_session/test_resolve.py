@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from uuid import UUID, uuid4
 
 from runtime_session.resolve import project_resolvers
@@ -85,3 +85,19 @@ async def test_simulation_cameras_stream_from_where_their_simulation_runs_now() 
 
     robot_simulations.resolve_cameras.assert_awaited_once_with(PROJECT_ID, [stored])
     assert environment.cameras == [streaming]
+
+
+async def test_an_autopilot_leads_through_the_leader_built_for_the_followers_simulation() -> None:
+    from schemas.environment import TeleoperatorAutopilotWithRobot
+
+    built = LEADER.model_copy(update={"name": "Follower autopilot"})
+    simulations = SimpleNamespace(autopilot_leader=Mock(return_value=built), point_leader_at_follower=AsyncMock())
+    draft = EnvironmentDraft.model_validate(
+        {"name": "Bench", "robots": [{"robot_id": str(FOLLOWER_ID), "tele_operator": {"type": "autopilot"}}]}
+    )
+
+    environment = await _resolvers(simulations).environment(draft)
+
+    simulations.autopilot_leader.assert_called_once_with(FOLLOWER)
+    simulations.point_leader_at_follower.assert_not_awaited()
+    assert environment.robots[0].tele_operator == TeleoperatorAutopilotWithRobot(robot=built)

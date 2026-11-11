@@ -31,7 +31,13 @@ from exceptions import (
 )
 from robots.catalog.registry import RobotCatalogRegistry
 from robots.robot_service import RobotService
-from schemas.environment import Environment, RobotEnvironmentConfiguration, TeleoperatorNone, TeleoperatorRobot
+from schemas.environment import (
+    Environment,
+    RobotEnvironmentConfiguration,
+    TeleoperatorAutopilotWithRobot,
+    TeleoperatorNone,
+    TeleoperatorRobot,
+)
 from schemas.robot import RobotAdapter, UnavailableRobot
 from schemas.simulation import Simulation, SimulationPhase, SimulationStatus, StartSimulationRequest
 from services.simulation_manager import SimulationManager
@@ -1229,3 +1235,46 @@ async def test_a_failed_address_write_keeps_nothing_and_the_next_start_moves_eve
         ]
     finally:
         await engine.dispose()
+
+
+def _mujoco_follower(http_url: str, robot_type: str = "MuJoCo_SO101_Follower") -> Any:
+    return RobotAdapter.validate_python(
+        {"id": str(uuid4()), "name": "Sim arm", "type": robot_type, "payload": {"http_url": http_url}}
+    )
+
+
+def test_the_autopilot_leads_through_a_virtual_leader_on_the_followers_simulation_port() -> None:
+    from services.simulation_manager import AUTOPILOT_LEADER_TYPE
+
+    manager = SimulationManager(RobotCatalogRegistry())
+    follower = _mujoco_follower("http://127.0.0.1:50488")
+
+    leader = manager.autopilot_leader(follower)
+
+    assert (leader.type, leader.name, leader.payload.http_port) == (AUTOPILOT_LEADER_TYPE, "Sim arm autopilot", 50488)
+    assert TeleoperatorAutopilotWithRobot(robot=leader).robot == leader  # a robot an environment takes
+    # The same leader for every session of the follower, and another one for another follower.
+    assert manager.autopilot_leader(follower).id == leader.id != follower.id
+    assert manager.autopilot_leader(_mujoco_follower("http://127.0.0.1:50488")).id != leader.id
+
+
+def test_the_autopilot_reads_only_a_simulation_on_this_machine() -> None:
+    manager = SimulationManager(RobotCatalogRegistry())
+
+    with pytest.raises(SimulationNotSupportedError, match="on this machine"):
+        manager.autopilot_leader(_mujoco_follower("http://10.0.0.5:50488"))
+
+
+def test_a_robot_without_a_simulation_has_no_autopilot() -> None:
+    manager = SimulationManager(RobotCatalogRegistry())
+    robot = RobotAdapter.validate_python(
+        {
+            "id": str(uuid4()),
+            "name": "Arm",
+            "type": "SO101_Follower",
+            "payload": {"connection_string": "", "serial_number": "A"},
+        }
+    )
+
+    with pytest.raises(SimulationNotSupportedError, match="has no simulation"):
+        manager.autopilot_leader(robot)

@@ -18,7 +18,7 @@ import {
 } from '@geti-ui/ui';
 
 import { $api } from '../../../api/client';
-import { SchemaEnvironmentDraft, SchemaModel } from '../../../api/openapi-spec';
+import { SchemaModel } from '../../../api/openapi-spec';
 import {
     BackendSelection,
     defaultBackend,
@@ -27,7 +27,7 @@ import {
     InferenceDevice,
 } from '../../models/backend-selection/backend-selection';
 import { useProject, useProjectId } from '../../projects/use-project';
-import { SessionPartName, useRuntimeSession } from '../runtime-session-provider';
+import { savedEnvironmentDraft, SessionPartName, useRuntimeSession } from '../runtime-session-provider';
 import { PendingConfirmation, SessionCommand, usePartCommand } from './use-part-command';
 
 export type PartAction = 'reload' | 'swap' | 'unload';
@@ -262,13 +262,11 @@ export const PartControlsProvider = ({ children }: { children: ReactNode }) => {
     const loadEnvironment = (environment_id: string) => {
         const saved = environments.find((candidate) => candidate.id === environment_id);
         if (saved !== undefined) {
-            const draft: SchemaEnvironmentDraft = {
-                id: saved.id,
-                name: saved.name,
-                robots: saved.robots ?? [],
-                cameras: saved.cameras ?? [],
-            };
-            void runFor('environment', { command: 'load_environment', environment: draft, unload_incompatible: false });
+            void runFor('environment', {
+                command: 'load_environment',
+                environment: savedEnvironmentDraft(saved),
+                unload_incompatible: false,
+            });
         }
     };
 

@@ -25,13 +25,14 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Protocol
 from urllib.parse import urlsplit
-from uuid import UUID
+from uuid import UUID, uuid5
 
 from loguru import logger
 from pydantic import BaseModel
 
 from db import get_async_db_session_ctx
 from exceptions import (
+    RobotPluginUnavailableError,
     SimulationBusyError,
     SimulationInvalidRequestError,
     SimulationNameInUseError,
@@ -39,7 +40,7 @@ from exceptions import (
 )
 from robots.catalog.registry import RobotCatalogRegistry
 from robots.robot_service import RobotService
-from schemas.robot import Robot, UnavailableRobot
+from schemas.robot import Robot, RobotAdapter, UnavailableRobot
 from schemas.simulation import (
     Simulation,
     SimulationDownload,
@@ -65,6 +66,11 @@ hold its output open (the runtime's owner inherits stderr), so reading never wai
 EXIT_POLL_S = 0.05
 LOG_LINES = 500
 _LINE_LIMIT = 1 << 20
+
+AUTOPILOT_LEADER_TYPE = "MuJoCo_Virtual_Leader"
+"""The leader through which a simulation's autopilot leads its robot: it reads the autopilot's targets."""
+AUTOPILOT_LEADER_IDS = UUID("0b6f4f8e-3c55-4d3a-9a51-7e0d2c1f9b42")
+"""Namespace of the ids of autopilot leaders: one id per follower."""
 
 _ACTIVE = frozenset({SimulationStatus.STARTING, SimulationStatus.RUNNING, SimulationStatus.STOPPING})
 
@@ -332,6 +338,45 @@ class SimulationManager:
             logger.exception("Could not point leader {!r} at the simulation of {!r}", leader.name, follower.name)
             return follower, leader
         return stored if stored is not None else (follower, leader)
+
+    def autopilot_leader(self, follower: Robot | UnavailableRobot) -> Robot:
+        """Build the leader through which the follower's simulation's autopilot leads it, for a session.
+
+        A virtual leader (``AUTOPILOT_LEADER_TYPE``) reading the autopilot's targets from the
+        follower's simulation on this machine, at the port of the follower's stored address (see
+        ``_simulation_port``). It is not stored; its id follows from the follower's, and its name
+        from the follower's name.
+
+        Raises:
+            RobotPluginUnavailableError: The follower's plugin is not installed.
+            SimulationNotSupportedError: The follower's type has no simulation, its simulation is
+                not on this machine, or no plugin provides the virtual leader.
+        """
+        if isinstance(follower, UnavailableRobot):
+            raise RobotPluginUnavailableError(follower.name, follower.type)
+        if getattr(self._registry.get_definition(follower.type), "simulation", None) is None:
+            raise SimulationNotSupportedError(
+                f"Robot {follower.name!r} ({follower.type}) has no simulation, so no autopilot can lead it."
+            )
+        port = _simulation_port(self._registry, follower)
+        if port is None:
+            raise SimulationNotSupportedError(
+                f"The autopilot leads {follower.name!r} only from a simulation on this machine; its address "
+                f"{getattr(follower.payload, 'http_url', None)!r} is not."
+            )
+        if self._registry.get_definition(AUTOPILOT_LEADER_TYPE) is None:
+            raise SimulationNotSupportedError(
+                f"The autopilot needs the {AUTOPILOT_LEADER_TYPE} robot type, which no installed plugin provides."
+            )
+        # The application's robot models, which environments validate against, not this registry's own.
+        return RobotAdapter.validate_python(
+            {
+                "id": uuid5(AUTOPILOT_LEADER_IDS, str(follower.id)),
+                "name": f"{follower.name} autopilot",
+                "type": AUTOPILOT_LEADER_TYPE,
+                "payload": {"http_port": port},
+            }
+        )
 
     def _simulated_by_studio(self, project_id: UUID, robot_id: UUID) -> bool:
         state = self._state

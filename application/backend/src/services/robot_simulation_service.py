@@ -4,11 +4,12 @@
 """What a simulated robot's simulation serves (viewer, speed, cameras), and adding its cameras."""
 
 import asyncio
-from typing import Any, cast
+from typing import Any, Literal, cast
 from uuid import UUID, uuid5
 
 import httpx
 from loguru import logger
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from exceptions import (
@@ -28,6 +29,7 @@ from schemas.robot import UnavailableRobot
 from schemas.simulation import (
     ProjectRobotSimulation,
     RobotSimulation,
+    SimulationAutopilot,
     SimulationCameraInfo,
     SimulationStatus,
     simulation_proxy_path,
@@ -37,6 +39,7 @@ from services.simulation_manager import SimulationManager
 from services.simulation_proxy import is_proxied_http_path, local_base_url
 
 PROBE_TIMEOUT_S = 1.0
+AUTOPILOT_TIMEOUT_S = 2.0
 SIMULATION_CAMERA_IDS = UUID("5d1b2a4e-7c1f-4e0a-9a3c-2f6b8d0e1a7c")
 """Namespace of the ids of simulation cameras: one id per project, robot and camera."""
 
@@ -149,6 +152,7 @@ class RobotSimulationService:
             viewer_url=viewer_url if isinstance(viewer_url, str) else None,
             scene=_str_or_none(health.get("scene")) or _str_or_none(root.get("scene")),
             cameras=_cameras(http_url, cameras),
+            autopilot=_autopilot(health.get("autopilot")),
         )
 
     async def add_cameras(
@@ -284,6 +288,30 @@ class RobotSimulationService:
         return launch.owner_name(robot.payload)
 
 
+async def set_autopilot_mode(
+    http_url: str, mode: Literal["off", "leader"], *, transport: httpx.AsyncBaseTransport | None = None
+) -> None:
+    """Switch the autopilot of the simulation serving its HTTP API at *http_url* to *mode*.
+
+    Raises:
+        SimulationNotServingError: The simulation does not answer, or refuses: its scene has no
+            autopilot, which it says why.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=AUTOPILOT_TIMEOUT_S, transport=transport) as client:
+            response = await client.post(f"{http_url}/autopilot", json={"mode": mode})
+    except httpx.HTTPError as error:
+        raise SimulationNotServingError(f"The simulation at {http_url} does not answer: {error}") from error
+    if response.is_success:
+        return
+    try:
+        detail = response.json().get("detail")
+    except (ValueError, AttributeError):
+        detail = None
+    reason = detail if isinstance(detail, str) and detail else f"HTTP {response.status_code}"
+    raise SimulationNotServingError(f"The simulation's autopilot cannot switch to {mode!r}: {reason}")
+
+
 async def _get_json(client: httpx.AsyncClient, url: str) -> Any:
     try:
         response = await client.get(url)
@@ -321,6 +349,16 @@ def _with_proxy_urls(project_id: UUID, robot_id: UUID, simulation: RobotSimulati
             "cameras": cameras,
         }
     )
+
+
+def _autopilot(status: object) -> SimulationAutopilot | None:
+    if not isinstance(status, dict):
+        return None
+    try:
+        return SimulationAutopilot.model_validate(status)
+    except ValidationError as error:
+        logger.debug("Ignoring a malformed autopilot status {}: {}", status, error)
+        return None
 
 
 def _str_or_none(value: object) -> str | None:
