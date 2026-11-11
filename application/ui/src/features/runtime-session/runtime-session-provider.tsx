@@ -210,6 +210,7 @@ export const RuntimeSessionProvider = ({
     const [statuses, setStatuses] = useState<Statuses>({});
     const [loading, setLoading] = useState<SessionPartName | null>(null);
     const [environmentLoad, setEnvironmentLoad] = useState<EnvironmentLoad | null>(null);
+    const latestLoad = useRef<string | null>(null);
     const [attempt, setAttempt] = useState(0);
     const retry = useCallback(() => setAttempt((previous) => previous + 1), []);
     const observations = useRef(new Channel<SchemaObservationMessage>()).current;
@@ -291,8 +292,13 @@ export const RuntimeSessionProvider = ({
         (command: Command) =>
             new Promise<SchemaAckMessage>((resolve) => {
                 const request_id = uuidv4();
+                if (command.command === 'load_environment') {
+                    // A newer load replaces what an older one asked for, even before either answers.
+                    latestLoad.current = request_id;
+                    setEnvironmentLoad({ draft: command.environment, error: null });
+                }
                 pending.set(request_id, (ack) => {
-                    if (command.command === 'load_environment') {
+                    if (command.command === 'load_environment' && latestLoad.current === request_id) {
                         setEnvironmentLoad({ draft: command.environment, error: ack.ok ? null : commandError(ack) });
                     }
                     resolve(ack);

@@ -1,4 +1,4 @@
-import { ReactNode, Suspense, useEffect, useRef, useState } from 'react';
+import { ReactNode, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 
 import { Button, Flex, Heading, Loading, ProgressCircle, Text, View } from '@geti-ui/ui';
 import {
@@ -88,13 +88,24 @@ const SessionDock = ({ environment }: { environment: SchemaSessionEnvironment })
 /**
  * The simulated follower of an environment that could not load because its simulation does not run
  * (its simulation cameras stream from it): start it from here, and load that environment again once it runs.
+ *
+ * In place of the dock (``compact`` is off) the session has nothing else, so the environment loads again
+ * once the simulation runs, however it was started. Over the dock of another environment it loads again
+ * only when the user starts the simulation from here, or asks to once it runs.
  */
-const StartSimulation = ({ robot, load }: { robot: AvailableSchemaRobot; load: SchemaEnvironmentDraft }) => {
+const StartSimulation = ({
+    robot,
+    load,
+    compact,
+}: {
+    robot: AvailableSchemaRobot;
+    load: SchemaEnvironmentDraft;
+    compact: boolean;
+}) => {
     const { project_id } = useProjectId();
     const { draft, retry, send } = useRuntimeSession();
     const { data: simulation } = useRobotSimulation(project_id, robot.id);
     const { data: studioSimulation } = useSimulation();
-    const dialog = useSimulationDialog(robot);
     const isRunning = simulation?.running === true;
     const isStarting =
         studioSimulation?.robot_id === robot.id &&
@@ -103,18 +114,42 @@ const StartSimulation = ({ robot, load }: { robot: AvailableSchemaRobot; load: S
     const isPageEnvironment = JSON.stringify(load) === JSON.stringify(draft);
     const latest = useRef({ isPageEnvironment, load });
     latest.current = { isPageEnvironment, load };
-
-    useEffect(() => {
-        if (!isRunning) {
-            return;
-        }
+    const loadAgain = useCallback(() => {
         if (latest.current.isPageEnvironment) {
             retry();
         } else {
             void send({ command: 'load_environment', environment: latest.current.load, unload_incompatible: false });
         }
-    }, [isRunning, retry, send]);
+    }, [retry, send]);
+    const dialog = useSimulationDialog(robot, compact ? loadAgain : undefined);
 
+    useEffect(() => {
+        if (isRunning && !compact) {
+            loadAgain();
+        }
+    }, [isRunning, compact, loadAgain]);
+
+    if (compact) {
+        return (
+            <View backgroundColor='gray-100' padding='size-100' borderRadius='regular'>
+                <Flex alignItems='center' justifyContent='space-between' gap='size-100'>
+                    <Text>
+                        {load.name} could not load: the simulation of {robot.name} does not run.
+                    </Text>
+                    {isRunning ? (
+                        <Button variant='secondary' onPress={loadAgain}>
+                            Load {load.name}
+                        </Button>
+                    ) : (
+                        <Button variant='accent' onPress={dialog.open}>
+                            {isStarting ? 'Show progress…' : 'Start simulation…'}
+                        </Button>
+                    )}
+                </Flex>
+                {dialog.dialog}
+            </View>
+        );
+    }
     return (
         <>
             {/* Its own box: the prompt fills its parent's height otherwise. */}
@@ -129,7 +164,7 @@ const StartSimulation = ({ robot, load }: { robot: AvailableSchemaRobot; load: S
 };
 
 /** The follower of the environment the session last failed to load because its simulation does not run. */
-const FollowerSimulation = () => {
+const FollowerSimulation = ({ compact = false }: { compact?: boolean }) => {
     const { project_id } = useProjectId();
     const { environmentLoad } = useRuntimeSession();
     const load = environmentLoad?.error?.error_code === 'simulation_not_running' ? environmentLoad.draft : undefined;
@@ -151,7 +186,7 @@ const FollowerSimulation = () => {
     ) {
         return null;
     }
-    return <StartSimulation robot={robot} load={load} />;
+    return <StartSimulation robot={robot} load={load} compact={compact} />;
 };
 
 /** Until the environment is up: what it is doing, or a way to load one when the session has none. */
@@ -259,6 +294,10 @@ export const SessionViewer = ({ toolbar, cancelHref }: { toolbar?: ReactNode; ca
             >
                 <Flex direction={'column'} height={'100%'} gap='size-100'>
                     {toolbar}
+                    {/* An environment the workspace could not load over this one, for its simulation does not run. */}
+                    <Suspense fallback={null}>
+                        <FollowerSimulation compact />
+                    </Suspense>
                     {/* The cells suspend while they load; this keeps that inside the viewer. */}
                     <Suspense fallback={<Loading mode='inline' />}>
                         <SessionDock environment={environment} />

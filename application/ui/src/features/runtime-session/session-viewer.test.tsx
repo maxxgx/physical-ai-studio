@@ -182,6 +182,31 @@ describe('SessionViewer when the simulation of its cameras does not run', () => 
         expect(retry).not.toHaveBeenCalled();
     });
 
+    it('offers, over the loaded environment, to start the simulation of one the workspace could not load', async () => {
+        mockFollower(true);
+        refuseLoading();
+        session.loaded = true; // another environment stays loaded
+        const swapped = { id: 'environment-2', name: 'Other bench', robots: PAGE_DRAFT.robots, cameras: [] };
+        session.lastDraft = swapped;
+        const queryClient = createQueryClient();
+        renderViewer(queryClient);
+
+        expect(await screen.findByText('Dock')).toBeInTheDocument();
+        expect(await screen.findByText(/Other bench could not load/)).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Start simulation…' })).toBeInTheDocument();
+
+        // Started elsewhere: it asks before replacing the loaded environment.
+        setRunning(queryClient);
+        await userEvent.setup().click(await screen.findByRole('button', { name: 'Load Other bench' }));
+        expect(send).toHaveBeenCalledTimes(1);
+        expect(send).toHaveBeenCalledWith({
+            command: 'load_environment',
+            environment: swapped,
+            unload_incompatible: false,
+        });
+        expect(retry).not.toHaveBeenCalled();
+    });
+
     it('offers nothing for a follower without a simulation', async () => {
         mockFollower(false);
         refuseLoading();
