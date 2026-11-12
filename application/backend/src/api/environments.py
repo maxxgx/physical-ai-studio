@@ -6,9 +6,15 @@ from fastapi.exceptions import HTTPException
 from fastapi.responses import Response
 from physicalai.config import Config
 
-from api.dependencies import RobotClientFactoryDep, get_environment_service
+from api.dependencies import RobotClientFactoryDep, SimulationManagerDep, get_environment_service
 from api.robot_simulation import resolve_export_cameras
-from schemas.environment import Environment, EnvironmentWithRelations, TeleoperatorRobotWithRobot
+from schemas.environment import (
+    Environment,
+    EnvironmentWithRelations,
+    TeleoperatorAutopilotWithRobot,
+    TeleoperatorRobotWithRobot,
+)
+from schemas.robot import ReadableRobot
 from services.environment_service import EnvironmentService
 from services.runtime_export import RUNTIME_FPS, build_runtime_config, runtime_config_change_me
 
@@ -53,19 +59,32 @@ async def get_runtime_config(
     environment_id: UUID,
     environment_service: Annotated[EnvironmentService, Depends(get_environment_service)],
     robot_client_factory: RobotClientFactoryDep,
+    simulations: SimulationManagerDep,
 ) -> Response:
-    """Download a runnable physicalai teleoperation configuration."""
+    """Download a runnable physicalai teleoperation configuration.
+
+    With the simulation's autopilot as teleoperator, the leader is the virtual leader a session
+    would build (``SimulationManager.autopilot_leader``), and the file says how to switch the
+    autopilot to leading, which a session does itself.
+    """
     environment = await environment_service.get_environment_by_id(project_id, environment_id)
     if len(environment.robots) != 1:
         raise HTTPException(status_code=400, detail="Runtime export requires exactly one follower robot")
     relation = environment.robots[0]
-    if not isinstance(relation.tele_operator, TeleoperatorRobotWithRobot) or relation.tele_operator.robot is None:
+    header = ""
+    leader: ReadableRobot | None = None
+    if isinstance(relation.tele_operator, TeleoperatorAutopilotWithRobot):
+        leader = simulations.autopilot_leader(relation.robot)
+        header = _autopilot_header(relation.robot)
+    elif isinstance(relation.tele_operator, TeleoperatorRobotWithRobot):
+        leader = relation.tele_operator.robot
+    if leader is None:
         raise HTTPException(status_code=400, detail="Runtime teleoperation export requires a leader robot")
 
     try:
         document = await build_runtime_config(
             follower=relation.robot,
-            leader=relation.tele_operator.robot,
+            leader=leader,
             cameras=await resolve_export_cameras(request, environment_service.session, project_id, environment.cameras),
             robot_factory=robot_client_factory,
             fps=RUNTIME_FPS,
@@ -78,9 +97,19 @@ async def get_runtime_config(
     unresolved = runtime_config_change_me(document)
     comments = "".join(f"# CHANGE_ME: replace machine-specific device path {path}\n" for path in unresolved)
     return Response(
-        content=comments + Config.from_dict(document).to_yaml(),
+        content=header + comments + Config.from_dict(document).to_yaml(),
         media_type="application/yaml",
         headers={"Content-Disposition": 'attachment; filename="runtime.yaml"'},
+    )
+
+
+def _autopilot_header(follower: ReadableRobot) -> str:
+    """Comment lines for an export whose leader is the simulation's autopilot."""
+    http_url = getattr(follower.payload, "http_url", None) or "<the simulation's address>"
+    return (
+        "# The leader is the simulation's autopilot. It leads only in leader mode: set Autopilot to\n"
+        "# 'Virtual leader' in the simulation's viewer before running, or run\n"
+        f"#   curl -X POST {http_url}/autopilot -H 'Content-Type: application/json' -d '{{\"mode\": \"leader\"}}'\n"
     )
 
 

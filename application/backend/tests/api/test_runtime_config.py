@@ -2,11 +2,16 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+import yaml
 from fastapi import HTTPException
 from physicalai.config import Config
 
 from api.environments import get_runtime_config
+from robots.catalog.registry import RobotCatalogRegistry
+from robots.robot_client_factory import RobotClientFactory
 from schemas.environment import EnvironmentWithRelations
+from services.runtime_export import build_runtime_config
+from services.simulation_manager import SimulationManager
 
 
 def _environment(*, with_leader: bool) -> EnvironmentWithRelations:
@@ -61,6 +66,7 @@ async def test_runtime_config_download_is_yaml_attachment(mocker) -> None:
         environment_id=environment.id,
         environment_service=environment_service,
         robot_client_factory=mocker.MagicMock(),
+        simulations=mocker.MagicMock(),
     )
 
     assert response.media_type == "application/yaml"
@@ -83,4 +89,48 @@ async def test_runtime_config_download_requires_leader(mocker) -> None:
             environment_id=environment.id,
             environment_service=environment_service,
             robot_client_factory=mocker.MagicMock(),
+            simulations=mocker.MagicMock(),
         )
+
+
+async def test_runtime_config_exports_the_autopilot_leader_and_how_to_switch_it_on(mocker) -> None:
+    environment = EnvironmentWithRelations.model_validate(
+        {
+            "id": str(uuid4()),
+            "name": "Sim bench",
+            "robots": [
+                {
+                    "robot": {
+                        "id": str(uuid4()),
+                        "name": "Sim arm",
+                        "type": "MuJoCo_SO101_Follower",
+                        "payload": {"http_url": "http://127.0.0.1:50488"},
+                    },
+                    "tele_operator": {"type": "autopilot"},
+                }
+            ],
+            "cameras": [],
+        }
+    )
+    environment_service = SimpleNamespace(
+        get_environment_by_id=mocker.AsyncMock(return_value=environment), session=None
+    )
+    build = mocker.patch("api.environments.build_runtime_config", side_effect=build_runtime_config)
+
+    response = await get_runtime_config(
+        request=SimpleNamespace(),
+        project_id=uuid4(),
+        environment_id=environment.id,
+        environment_service=environment_service,
+        robot_client_factory=RobotClientFactory(robot_manager=mocker.MagicMock()),
+        simulations=SimulationManager(RobotCatalogRegistry()),
+    )
+
+    leader = build.call_args.kwargs["leader"]
+    assert (leader.name, leader.payload.http_port) == ("Sim arm autopilot", 50488)
+    body = response.body.decode()
+    assert body.startswith("# The leader is the simulation's autopilot.")
+    assert "curl -X POST http://127.0.0.1:50488/autopilot" in body
+    document = yaml.safe_load(body)
+    leader_driver = document["init_args"]["action_source"]["init_args"]["leader"]["init_args"]["robot"]
+    assert leader_driver["init_args"]["http_port"] == 50488
