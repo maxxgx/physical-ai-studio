@@ -110,7 +110,7 @@ describe('AutomaticRecording', () => {
         const user = userEvent.setup();
 
         expect(await screen.findByText(/Recording episode 2\. \(1 saved, 0 discarded\)/)).toBeInTheDocument();
-        await user.click(screen.getByRole('button', { name: 'Stop' }));
+        await user.click(screen.getByRole('button', { name: 'Stop recording' }));
 
         await waitFor(() => expect(send).toHaveBeenCalledWith({ command: 'set_control', control: null }));
         expect(posted).toEqual([

@@ -143,7 +143,7 @@ export const AutomaticRecording = ({
             <RecordingProgress {...relay} />
             {active ? (
                 <Button variant='negative' isPending={stop.isPending} onPress={() => stop.mutate()}>
-                    Stop
+                    Stop recording
                 </Button>
             ) : (
                 <Form validationBehavior='native' onSubmit={onStart}>
