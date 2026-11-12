@@ -86,6 +86,16 @@ export const AutomaticRecording = ({
     useEffect(() => setTask(defaultTask), [defaultTask]);
 
     const teleop = state?.control?.type === 'teleop';
+    // What a start that fails late may undo: only while this panel shows the session it started on.
+    const mounted = useRef(true);
+    useEffect(() => {
+        mounted.current = true;
+        return () => {
+            mounted.current = false;
+        };
+    }, []);
+    const stateRef = useRef(state);
+    stateRef.current = state;
     const setTeleop = async (on: boolean) => {
         const ack = await send({ command: 'set_control', control: on ? TELEOP : null });
         if (!ack.ok) {
@@ -96,6 +106,7 @@ export const AutomaticRecording = ({
     const start = useMutation({
         mutationFn: async () => {
             const turnedOn = !teleop;
+            const session_id = state?.session_id;
             if (turnedOn) {
                 await setTeleop(true); // the autopilot leads through teleoperation
             }
@@ -113,7 +124,15 @@ export const AutomaticRecording = ({
                 // Nothing records: leave the arm as it was. A start that reached the simulation after all
                 // is switched off too.
                 await setRecording(project_id, robot_id, { ...SETTINGS, enabled: false }).catch(() => undefined);
-                if (turnedOn) {
+                // Not if the user moved on meanwhile (another leader, inference): that control is theirs.
+                const current = stateRef.current;
+                if (
+                    turnedOn &&
+                    mounted.current &&
+                    current?.session_id === session_id &&
+                    current?.control?.type === 'teleop' &&
+                    !current?.dataset?.is_recording
+                ) {
                     await setTeleop(false).catch(() => undefined);
                 }
                 throw error;
@@ -137,16 +156,21 @@ export const AutomaticRecording = ({
     });
 
     // A run the simulation reports over (done, stopped, failed) leaves the arm to the user: teleoperation
-    // off. Only on its word: a run whose status is missing for a moment is not over.
-    const wasActive = useRef(active);
+    // off. Only on its word: a run whose status is missing for a while, or whose simulation does not
+    // answer for a while, is not over, and is still remembered when its end is reported.
+    const runSeen = useRef(false);
     const sendRef = useRef(send);
     sendRef.current = send;
     const ended = recording != null && !active;
     useEffect(() => {
-        if (wasActive.current && ended && teleop) {
-            void sendRef.current({ command: 'set_control', control: null });
+        if (active) {
+            runSeen.current = true;
+        } else if (ended && runSeen.current) {
+            runSeen.current = false;
+            if (teleop) {
+                void sendRef.current({ command: 'set_control', control: null });
+            }
         }
-        wasActive.current = active;
     }, [active, ended, teleop]);
 
     if (recording != null && !recording.available) {
