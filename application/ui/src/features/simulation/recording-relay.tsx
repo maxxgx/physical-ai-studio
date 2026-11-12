@@ -3,7 +3,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 
-import { StatusLight } from '@geti-ui/ui';
+import { Flex, StatusLight, Text } from '@geti-ui/ui';
 import { v4 as uuidv4 } from 'uuid';
 
 import { fetchClient } from '../../api/client';
@@ -50,7 +50,7 @@ export const relaySession = (
     leader,
 });
 
-type Send = (
+export type Send = (
     command:
         | { command: 'start_episode'; task: string; dataset_id: string | null; episode_id: string | null }
         | { command: 'save_episode'; dataset_id: string | null; episode_id: string | null }
@@ -228,13 +228,22 @@ const exchangeThroughStudio =
         return data;
     };
 
+export type Relay = {
+    /** The simulation's automatic recording, while its simulation runs. */
+    recording: SchemaSimulationRecording | null;
+    /** Whether a run is under way, so this page relays it. */
+    active: boolean;
+    /** Why relaying fails, or another page relays the run; ``null`` while it goes well. */
+    problem: string | null;
+};
+
 /**
- * Relay the automatic recording of the robot's simulation ("Record in Studio" in its viewer) while it runs.
+ * Relay the automatic recording of the robot's simulation while it runs.
  *
  * The simulation decides when an episode starts and whether it is kept; this page tells it about
- * the session and runs what it asks for, through the session's own commands. Shows how it goes.
+ * the session and runs what it asks for, through the session's own commands.
  */
-export const SimulationRecordingRelay = ({
+export const useRecordingRelay = ({
     robot_id,
     state,
     follower,
@@ -246,10 +255,10 @@ export const SimulationRecordingRelay = ({
     follower: string | null;
     leader: string | null;
     send: Send;
-}) => {
+}): Relay => {
     const { project_id } = useProjectId();
     const { data: simulation } = useRobotSimulation(project_id, robot_id);
-    const recording = simulation?.running === true ? simulation.recording : null;
+    const recording = simulation?.running === true ? (simulation.recording ?? null) : null;
     const active = isRecordingActive(recording);
     const [failure, setFailure] = useState<string | null>(null);
     const [owner, setOwner] = useState(true);
@@ -295,15 +304,37 @@ export const SimulationRecordingRelay = ({
         };
     }, [project_id, robot_id]);
 
+    const problem = !active ? null : (failure ?? (owner ? null : 'another recording page relays this run.'));
+    return { recording, active, problem };
+};
+
+/** How a run goes, in a line: "Recording episode 3: put the cpu away (2 saved, 0 discarded)". */
+export const RecordingProgress = ({ recording, active, problem }: Relay) => {
     if (recording == null || recording.phase === 'off') {
         return null;
     }
     const counts = `${recording.saved} saved, ${recording.discarded} discarded`;
-    const problem = !active ? null : (failure ?? (owner ? null : 'another recording page relays this run.'));
     const variant = recording.phase === 'error' || problem ? 'negative' : active ? 'info' : 'neutral';
     return (
         <StatusLight variant={variant}>
-            Recording from the simulation: {problem ?? (recording.message || recording.phase)} ({counts})
+            {problem ?? (recording.message || recording.phase)} ({counts})
         </StatusLight>
+    );
+};
+
+/**
+ * Relay a simulation's automatic recording that something else started (a script, with a leader
+ * arm teleoperating), and show how it goes.
+ */
+export const SimulationRecordingRelay = (props: Parameters<typeof useRecordingRelay>[0]) => {
+    const relay = useRecordingRelay(props);
+    if (relay.recording == null || relay.recording.phase === 'off') {
+        return null;
+    }
+    return (
+        <Flex direction='column' gap='size-50'>
+            <Text>Recording from the simulation</Text>
+            <RecordingProgress {...relay} />
+        </Flex>
     );
 };

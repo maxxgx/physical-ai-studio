@@ -35,7 +35,7 @@ from robots.catalog.registry import RobotCatalogRegistry
 from robots.robot_service import RobotService as RealRobotService
 from schemas.environment import CameraEnvironmentConfiguration, Environment
 from schemas.project_camera import IPCamera, IPCameraPayload, SimulationCamera, SimulationCameraPayload
-from schemas.simulation import Simulation, SimulationRelayRequest, SimulationStatus
+from schemas.simulation import Simulation, SimulationRecordingRequest, SimulationRelayRequest, SimulationStatus
 from services.environment_service import EnvironmentService
 from services.project_camera_service import ProjectCameraService
 from services.robot_simulation_service import RobotSimulationService
@@ -718,7 +718,17 @@ async def test_the_simulation_reports_its_automatic_recording(robot: SimpleNames
     responses = sim_api(EXTERNAL)
     responses[f"{EXTERNAL}/health"] = {
         "scene": "bucket_sort",
-        "studio": {"phase": "recording", "message": "Recording episode 3.", "saved": 2, "discarded": 1, "task": "x"},
+        "studio": {
+            "phase": "recording",
+            "message": "Recording episode 3.",
+            "saved": 2,
+            "discarded": 1,
+            "task": None,
+            "available": True,
+            "task_source": "instruction",
+            "keep": "all",
+            "max_attempts": 3,
+        },
     }
 
     recording = (await service(responses).get(PROJECT_ID, ROBOT_ID)).recording
@@ -729,6 +739,12 @@ async def test_the_simulation_reports_its_automatic_recording(robot: SimpleNames
         "Recording episode 3.",
         2,
         1,
+    )
+    assert (recording.available, recording.task_source, recording.keep, recording.max_attempts) == (
+        True,
+        "instruction",
+        "all",
+        3,
     )
     responses[f"{EXTERNAL}/health"] = {"scene": "yahtzee", "studio": {"saved": "many"}}
     assert (await service(responses).get(PROJECT_ID, ROBOT_ID)).recording is None
@@ -796,3 +812,41 @@ async def test_no_exchange_without_a_running_simulation(robot: SimpleNamespace) 
 
     with pytest.raises(SimulationNotServingError, match="not running"):
         await service({}).relay_recording(PROJECT_ID, ROBOT_ID, request)
+
+
+async def test_starting_automatic_recording_posts_its_settings(robot: SimpleNamespace) -> None:
+    simulations, _ = _relaying({})
+    posted: list[Any] = []
+    api = sim_api(EXTERNAL)
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if url == f"{EXTERNAL}/studio/recording":
+            posted.append(json.loads(request.content))
+            return httpx.Response(200, json={"status": "queued"})
+        return httpx.Response(200, json=api[url]) if url in api else httpx.Response(404)
+
+    simulations._transport = httpx.MockTransport(handle)
+    request = SimulationRecordingRequest(enabled=True, keep="all", max_episodes=3, recovery_fraction=0.2)
+
+    await simulations.set_recording(PROJECT_ID, ROBOT_ID, request)
+
+    # No task: the simulation keeps its own (each episode's instruction, in bucket_sort).
+    assert posted == [{"enabled": True, "keep": "all", "max_episodes": 3, "recovery_fraction": 0.2, "max_attempts": 2}]
+
+
+async def test_a_scene_that_cannot_record_automatically_says_why(robot: SimpleNamespace) -> None:
+    simulations, _ = _relaying({})
+    api = sim_api(EXTERNAL)
+    reason = "Automatic Studio recording needs the conveyor or bucket_sort scene"
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if url == f"{EXTERNAL}/studio/recording":
+            return httpx.Response(409, json={"detail": reason})
+        return httpx.Response(200, json=api[url]) if url in api else httpx.Response(404)
+
+    simulations._transport = httpx.MockTransport(handle)
+
+    with pytest.raises(SimulationNotServingError, match=reason):
+        await simulations.set_recording(PROJECT_ID, ROBOT_ID, SimulationRecordingRequest(enabled=True))

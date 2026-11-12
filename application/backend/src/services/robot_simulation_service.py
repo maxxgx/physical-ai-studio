@@ -32,6 +32,7 @@ from schemas.simulation import (
     SimulationAutopilot,
     SimulationCameraInfo,
     SimulationRecording,
+    SimulationRecordingRequest,
     SimulationRelayReply,
     SimulationRelayRequest,
     SimulationStatus,
@@ -124,6 +125,33 @@ class RobotSimulationService:
             return SimulationRelayReply.model_validate(response.json())
         except (httpx.HTTPError, ValueError) as error:
             raise SimulationNotServingError(f"The simulation's recording relay failed: {error}") from error
+
+    async def set_recording(self, project_id: UUID, robot_id: UUID, request: SimulationRecordingRequest) -> None:
+        """Start or stop the automatic recording of the robot's simulation.
+
+        Raises:
+            ResourceNotFoundError: The robot does not exist.
+            SimulationNotSupportedError: The robot type has no simulation.
+            SimulationNotServingError: The simulation does not run or answer, or refuses: its scene
+                cannot record automatically, which it says why.
+        """
+        http_url, _ = await self.proxy_addresses(project_id, robot_id)
+        if http_url is None:
+            raise SimulationNotServingError("The simulation serves no HTTP API on this machine.")
+        body = request.model_dump(exclude_none=True)
+        try:
+            async with httpx.AsyncClient(timeout=RELAY_TIMEOUT_S, transport=self._transport) as client:
+                response = await client.post(f"{http_url}/studio/recording", json=body)
+        except httpx.HTTPError as error:
+            raise SimulationNotServingError(f"The simulation at {http_url} does not answer: {error}") from error
+        if response.is_success:
+            return
+        try:
+            detail = response.json().get("detail")
+        except (ValueError, AttributeError):
+            detail = None
+        reason = detail if isinstance(detail, str) and detail else f"HTTP {response.status_code}"
+        raise SimulationNotServingError(f"The simulation cannot record automatically: {reason}")
 
     async def list_running(self, project_id: UUID) -> list[ProjectRobotSimulation]:
         """Return the running simulations of the project's simulated robots, probed in parallel."""

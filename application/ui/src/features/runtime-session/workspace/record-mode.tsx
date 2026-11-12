@@ -8,6 +8,7 @@ import { formatKeyCombo, getEffectiveBindings } from '../../hotkeys/key-combo';
 import { useHotkey } from '../../hotkeys/use-hotkey';
 import { useProjectId } from '../../projects/use-project';
 import { AUTOPILOT_LABEL } from '../../robots/environment-form/robot-form';
+import { AutomaticRecording } from '../../simulation/automatic-recording';
 import { AutopilotStatus } from '../../simulation/autopilot-status';
 import { SimulationRecordingRelay } from '../../simulation/recording-relay';
 import { useRobotSimulationLaunch } from '../../simulation/robot-simulation';
@@ -180,9 +181,9 @@ const TeleoperatorChoice = ({ environment }: { environment: SchemaSessionEnviron
 };
 
 /** Relays the automatic recording of a simulated follower's simulation, while its viewer has it on. */
-const SimulationRelay = ({ environment }: { environment: SchemaSessionEnvironment }) => {
+/** The simulated follower of the environment and its leader's name; ``null`` for a follower that is not simulated. */
+const useSimulatedFollower = (environment: SchemaSessionEnvironment) => {
     const { project_id } = useProjectId();
-    const { state, send } = useRuntimeSession();
     const { data: robots } = $api.useSuspenseQuery('get', '/api/projects/{project_id}/robots', {
         params: { path: { project_id } },
     });
@@ -194,15 +195,33 @@ const SimulationRelay = ({ environment }: { environment: SchemaSessionEnvironmen
     const leader = environment.autopilot
         ? `${follower.name} autopilot`
         : (robots.find(({ id }) => id === environment.leader_id)?.name ?? null);
+    return { robot_id: follower.id, follower: follower.name, leader };
+};
 
+/** Relays a simulation's automatic recording that a script started, with a leader arm teleoperating. */
+const SimulationRelay = ({ environment }: { environment: SchemaSessionEnvironment }) => {
+    const { state, send } = useRuntimeSession();
+    const simulated = useSimulatedFollower(environment);
+    return simulated === null ? null : <SimulationRecordingRelay {...simulated} state={state} send={send} />;
+};
+
+/** With the autopilot leading, recording is automatic: the simulation runs the episodes. */
+const AutopilotRecording = ({
+    environment,
+    defaultTask,
+    canRecord,
+}: {
+    environment: SchemaSessionEnvironment;
+    defaultTask: string;
+    canRecord: boolean;
+}) => {
+    const { state, send } = useRuntimeSession();
+    const simulated = useSimulatedFollower(environment);
+    if (simulated === null) {
+        return null;
+    }
     return (
-        <SimulationRecordingRelay
-            robot_id={follower.id}
-            state={state}
-            follower={follower.name}
-            leader={leader}
-            send={send}
-        />
+        <AutomaticRecording {...simulated} state={state} send={send} defaultTask={defaultTask} canRecord={canRecord} />
     );
 };
 
@@ -220,6 +239,9 @@ export const RecordMode = () => {
     const bindings = getEffectiveBindings(settings.hotkeys.bindings);
 
     const isRecording = dataset?.is_recording ?? false;
+    const environment = state?.environment ?? null;
+    // With the autopilot leading, the simulation starts and ends the episodes: no manual ones.
+    const autopilot = environment?.autopilot === true;
     // The dataset stays loaded without a working environment, with nothing to record from.
     const canRecord =
         dataset !== undefined &&
@@ -231,9 +253,10 @@ export const RecordMode = () => {
     const save = () => void run({ command: 'save_episode' });
     const discard = () => void run({ command: 'discard_episode' });
 
-    useHotkey(bindings['recording.start_episode'], start, canRecord && !isRecording && task !== '');
-    useHotkey(bindings['recording.accept_episode'], save, canRecord && isRecording);
-    useHotkey(bindings['recording.discard_episode'], discard, canRecord && isRecording);
+    const manual = canRecord && !autopilot;
+    useHotkey(bindings['recording.start_episode'], start, manual && !isRecording && task !== '');
+    useHotkey(bindings['recording.accept_episode'], save, manual && isRecording);
+    useHotkey(bindings['recording.discard_episode'], discard, manual && isRecording);
 
     const onStart = (event: FormEvent) => {
         event.preventDefault();
@@ -242,12 +265,22 @@ export const RecordMode = () => {
         }
     };
 
+    if (environment !== null && autopilot) {
+        return (
+            <Flex direction='column' gap='size-200'>
+                <TeleoperatorChoice environment={environment} />
+                <AutopilotStatus robot_id={environment.robot_id} />
+                {dataset !== undefined && <RecordingRate dataset={dataset} />}
+                <AutopilotRecording environment={environment} defaultTask={defaultTask} canRecord={canRecord} />
+            </Flex>
+        );
+    }
+
     return (
         <Flex direction='column' gap='size-200'>
-            {state?.environment != null && <TeleoperatorChoice environment={state.environment} />}
-            {state?.environment?.leader_id != null && <TeleopSwitch />}
-            {state?.environment?.autopilot && <AutopilotStatus robot_id={state.environment.robot_id} />}
-            {state?.environment != null && <SimulationRelay environment={state.environment} />}
+            {environment !== null && <TeleoperatorChoice environment={environment} />}
+            {environment?.leader_id != null && <TeleopSwitch />}
+            {environment !== null && <SimulationRelay environment={environment} />}
             <Form validationBehavior='native' onSubmit={onStart}>
                 <Flex direction='column' gap='size-150'>
                     <TextArea

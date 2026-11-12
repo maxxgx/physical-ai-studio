@@ -122,11 +122,19 @@ class SimulationRecording(BaseModel):
     recording page relays it: see ``SimulationRelayRequest``.
     """
 
+    available: bool = Field(False, description="Whether the scene can record automatically (conveyor, bucket_sort)")
+    task_source: Literal["task", "instruction"] | None = Field(
+        None, description="``task``: one task for every episode; ``instruction``: each episode's instruction"
+    )
     phase: str = "off"
     message: str = ""
     saved: int = 0
     discarded: int = 0
     max_episodes: int = 0
+    keep: Literal["all", "perfect"] = "perfect"
+    task: str | None = None
+    recovery_fraction: float = 0.0
+    max_attempts: int | None = None
 
 
 class RobotSimulation(BaseModel):
@@ -227,3 +235,22 @@ class SimulationRelayReply(BaseModel):
     commands: list[SimulationRelayCommand] = Field(
         default_factory=list, description="Commands the simulation waits for the results of, oldest first"
     )
+
+
+class SimulationRecordingRequest(BaseModel):
+    """Start the simulation's automatic recording with these settings, or stop it.
+
+    The simulation decides when each episode starts and ends and which to keep; the recording page
+    relays it (see ``SimulationRelayRequest``). The limits are the plugin's.
+    """
+
+    enabled: bool
+    task: str | None = Field(
+        None, min_length=1, max_length=200, description="With ``task_source`` ``task``: every episode's task"
+    )
+    keep: Literal["all", "perfect"] = "perfect"
+    max_episodes: int = Field(0, ge=0, le=10_000, description="Stop after this many saved episodes; 0 never")
+    recovery_fraction: float = Field(
+        0.0, ge=0.0, le=0.5, allow_inf_nan=False, description="Share of episodes that start from a stuck pose"
+    )
+    max_attempts: int = Field(2, ge=1, le=5, description="The autopilot's attempts per episode")

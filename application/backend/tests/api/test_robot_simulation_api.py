@@ -39,6 +39,11 @@ class StubService:
             raise self.error
         return RobotSimulation(running=True, started_by="external", owner_name="sim", scene="yahtzee")
 
+    async def set_recording(self, project_id, robot_id, request) -> None:
+        self.recording = request
+        if self.error is not None:
+            raise self.error
+
     async def relay_recording(self, project_id, robot_id, request) -> SimulationRelayReply:
         self.relayed = request
         if self.error is not None:
@@ -169,3 +174,18 @@ def test_the_recording_relay_passes_the_exchange_on(stub: StubService) -> None:
     response = TestClient(app).post(url, json={"client": "page-1", "session": session})
     assert response.status_code >= 400
     assert response.json()["error_code"] == "simulation_not_serving"
+
+
+def test_automatic_recording_is_started_with_validated_settings(stub: StubService) -> None:
+    url = f"/api/projects/{PROJECT_ID}/robots/{ROBOT_ID}/simulation/recording"
+
+    response = TestClient(app).post(url, json={"enabled": True, "max_episodes": 5, "keep": "all"})
+
+    assert response.status_code == 204
+    assert (stub.recording.max_episodes, stub.recording.keep) == (5, "all")
+    for bad in (
+        {"enabled": True, "max_attempts": 9},
+        {"enabled": True, "recovery_fraction": 0.7},
+        {"enabled": True, "task": ""},
+    ):
+        assert TestClient(app).post(url, json=bad).status_code in {400, 422}, bad

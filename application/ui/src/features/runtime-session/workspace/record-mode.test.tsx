@@ -19,7 +19,8 @@ const ENVIRONMENT_ID = 'environment-1';
 
 const send = rs.fn(async () => ({ type: 'ack', request_id: '', ok: true }));
 const session = { autopilot: false };
-let recording: { phase: string; message: string; saved: number; discarded: number; max_episodes: number } | null = null;
+let recording: Record<string, unknown> | null = null;
+const RECORDING = { available: true, task_source: 'instruction', keep: 'perfect', max_episodes: 0 };
 
 rs.mock('../runtime-session-provider', () => ({
     ERROR_TOAST: {},
@@ -134,7 +135,9 @@ describe('RecordMode with a simulated follower', () => {
         renderMode();
 
         expect(await screen.findByText('Autopilot: approach cpu, attempt 1/2')).toBeInTheDocument();
-        expect(screen.getByRole('switch', { name: 'Teleoperate' })).toBeInTheDocument();
+        // The simulation records the episodes: no manual ones, and teleoperation goes with the recording.
+        expect(screen.queryByRole('switch', { name: 'Teleoperate' })).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: /Start episode/ })).not.toBeInTheDocument();
     });
 
     it('shows no autopilot state for a leader arm', async () => {
@@ -148,7 +151,7 @@ describe('RecordMode with a simulated follower', () => {
 describe("RecordMode relaying the simulation's automatic recording", () => {
     it('runs what the simulation asks for and reports back how it went', async () => {
         session.autopilot = true;
-        recording = { phase: 'waiting', message: '', saved: 1, discarded: 0, max_episodes: 0 };
+        recording = { ...RECORDING, phase: 'waiting', message: '', saved: 1, discarded: 0, max_episodes: 0 };
         const bodies: unknown[] = [];
         let replies = 0;
         server.use(
@@ -170,9 +173,7 @@ describe("RecordMode relaying the simulation's automatic recording", () => {
         );
         renderMode();
 
-        expect(
-            await screen.findByText(/Recording from the simulation: waiting \(1 saved, 0 discarded\)/)
-        ).toBeInTheDocument();
+        expect(await screen.findByText(/waiting \(1 saved, 0 discarded\)/)).toBeInTheDocument();
         await waitFor(() =>
             expect(send).toHaveBeenCalledWith({
                 command: 'start_episode',
@@ -199,7 +200,7 @@ describe("RecordMode relaying the simulation's automatic recording", () => {
     });
 
     it('says so when the simulation cannot be relayed', async () => {
-        recording = { phase: 'connecting', message: '', saved: 0, discarded: 0, max_episodes: 0 };
+        recording = { ...RECORDING, phase: 'connecting', message: '', saved: 0, discarded: 0, max_episodes: 0 };
         server.use(
             http.post('/api/projects/{project_id}/robots/{robot_id}/simulation/recording-relay', () =>
                 HttpResponse.json(
@@ -220,7 +221,14 @@ describe("RecordMode relaying the simulation's automatic recording", () => {
     });
 
     it('says when another recording page relays the run', async () => {
-        recording = { phase: 'recording', message: 'Recording episode 1.', saved: 0, discarded: 0, max_episodes: 0 };
+        recording = {
+            ...RECORDING,
+            phase: 'recording',
+            message: 'Recording episode 1.',
+            saved: 0,
+            discarded: 0,
+            max_episodes: 0,
+        };
         server.use(
             http.post('/api/projects/{project_id}/robots/{robot_id}/simulation/recording-relay', () =>
                 HttpResponse.json({ active: true, owner: false, commands: [] })

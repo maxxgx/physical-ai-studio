@@ -15,6 +15,7 @@ from schemas.simulation import (
     AddSimulationCamerasRequest,
     ProjectRobotSimulation,
     RobotSimulation,
+    SimulationRecordingRequest,
     SimulationRelayReply,
     SimulationRelayRequest,
 )
@@ -33,6 +34,17 @@ async def get_robot_simulation(
 ) -> RobotSimulation:
     """Whether the robot's simulation runs, who started it, and its viewer, speed and cameras."""
     return await service.get(project_id, robot_id)
+
+
+@router.post("/robots/{robot_id}/simulation/recording", status_code=status.HTTP_204_NO_CONTENT)
+async def set_simulation_recording(
+    project_id: ProjectID,
+    robot_id: UUID,
+    request: SimulationRecordingRequest,
+    service: RobotSimulationServiceDep,
+) -> None:
+    """Start the simulation's automatic recording with these settings, or stop it; the recording page relays it."""
+    await service.set_recording(project_id, robot_id, request)
 
 
 @router.post("/robots/{robot_id}/simulation/recording-relay")
