@@ -181,6 +181,8 @@ def simulation_proxy_path(project_id: UUID, robot_id: UUID) -> str:
 class SimulationRelaySession(BaseModel):
     """The recording page's session, as it relays it to the simulation."""
 
+    session_id: str | None = Field(None, max_length=64, description="The runtime session; a run stays on one")
+    dataset_id: str | None = Field(None, max_length=64, description="The dataset loaded; a run stays on one")
     dataset: bool = Field(..., description="Whether a dataset is loaded to record into")
     recording: bool = Field(..., description="Whether an episode is being recorded")
     teleop: bool = Field(..., description="Whether teleoperation drives the follower")
@@ -197,8 +199,14 @@ class SimulationRelayResult(BaseModel):
 
 
 class SimulationRelayRequest(BaseModel):
-    """One exchange of the recording page with the simulation's automatic recording."""
+    """One exchange of the recording page with the simulation's automatic recording.
 
+    The first page to exchange relays a run; each sends its own ``client`` id. A command comes
+    with every exchange until its result does, so the page runs each ``request_id`` once and sends
+    its result until the command no longer comes.
+    """
+
+    client: str = Field(..., min_length=1, max_length=64, description="The relaying page's own id")
     session: SimulationRelaySession
     results: list[SimulationRelayResult] = Field(default_factory=list, max_length=16)
 
@@ -213,4 +221,7 @@ class SimulationRelayCommand(BaseModel):
 
 class SimulationRelayReply(BaseModel):
     active: bool = Field(..., description="Whether the simulation's automatic recording runs, so keep relaying")
-    commands: list[SimulationRelayCommand] = Field(default_factory=list)
+    owner: bool = Field(False, description="Whether this page relays the run; another page that does gets them")
+    commands: list[SimulationRelayCommand] = Field(
+        default_factory=list, description="Commands the simulation waits for the results of, oldest first"
+    )

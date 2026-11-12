@@ -4,6 +4,7 @@
 import { useEffect, useRef, useState } from 'react';
 
 import { StatusLight } from '@geti-ui/ui';
+import { v4 as uuidv4 } from 'uuid';
 
 import { fetchClient } from '../../api/client';
 import {
@@ -11,6 +12,8 @@ import {
     SchemaSessionState,
     SchemaSimulationRecording,
     SchemaSimulationRelayCommand,
+    SchemaSimulationRelayReply,
+    SchemaSimulationRelayRequest,
     SchemaSimulationRelayResult,
     SchemaSimulationRelaySession,
 } from '../../api/openapi-spec';
@@ -20,7 +23,7 @@ import { useRobotSimulation } from './use-robot-simulation';
 /** How often the page relays while the simulation records, so a step waits a fraction of a second at most. */
 export const RELAY_INTERVAL_MS = 250;
 /** How long the page waits before relaying again after the simulation refused or did not answer. */
-const RETRY_MS = 5_000;
+export const RETRY_MS = 5_000;
 /** How long a relayed command may take; the simulation gives up on a save after two minutes. */
 const COMMAND_TIMEOUT_MS = 150_000;
 
@@ -36,6 +39,8 @@ export const relaySession = (
     follower: string | null,
     leader: string | null
 ): SchemaSimulationRelaySession => ({
+    session_id: state?.session_id ?? null,
+    dataset_id: state?.dataset?.dataset_id ?? null,
     dataset: state?.dataset != null,
     recording: state?.dataset?.is_recording ?? false,
     teleop: state?.control?.type === 'teleop',
@@ -56,8 +61,9 @@ export const runRelayed = async (
         command.command === 'start_episode'
             ? ({ command: 'start_episode', task: command.task ?? '' } as const)
             : ({ command: command.command } as const);
-    const timeout = new Promise<SchemaAckMessage>((resolve) =>
-        window.setTimeout(
+    let timer = 0;
+    const timeout = new Promise<SchemaAckMessage>((resolve) => {
+        timer = window.setTimeout(
             () =>
                 resolve({
                     type: 'ack',
@@ -66,11 +72,133 @@ export const runRelayed = async (
                     error: { message: 'Studio did not answer in time.', error_code: 'timeout' },
                 }),
             COMMAND_TIMEOUT_MS
-        )
-    );
-    const ack = await Promise.race([send(request), timeout]);
-    return { request_id: command.request_id, ok: ack.ok, error: ack.ok ? null : (ack.error?.message ?? 'failed') };
+        );
+    });
+    try {
+        const ack = await Promise.race([send(request), timeout]);
+        return { request_id: command.request_id, ok: ack.ok, error: ack.ok ? null : (ack.error?.message ?? 'failed') };
+    } catch (error) {
+        return { request_id: command.request_id, ok: false, error: String(error) };
+    } finally {
+        window.clearTimeout(timer);
+    }
 };
+
+/** Where the page is: commands received on one session and dataset do not run on another. */
+const contextOf = (session: SchemaSimulationRelaySession) => `${session.session_id}/${session.dataset_id}`;
+
+/**
+ * The relay of one simulation's run: exchanges every tick, and runs the commands it gets one at a
+ * time, apart from the exchanges, so a slow save does not stop them (the simulation counts silence
+ * as a closed page).
+ *
+ * A command comes with every exchange until its result does: each request id runs once, and its
+ * result goes with every exchange until the command no longer comes. A command runs only on the
+ * session and dataset it came on.
+ */
+export class RecordingRelayLoop {
+    /** Whether the last reply asked for nothing more: no run, no command waiting, none running. */
+    idle = false;
+    /** Whether this page relays the run; another page may. */
+    owner = true;
+
+    private readonly results = new Map<string, SchemaSimulationRelayResult>();
+    private readonly running = new Set<string>();
+    private readonly queue: { command: SchemaSimulationRelayCommand; context: string }[] = [];
+    private exchanging = false;
+    private working = false;
+    private stopped = false;
+    private retryAt = 0;
+
+    constructor(
+        private readonly client: string,
+        private readonly exchange: (request: SchemaSimulationRelayRequest) => Promise<SchemaSimulationRelayReply>,
+        private readonly run: (command: SchemaSimulationRelayCommand) => Promise<SchemaSimulationRelayResult>,
+        private readonly session: () => SchemaSimulationRelaySession,
+        private readonly onFailure: (message: string | null) => void,
+        private readonly now: () => number = Date.now
+    ) {}
+
+    async tick(): Promise<void> {
+        if (this.stopped || this.exchanging || this.now() < this.retryAt) {
+            return;
+        }
+        this.exchanging = true;
+        const session = this.session();
+        try {
+            const reply = await this.exchange({ client: this.client, session, results: [...this.results.values()] });
+            if (this.stopped) {
+                return;
+            }
+            this.onFailure(null);
+            this.owner = reply.owner ?? false;
+            const commands = reply.commands ?? [];
+            const listed = new Set(commands.map(({ request_id }) => request_id));
+            for (const request_id of [...this.results.keys()]) {
+                if (!listed.has(request_id)) {
+                    this.results.delete(request_id); // the simulation has it
+                }
+            }
+            for (const command of commands) {
+                if (!this.results.has(command.request_id) && !this.running.has(command.request_id)) {
+                    this.running.add(command.request_id);
+                    this.queue.push({ command, context: contextOf(session) });
+                }
+            }
+            this.idle = !reply.active && commands.length === 0 && this.running.size === 0;
+            void this.work();
+        } catch (error) {
+            this.retryAt = this.now() + RETRY_MS;
+            this.onFailure(error instanceof Error ? error.message : 'The simulation did not answer.');
+        } finally {
+            this.exchanging = false;
+        }
+    }
+
+    stop(): void {
+        this.stopped = true;
+    }
+
+    private async work(): Promise<void> {
+        if (this.working) {
+            return;
+        }
+        this.working = true;
+        try {
+            for (let next = this.queue.shift(); next !== undefined && !this.stopped; next = this.queue.shift()) {
+                const { command, context } = next;
+                const result =
+                    contextOf(this.session()) === context
+                        ? await this.run(command)
+                        : {
+                              request_id: command.request_id,
+                              ok: false,
+                              error: 'The recording page moved to another session or dataset.',
+                          };
+                this.running.delete(command.request_id);
+                if (!this.stopped) {
+                    this.results.set(command.request_id, result);
+                }
+            }
+        } finally {
+            this.working = false;
+        }
+    }
+}
+
+const exchangeThroughStudio =
+    (project_id: string, robot_id: string) =>
+    async (body: SchemaSimulationRelayRequest): Promise<SchemaSimulationRelayReply> => {
+        const { data, error } = await fetchClient.POST(
+            '/api/projects/{project_id}/robots/{robot_id}/simulation/recording-relay',
+            { params: { path: { project_id, robot_id } }, body }
+        );
+        if (data === undefined) {
+            const message = (error as { message?: unknown } | undefined)?.message;
+            throw new Error(typeof message === 'string' ? message : 'The simulation did not answer.');
+        }
+        return data;
+    };
 
 /**
  * Relay the automatic recording of the robot's simulation ("Record in Studio" in its viewer) while it runs.
@@ -96,69 +224,57 @@ export const SimulationRecordingRelay = ({
     const recording = simulation?.running === true ? simulation.recording : null;
     const active = isRecordingActive(recording);
     const [failure, setFailure] = useState<string | null>(null);
+    const [owner, setOwner] = useState(true);
 
-    // Read by the relay loop, which must not restart on every state message.
+    // Read by the loop, which must not restart on every state message.
     const session = useRef(relaySession(state, follower, leader));
     session.current = relaySession(state, follower, leader);
     const sendRef = useRef(send);
     sendRef.current = send;
+    const activeRef = useRef(active);
+    activeRef.current = active;
+    // One id for as long as the page shows this robot: the simulation hands a run to one page.
+    const client = useRef(uuidv4());
 
     useEffect(() => {
-        if (!active) {
-            return;
-        }
-        let stopped = false;
-        let busy = false;
-        let retryAt = 0;
-        let results: SchemaSimulationRelayResult[] = [];
-        const exchange = async (last = false) => {
-            if (busy || (stopped && !last) || (!last && Date.now() < retryAt)) {
-                return;
-            }
-            busy = true;
-            try {
-                const sending = results;
-                results = [];
-                const { data, error } = await fetchClient.POST(
-                    '/api/projects/{project_id}/robots/{robot_id}/simulation/recording-relay',
-                    {
-                        params: { path: { project_id, robot_id } },
-                        body: { session: session.current, results: sending },
-                    }
-                );
-                if (data === undefined) {
-                    results = [...sending, ...results]; // not delivered: send them again
-                    retryAt = Date.now() + RETRY_MS;
-                    const message = (error as { message?: unknown } | undefined)?.message;
-                    setFailure(typeof message === 'string' ? message : 'The simulation did not answer.');
+        // A loop per run, kept after the run ends until nothing it asked for is left (a last discard).
+        let loop: RecordingRelayLoop | null = null;
+        const timer = window.setInterval(() => {
+            if (loop === null) {
+                if (!activeRef.current) {
                     return;
                 }
-                setFailure(null);
-                for (const command of data.commands ?? []) {
-                    results.push(await runRelayed(command, sendRef.current));
-                }
-            } finally {
-                busy = false;
+                loop = new RecordingRelayLoop(
+                    client.current,
+                    exchangeThroughStudio(project_id, robot_id),
+                    (command) => runRelayed(command, sendRef.current),
+                    () => session.current,
+                    setFailure
+                );
             }
-        };
-        const timer = window.setInterval(() => void exchange(), RELAY_INTERVAL_MS);
+            setOwner(loop.owner);
+            if (loop.idle && !activeRef.current) {
+                loop.stop();
+                loop = null;
+                return;
+            }
+            void loop.tick();
+        }, RELAY_INTERVAL_MS);
         return () => {
-            stopped = true;
+            loop?.stop();
             window.clearInterval(timer);
-            // Once more: a run that just ended can still have a last discard, and wants the latest results.
-            void exchange(true);
         };
-    }, [active, project_id, robot_id]);
+    }, [project_id, robot_id]);
 
     if (recording == null || recording.phase === 'off') {
         return null;
     }
     const counts = `${recording.saved} saved, ${recording.discarded} discarded`;
-    const variant = recording.phase === 'error' || (active && failure) ? 'negative' : active ? 'info' : 'neutral';
-    const message = active && failure ? failure : recording.message || recording.phase;
+    const problem = !active ? null : (failure ?? (owner ? null : 'another recording page relays this run.'));
+    const variant = recording.phase === 'error' || problem ? 'negative' : active ? 'info' : 'neutral';
     return (
         <StatusLight variant={variant}>
-            Recording from the simulation: {message} ({counts})
+            Recording from the simulation: {problem ?? (recording.message || recording.phase)} ({counts})
         </StatusLight>
     );
 };

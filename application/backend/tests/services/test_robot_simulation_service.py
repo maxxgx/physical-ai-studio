@@ -752,10 +752,15 @@ def _relaying(reply: Any, status: int = 200) -> tuple[RobotSimulationService, li
 
 
 async def test_an_exchange_is_passed_on_to_the_simulation_and_its_commands_back(robot: SimpleNamespace) -> None:
-    reply = {"active": True, "commands": [{"command": "start_episode", "request_id": "r1", "task": "Sort"}]}
+    reply = {
+        "active": True,
+        "owner": True,
+        "commands": [{"command": "start_episode", "request_id": "r1", "task": "Sort"}],
+    }
     simulations, posted = _relaying(reply)
     request = SimulationRelayRequest.model_validate(
         {
+            "client": "page-1",
             "session": {"dataset": True, "recording": False, "teleop": True, "follower": "Sim arm"},
             "results": [{"request_id": "r0", "ok": False, "error": "disk full"}],
         }
@@ -765,6 +770,7 @@ async def test_an_exchange_is_passed_on_to_the_simulation_and_its_commands_back(
 
     assert answer.model_dump() == {
         "active": True,
+        "owner": True,
         "commands": [{"command": "start_episode", "request_id": "r1", "task": "Sort"}],
     }
     assert posted == [request.model_dump(mode="json")]
@@ -782,14 +788,18 @@ async def test_a_simulation_that_cannot_relay_says_so(
     robot: SimpleNamespace, reply: Any, status: int, match: str
 ) -> None:
     simulations, _posted = _relaying(reply, status)
-    request = SimulationRelayRequest.model_validate({"session": {"dataset": True, "recording": False, "teleop": True}})
+    request = SimulationRelayRequest.model_validate(
+        {"client": "page-1", "session": {"dataset": True, "recording": False, "teleop": True}}
+    )
 
     with pytest.raises(SimulationNotServingError, match=match):
         await simulations.relay_recording(PROJECT_ID, ROBOT_ID, request)
 
 
 async def test_no_exchange_without_a_running_simulation(robot: SimpleNamespace) -> None:
-    request = SimulationRelayRequest.model_validate({"session": {"dataset": True, "recording": False, "teleop": True}})
+    request = SimulationRelayRequest.model_validate(
+        {"client": "page-1", "session": {"dataset": True, "recording": False, "teleop": True}}
+    )
 
     with pytest.raises(SimulationNotServingError, match="not running"):
         await service({}).relay_recording(PROJECT_ID, ROBOT_ID, request)

@@ -159,6 +159,7 @@ describe("RecordMode relaying the simulation's automatic recording", () => {
                     replies += 1;
                     return HttpResponse.json({
                         active: true,
+                        owner: true,
                         commands:
                             replies === 1
                                 ? [{ command: 'start_episode', request_id: 'sim-1', task: 'Put the cpu away' }]
@@ -175,7 +176,10 @@ describe("RecordMode relaying the simulation's automatic recording", () => {
         await waitFor(() => expect(send).toHaveBeenCalledWith({ command: 'start_episode', task: 'Put the cpu away' }));
         await waitFor(() =>
             expect(bodies).toContainEqual({
+                client: expect.any(String),
                 session: {
+                    session_id: null,
+                    dataset_id: null,
                     dataset: false,
                     recording: false,
                     teleop: false,
@@ -208,12 +212,24 @@ describe("RecordMode relaying the simulation's automatic recording", () => {
         expect(send).not.toHaveBeenCalled();
     });
 
+    it('says when another recording page relays the run', async () => {
+        recording = { phase: 'recording', message: 'Recording episode 1.', saved: 0, discarded: 0, max_episodes: 0 };
+        server.use(
+            http.post('/api/projects/{project_id}/robots/{robot_id}/simulation/recording-relay', () =>
+                HttpResponse.json({ active: true, owner: false, commands: [] })
+            )
+        );
+        renderMode();
+
+        expect(await screen.findByText(/another recording page relays this run/)).toBeInTheDocument();
+    });
+
     it('relays nothing while the simulation does not record', async () => {
         const relayed = rs.fn();
         server.use(
             http.post('/api/projects/{project_id}/robots/{robot_id}/simulation/recording-relay', () => {
                 relayed();
-                return HttpResponse.json({ active: false, commands: [] });
+                return HttpResponse.json({ active: false, owner: false, commands: [] });
             })
         );
         renderMode();

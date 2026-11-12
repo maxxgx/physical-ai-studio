@@ -43,7 +43,7 @@ class StubService:
         self.relayed = request
         if self.error is not None:
             raise self.error
-        return SimulationRelayReply(active=True, commands=[])
+        return SimulationRelayReply(active=True, owner=True, commands=[])
 
     async def add_cameras(self, project_id, environment_id, robot_id, names, camera_names) -> list:
         self.added = (names, camera_names)
@@ -158,13 +158,14 @@ def test_the_recording_relay_passes_the_exchange_on(stub: StubService) -> None:
     url = f"/api/projects/{PROJECT_ID}/robots/{ROBOT_ID}/simulation/recording-relay"
     session = {"dataset": True, "recording": False, "teleop": True}
 
-    response = TestClient(app).post(url, json={"session": session})
+    response = TestClient(app).post(url, json={"client": "page-1", "session": session})
 
     assert response.status_code == 200
-    assert response.json() == {"active": True, "commands": []}
+    assert response.json() == {"active": True, "owner": True, "commands": []}
     assert stub.relayed.session.teleop is True
-    assert TestClient(app).post(url, json={"session": {**session, "teleop": "maybe"}}).status_code in {400, 422}
+    for bad in ({"session": session}, {"client": "page-1", "session": {**session, "teleop": "maybe"}}):
+        assert TestClient(app).post(url, json=bad).status_code in {400, 422}
     stub.error = SimulationNotServingError("update physicalai-mujoco-plugin")
-    response = TestClient(app).post(url, json={"session": session})
+    response = TestClient(app).post(url, json={"client": "page-1", "session": session})
     assert response.status_code >= 400
     assert response.json()["error_code"] == "simulation_not_serving"
