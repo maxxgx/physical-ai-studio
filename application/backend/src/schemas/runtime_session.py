@@ -131,20 +131,32 @@ class UnloadDatasetCommand(BaseModel):
     request_id: str
 
 
+EXPECTED_DATASET = Field(
+    None,
+    description=(
+        "Refuse unless this dataset is the one recording: for a client whose command may wait behind "
+        "a dataset swap, such as a simulation's automatic recording"
+    ),
+)
+
+
 class StartEpisodeCommand(BaseModel):
     command: Literal["start_episode"] = "start_episode"
     request_id: str
     task: str
+    dataset_id: UUID | None = EXPECTED_DATASET
 
 
 class SaveEpisodeCommand(BaseModel):
     command: Literal["save_episode"] = "save_episode"
     request_id: str
+    dataset_id: UUID | None = EXPECTED_DATASET
 
 
 class DiscardEpisodeCommand(BaseModel):
     command: Literal["discard_episode"] = "discard_episode"
     request_id: str
+    dataset_id: UUID | None = EXPECTED_DATASET
 
 
 class SetControlCommand(BaseModel):

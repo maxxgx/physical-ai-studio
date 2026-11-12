@@ -30,6 +30,7 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 const setUp = (replies: SchemaSimulationRelayReply[]) => {
     const requests: SchemaSimulationRelayRequest[] = [];
     const runs: SchemaSimulationRelayCommand[] = [];
+    const datasets: (string | null)[] = [];
     const finish: (() => void)[] = [];
     const failures: (string | null)[] = [];
     let session = SESSION;
@@ -44,9 +45,10 @@ const setUp = (replies: SchemaSimulationRelayReply[]) => {
             }
             return replies[Math.min(requests.length - 1, replies.length - 1)];
         },
-        (command) =>
+        (command, dataset_id) =>
             new Promise((resolve) => {
                 runs.push(command);
+                datasets.push(dataset_id);
                 finish.push(() => resolve(ok(command.request_id)));
             }),
         () => session,
@@ -57,6 +59,7 @@ const setUp = (replies: SchemaSimulationRelayReply[]) => {
         loop,
         requests,
         runs,
+        datasets,
         finish,
         failures,
         tick: async () => {
@@ -82,6 +85,7 @@ describe('RecordingRelayLoop', () => {
         await relay.tick();
 
         expect(relay.runs).toEqual([SAVE]);
+        expect(relay.datasets).toEqual(['d1']); // the session refuses it if another dataset was loaded meanwhile
         expect(relay.requests.map(({ results }) => results)).toEqual([
             [],
             [ok('save-1')],
@@ -136,6 +140,42 @@ describe('RecordingRelayLoop', () => {
             ok('save-1'),
             { request_id: 'start-1', ok: false, error: 'The recording page moved to another session or dataset.' },
         ]);
+    });
+
+    it('does not run a command the simulation withdrew before it started', async () => {
+        const discard: SchemaSimulationRelayCommand = { command: 'discard_episode', request_id: 'last' };
+        const start: SchemaSimulationRelayCommand = { command: 'start_episode', request_id: 'next', task: 'Sort' };
+        const relay = setUp([
+            { active: true, owner: true, commands: [discard, start] },
+            { active: false, owner: true, commands: [discard] }, // the new run was switched off
+            { active: false, owner: true, commands: [] },
+        ]);
+        await relay.tick(); // the discard runs, the start waits behind it
+        await relay.tick();
+        relay.finish[0]();
+        await settle();
+        await relay.tick();
+
+        expect(relay.runs).toEqual([discard]);
+        expect(relay.loop.idle).toBe(true);
+    });
+
+    it('counts how long the simulation has been out of reach', async () => {
+        const relay = setUp([{ active: true, owner: true, commands: [] }]);
+        await relay.tick();
+        expect(relay.loop.failingFor()).toBe(0);
+
+        relay.failExchanges(true);
+        relay.advance(RETRY_MS);
+        await relay.tick();
+        relay.advance(RETRY_MS * 3);
+        await relay.tick();
+        expect(relay.loop.failingFor()).toBe(RETRY_MS * 3);
+
+        relay.failExchanges(false);
+        relay.advance(RETRY_MS);
+        await relay.tick();
+        expect(relay.loop.failingFor()).toBe(0);
     });
 
     it('is idle once the run ended and nothing is left, and stops running commands once stopped', async () => {

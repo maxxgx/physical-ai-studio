@@ -173,7 +173,9 @@ describe("RecordMode relaying the simulation's automatic recording", () => {
         expect(
             await screen.findByText(/Recording from the simulation: waiting \(1 saved, 0 discarded\)/)
         ).toBeInTheDocument();
-        await waitFor(() => expect(send).toHaveBeenCalledWith({ command: 'start_episode', task: 'Put the cpu away' }));
+        await waitFor(() =>
+            expect(send).toHaveBeenCalledWith({ command: 'start_episode', task: 'Put the cpu away', dataset_id: null })
+        );
         await waitFor(() =>
             expect(bodies).toContainEqual({
                 client: expect.any(String),

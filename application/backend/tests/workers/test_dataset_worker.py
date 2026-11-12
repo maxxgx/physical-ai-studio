@@ -6,7 +6,7 @@ import pytest
 
 from exceptions import RuntimeSessionCommandError
 from runtime_session.store import ACTION, STATE, FeatureSpec, ImageSpec, Store
-from schemas.runtime_session import SaveEpisodeCommand, StartEpisodeCommand, StatusMessage
+from schemas.runtime_session import DiscardEpisodeCommand, SaveEpisodeCommand, StartEpisodeCommand, StatusMessage
 from workers.dataset_worker import Recorder
 
 
@@ -77,3 +77,24 @@ def test_camera_loss_while_idle_does_not_discard_or_notify(recorder):
 
     recorder.publish.assert_not_called()
     recorder.mutation.discard_buffer.assert_not_called()
+
+
+def test_a_command_for_another_dataset_is_refused(recorder):
+    recorder.dataset_id = uuid4()
+    other = uuid4()
+
+    # A relayed command that waited behind a dataset swap must not act on the new dataset.
+    for command in (
+        SaveEpisodeCommand(request_id="save", dataset_id=other),
+        DiscardEpisodeCommand(request_id="discard", dataset_id=other),
+        StartEpisodeCommand(request_id="start", task="pick", dataset_id=other),
+    ):
+        handle = {"save_episode": recorder.save, "discard_episode": recorder.discard, "start_episode": recorder.start}
+        with pytest.raises(RuntimeSessionCommandError) as refused:
+            handle[command.command](command)
+        assert refused.value.error_code == "dataset_changed"
+    assert recorder.status().is_recording
+    recorder.mutation.discard_buffer.assert_not_called()
+
+    recorder.discard(DiscardEpisodeCommand(request_id="discard", dataset_id=recorder.dataset_id))
+    assert not recorder.status().is_recording

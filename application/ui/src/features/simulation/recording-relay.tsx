@@ -24,6 +24,8 @@ import { useRobotSimulation } from './use-robot-simulation';
 export const RELAY_INTERVAL_MS = 250;
 /** How long the page waits before relaying again after the simulation refused or did not answer. */
 export const RETRY_MS = 5_000;
+/** How long the page keeps trying to reach a simulation whose run ended, for its last discard. */
+export const GIVE_UP_MS = 15_000;
 /** How long a relayed command may take; the simulation gives up on a save after two minutes. */
 const COMMAND_TIMEOUT_MS = 150_000;
 
@@ -49,18 +51,27 @@ export const relaySession = (
 });
 
 type Send = (
-    command: { command: 'start_episode'; task: string } | { command: 'save_episode' } | { command: 'discard_episode' }
+    command:
+        | { command: 'start_episode'; task: string; dataset_id: string | null }
+        | { command: 'save_episode'; dataset_id: string | null }
+        | { command: 'discard_episode'; dataset_id: string | null }
 ) => Promise<SchemaAckMessage>;
 
-/** Run one of the simulation's commands as the page's own buttons do, and say how it went. */
+/**
+ * Run one of the simulation's commands as the page's own buttons do, and say how it went.
+ *
+ * It names the dataset it is for: the session refuses it if another one was loaded meanwhile, even
+ * if this page has not heard of that yet.
+ */
 export const runRelayed = async (
     command: SchemaSimulationRelayCommand,
+    dataset_id: string | null,
     send: Send
 ): Promise<SchemaSimulationRelayResult> => {
     const request =
         command.command === 'start_episode'
-            ? ({ command: 'start_episode', task: command.task ?? '' } as const)
-            : ({ command: command.command } as const);
+            ? ({ command: 'start_episode', task: command.task ?? '', dataset_id } as const)
+            : ({ command: command.command, dataset_id } as const);
     let timer = 0;
     const timeout = new Promise<SchemaAckMessage>((resolve) => {
         timer = window.setTimeout(
@@ -104,7 +115,8 @@ export class RecordingRelayLoop {
 
     private readonly results = new Map<string, SchemaSimulationRelayResult>();
     private readonly running = new Set<string>();
-    private readonly queue: { command: SchemaSimulationRelayCommand; context: string }[] = [];
+    private queue: { command: SchemaSimulationRelayCommand; context: string; dataset_id: string | null }[] = [];
+    private failingSince: number | null = null;
     private exchanging = false;
     private working = false;
     private stopped = false;
@@ -113,7 +125,10 @@ export class RecordingRelayLoop {
     constructor(
         private readonly client: string,
         private readonly exchange: (request: SchemaSimulationRelayRequest) => Promise<SchemaSimulationRelayReply>,
-        private readonly run: (command: SchemaSimulationRelayCommand) => Promise<SchemaSimulationRelayResult>,
+        private readonly run: (
+            command: SchemaSimulationRelayCommand,
+            dataset_id: string | null
+        ) => Promise<SchemaSimulationRelayResult>,
         private readonly session: () => SchemaSimulationRelaySession,
         private readonly onFailure: (message: string | null) => void,
         private readonly now: () => number = Date.now
@@ -131,6 +146,7 @@ export class RecordingRelayLoop {
                 return;
             }
             this.onFailure(null);
+            this.failingSince = null;
             this.owner = reply.owner ?? false;
             const commands = reply.commands ?? [];
             const listed = new Set(commands.map(({ request_id }) => request_id));
@@ -139,16 +155,21 @@ export class RecordingRelayLoop {
                     this.results.delete(request_id); // the simulation has it
                 }
             }
+            // One the simulation no longer asks for (its run was switched off) is not run, if not yet started.
+            const withdrawn = this.queue.filter(({ command }) => !listed.has(command.request_id));
+            this.queue = this.queue.filter(({ command }) => listed.has(command.request_id));
+            withdrawn.forEach(({ command }) => this.running.delete(command.request_id));
             for (const command of commands) {
                 if (!this.results.has(command.request_id) && !this.running.has(command.request_id)) {
                     this.running.add(command.request_id);
-                    this.queue.push({ command, context: contextOf(session) });
+                    this.queue.push({ command, context: contextOf(session), dataset_id: session.dataset_id ?? null });
                 }
             }
             this.idle = !reply.active && commands.length === 0 && this.running.size === 0;
             void this.work();
         } catch (error) {
             this.retryAt = this.now() + RETRY_MS;
+            this.failingSince ??= this.now();
             this.onFailure(error instanceof Error ? error.message : 'The simulation did not answer.');
         } finally {
             this.exchanging = false;
@@ -159,6 +180,11 @@ export class RecordingRelayLoop {
         this.stopped = true;
     }
 
+    /** How long exchanges have been failing, in ms; 0 while they go through. */
+    failingFor(): number {
+        return this.failingSince === null ? 0 : this.now() - this.failingSince;
+    }
+
     private async work(): Promise<void> {
         if (this.working) {
             return;
@@ -166,10 +192,10 @@ export class RecordingRelayLoop {
         this.working = true;
         try {
             for (let next = this.queue.shift(); next !== undefined && !this.stopped; next = this.queue.shift()) {
-                const { command, context } = next;
+                const { command, context, dataset_id } = next;
                 const result =
                     contextOf(this.session()) === context
-                        ? await this.run(command)
+                        ? await this.run(command, dataset_id)
                         : {
                               request_id: command.request_id,
                               ok: false,
@@ -247,13 +273,14 @@ export const SimulationRecordingRelay = ({
                 loop = new RecordingRelayLoop(
                     client.current,
                     exchangeThroughStudio(project_id, robot_id),
-                    (command) => runRelayed(command, sendRef.current),
+                    (command, dataset_id) => runRelayed(command, dataset_id, sendRef.current),
                     () => session.current,
                     setFailure
                 );
             }
             setOwner(loop.owner);
-            if (loop.idle && !activeRef.current) {
+            // After the run: until nothing it asked for is left, or the simulation stays out of reach.
+            if (!activeRef.current && (loop.idle || loop.failingFor() > GIVE_UP_MS)) {
                 loop.stop();
                 loop = null;
                 return;
