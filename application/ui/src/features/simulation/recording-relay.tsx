@@ -258,7 +258,11 @@ export const useRecordingRelay = ({
 }): Relay => {
     const { project_id } = useProjectId();
     const { data: simulation } = useRobotSimulation(project_id, robot_id);
-    const recording = simulation?.running === true ? (simulation.recording ?? null) : null;
+    // A health probe that missed reports no recording; the run is not over for that, so keep the last one.
+    const lastRecording = useRef<SchemaSimulationRecording | null>(null);
+    const running = simulation?.running === true;
+    const recording = running ? (simulation.recording ?? lastRecording.current) : null;
+    lastRecording.current = recording;
     const active = isRecordingActive(recording);
     const [failure, setFailure] = useState<string | null>(null);
     const [owner, setOwner] = useState(true);

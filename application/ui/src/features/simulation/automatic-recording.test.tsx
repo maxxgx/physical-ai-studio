@@ -15,6 +15,7 @@ const ROBOT_ID = 'robot-1';
 const send = rs.fn(async (_command: unknown) => ({ type: 'ack' as const, request_id: '', ok: true }));
 let recording: Record<string, unknown> | null = null;
 let posted: unknown[] = [];
+let refuse = false;
 
 const RECORDING = {
     available: true,
@@ -30,6 +31,7 @@ const RECORDING = {
 beforeEach(() => {
     send.mockClear();
     posted = [];
+    refuse = false;
     recording = { ...RECORDING };
     server.use(
         http.get('/api/projects/{project_id}/robots/{robot_id}/simulation', () =>
@@ -43,6 +45,16 @@ beforeEach(() => {
         ),
         http.post('/api/projects/{project_id}/robots/{robot_id}/simulation/recording', async ({ request }) => {
             posted.push(await request.json());
+            if (refuse) {
+                return HttpResponse.json(
+                    {
+                        error_code: 'simulation_not_serving',
+                        message: 'The simulation does not answer',
+                        http_status: 409,
+                    },
+                    { status: 409 }
+                ) as never;
+            }
             return new HttpResponse(null, { status: 204 }) as never;
         }),
         http.post('/api/projects/{project_id}/robots/{robot_id}/simulation/recording-relay', () =>
@@ -117,6 +129,50 @@ describe('AutomaticRecording', () => {
             { enabled: false, keep: 'perfect', max_episodes: 0, recovery_fraction: 0, max_attempts: 2 },
         ]);
     });
+
+    it('leaves the arm as it was when the recording does not start', async () => {
+        refuse = true;
+        renderPanel();
+        const user = userEvent.setup();
+
+        const button = await screen.findByRole('button', { name: 'Record automatically' });
+        await waitFor(() => expect(button).toBeEnabled());
+        await user.click(button);
+
+        await waitFor(() => expect(send).toHaveBeenCalledWith({ command: 'set_control', control: null }));
+        expect(send.mock.calls.map(([command]) => (command as { control: unknown }).control)).toEqual([
+            { type: 'teleop', hz: 100, grace_s: 2 },
+            null,
+        ]);
+        expect(screen.getByRole('button', { name: 'Record automatically' })).toBeInTheDocument();
+    });
+
+    it('stops teleoperation even when the simulation does not take the stop', async () => {
+        refuse = true;
+        recording = { ...RECORDING, phase: 'recording', message: 'Recording episode 2.', saved: 1 };
+        renderPanel({ session_id: 's1', control: { type: 'teleop' }, dataset: null });
+        const user = userEvent.setup();
+
+        await user.click(await screen.findByRole('button', { name: 'Stop recording' }));
+
+        await waitFor(() => expect(send).toHaveBeenCalledWith({ command: 'set_control', control: null }));
+    });
+
+    it('does not end a run whose status was missing for a moment', async () => {
+        recording = { ...RECORDING, phase: 'recording', message: 'Recording episode 2.', saved: 1 };
+        renderPanel({ session_id: 's1', control: { type: 'teleop' }, dataset: null });
+        expect(await screen.findByText(/Recording episode 2\./)).toBeInTheDocument();
+
+        recording = null; // one health probe missed
+        await new Promise((resolve) => setTimeout(resolve, 2_500));
+        expect(screen.getByRole('button', { name: 'Stop recording' })).toBeInTheDocument();
+
+        recording = { ...RECORDING, phase: 'done', message: 'Recorded 2 episodes.', saved: 2 }; // the run is over
+        await waitFor(() => expect(send).toHaveBeenCalledWith({ command: 'set_control', control: null }), {
+            timeout: 4_000,
+        });
+        expect(send).toHaveBeenCalledTimes(1);
+    }, 12_000);
 
     it('offers nothing in a scene that cannot record automatically', async () => {
         recording = { ...RECORDING, available: false };

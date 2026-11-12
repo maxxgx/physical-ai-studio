@@ -95,39 +95,59 @@ export const AutomaticRecording = ({
 
     const start = useMutation({
         mutationFn: async () => {
-            if (!teleop) {
+            const turnedOn = !teleop;
+            if (turnedOn) {
                 await setTeleop(true); // the autopilot leads through teleoperation
             }
-            await setRecording(project_id, robot_id, {
-                ...SETTINGS,
-                enabled: true,
-                keep,
-                max_episodes: episodes,
-                ...(perEpisodeInstruction
-                    ? { recovery_fraction: stuckStarts, max_attempts: attempts }
-                    : { task: task.trim() || defaultTask || null }),
-            });
+            try {
+                await setRecording(project_id, robot_id, {
+                    ...SETTINGS,
+                    enabled: true,
+                    keep,
+                    max_episodes: episodes,
+                    ...(perEpisodeInstruction
+                        ? { recovery_fraction: stuckStarts, max_attempts: attempts }
+                        : { task: task.trim() || defaultTask || null }),
+                });
+            } catch (error) {
+                // Nothing records: leave the arm as it was. A start that reached the simulation after all
+                // is switched off too.
+                await setRecording(project_id, robot_id, { ...SETTINGS, enabled: false }).catch(() => undefined);
+                if (turnedOn) {
+                    await setTeleop(false).catch(() => undefined);
+                }
+                throw error;
+            }
         },
         onError: (error) => toast.negative(error.message),
     });
     const stop = useMutation({
         mutationFn: async () => {
-            await setRecording(project_id, robot_id, { ...SETTINGS, enabled: false });
-            await setTeleop(false); // also discards the episode being recorded
+            // Both, whichever fails: switching teleoperation off holds the arm and discards the episode.
+            const results = await Promise.allSettled([
+                setRecording(project_id, robot_id, { ...SETTINGS, enabled: false }),
+                setTeleop(false),
+            ]);
+            const failed = results.find((result) => result.status === 'rejected');
+            if (failed !== undefined) {
+                throw failed.reason instanceof Error ? failed.reason : new Error('Could not stop recording.');
+            }
         },
         onError: (error) => toast.negative(error.message),
     });
 
-    // A run that ended by itself (done, stopped, failed) leaves the arm to the user: teleoperation off.
+    // A run the simulation reports over (done, stopped, failed) leaves the arm to the user: teleoperation
+    // off. Only on its word: a run whose status is missing for a moment is not over.
     const wasActive = useRef(active);
     const sendRef = useRef(send);
     sendRef.current = send;
+    const ended = recording != null && !active;
     useEffect(() => {
-        if (wasActive.current && !active && teleop) {
+        if (wasActive.current && ended && teleop) {
             void sendRef.current({ command: 'set_control', control: null });
         }
         wasActive.current = active;
-    }, [active, teleop]);
+    }, [active, ended, teleop]);
 
     if (recording != null && !recording.available) {
         return null; // the scene records by hand only; the session's own controls stay
@@ -149,7 +169,14 @@ export const AutomaticRecording = ({
                 <Form validationBehavior='native' onSubmit={onStart}>
                     <Flex direction='column' gap='size-150'>
                         {!perEpisodeInstruction && (
-                            <TextArea label='Task' width='100%' isRequired value={task} onChange={setTask} />
+                            <TextArea
+                                label='Task'
+                                width='100%'
+                                isRequired
+                                maxLength={200}
+                                value={task}
+                                onChange={setTask}
+                            />
                         )}
                         <NumberField
                             label='Episodes'
