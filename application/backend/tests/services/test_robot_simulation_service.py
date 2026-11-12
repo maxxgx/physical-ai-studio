@@ -752,11 +752,8 @@ def _relaying(reply: Any, status: int = 200) -> tuple[RobotSimulationService, li
 
 
 async def test_an_exchange_is_passed_on_to_the_simulation_and_its_commands_back(robot: SimpleNamespace) -> None:
-    reply = {
-        "active": True,
-        "owner": True,
-        "commands": [{"command": "start_episode", "request_id": "r1", "task": "Sort"}],
-    }
+    start = {"command": "start_episode", "request_id": "r1", "task": "Sort", "dataset_id": "d1", "episode_id": "r1"}
+    reply = {"active": True, "owner": True, "commands": [start]}
     simulations, posted = _relaying(reply)
     request = SimulationRelayRequest.model_validate(
         {
@@ -768,11 +765,7 @@ async def test_an_exchange_is_passed_on_to_the_simulation_and_its_commands_back(
 
     answer = await simulations.relay_recording(PROJECT_ID, ROBOT_ID, request)
 
-    assert answer.model_dump() == {
-        "active": True,
-        "owner": True,
-        "commands": [{"command": "start_episode", "request_id": "r1", "task": "Sort"}],
-    }
+    assert answer.model_dump() == {"active": True, "owner": True, "commands": [start]}
     assert posted == [request.model_dump(mode="json")]
 
 

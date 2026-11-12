@@ -10,7 +10,7 @@ import {
     SchemaSimulationRelayResult,
     SchemaSimulationRelaySession,
 } from '../../api/openapi-spec';
-import { RecordingRelayLoop, RETRY_MS } from './recording-relay';
+import { RecordingRelayLoop, RETRY_MS, runRelayed } from './recording-relay';
 
 const SESSION: SchemaSimulationRelaySession = {
     session_id: 's1',
@@ -193,5 +193,24 @@ describe('RecordingRelayLoop', () => {
         relay.loop.stop();
         await relay.tick();
         expect(relay.requests).toHaveLength(2);
+    });
+});
+
+describe('runRelayed', () => {
+    it('names the dataset and episode the simulation sent, for the session to refuse on others', async () => {
+        const sent: unknown[] = [];
+        const send = async (command: unknown) => {
+            sent.push(command);
+            return { type: 'ack' as const, request_id: '', ok: false, error: { message: 'gone', error_code: 'x' } };
+        };
+        const save: SchemaSimulationRelayCommand = {
+            command: 'save_episode',
+            request_id: 'save-1',
+            dataset_id: 'dA',
+            episode_id: 'start-1',
+        };
+
+        expect(await runRelayed(save, 'dB', send)).toEqual({ request_id: 'save-1', ok: false, error: 'gone' });
+        expect(sent).toEqual([{ command: 'save_episode', dataset_id: 'dA', episode_id: 'start-1' }]);
     });
 });

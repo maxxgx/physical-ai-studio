@@ -145,18 +145,30 @@ class StartEpisodeCommand(BaseModel):
     request_id: str
     task: str
     dataset_id: UUID | None = EXPECTED_DATASET
+    episode_id: str | None = Field(
+        None, max_length=64, description="The client's name for the episode, for ending exactly this one"
+    )
+
+
+EXPECTED_EPISODE = Field(
+    None,
+    max_length=64,
+    description="Refuse unless the open episode is the one started with this ``episode_id``",
+)
 
 
 class SaveEpisodeCommand(BaseModel):
     command: Literal["save_episode"] = "save_episode"
     request_id: str
     dataset_id: UUID | None = EXPECTED_DATASET
+    episode_id: str | None = EXPECTED_EPISODE
 
 
 class DiscardEpisodeCommand(BaseModel):
     command: Literal["discard_episode"] = "discard_episode"
     request_id: str
     dataset_id: UUID | None = EXPECTED_DATASET
+    episode_id: str | None = EXPECTED_EPISODE
 
 
 class SetControlCommand(BaseModel):

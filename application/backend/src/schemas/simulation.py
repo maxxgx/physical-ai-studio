@@ -217,6 +217,8 @@ class SimulationRelayCommand(BaseModel):
     command: Literal["start_episode", "save_episode", "discard_episode"]
     request_id: str = Field(..., min_length=1, max_length=64)
     task: str | None = Field(None, max_length=200, description="With ``start_episode``: the episode's task")
+    dataset_id: str | None = Field(None, max_length=64, description="The dataset the simulation's run records into")
+    episode_id: str | None = Field(None, max_length=64, description="The episode the command is about")
 
 
 class SimulationRelayReply(BaseModel):

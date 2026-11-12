@@ -66,6 +66,8 @@ class Recorder:
     """Announces every change on ``evt/dataset``."""
     dataset_id: UUID | None = None
     """The dataset recorded into; a command that expects another one is refused."""
+    episode_id: str | None = None
+    """What the client that started the open episode calls it; ending another one by name is refused."""
     task: str | None = None
     episodes_recorded: int = 0
     skipped: int = 0
@@ -82,6 +84,13 @@ class Recorder:
                 "Another dataset is loaded than the one this command was for.", error_code="dataset_changed"
             )
 
+    def _check_episode(self, request: SaveEpisodeCommand | DiscardEpisodeCommand) -> None:
+        self._check_dataset(request)
+        if request.episode_id is not None and (not self._open or request.episode_id != self.episode_id):
+            raise RuntimeSessionCommandError(
+                "The episode this command was for is no longer being recorded.", error_code="episode_changed"
+            )
+
     def start(self, request: StartEpisodeCommand) -> RecordingStatus:
         self._check_dataset(request)
         if self._open:
@@ -89,10 +98,11 @@ class Recorder:
         if not request.task:
             raise RuntimeSessionCommandError("A task is required to record an episode.", error_code="task_required")
         self.task, self._open, self.frames = request.task, True, 0
+        self.episode_id = request.episode_id
         return self._changed()
 
     def save(self, request: SaveEpisodeCommand) -> RecordingStatus:
-        self._check_dataset(request)
+        self._check_episode(request)
         if not self._open:
             raise RuntimeSessionCommandError("No episode is being recorded.", error_code="no_episode")
         self._open = False
@@ -117,7 +127,7 @@ class Recorder:
     def discard(self, request: DiscardEpisodeCommand | None = None, *, error: str | None = None) -> RecordingStatus:
         # Does not require an open episode: also how a too-short one is thrown away.
         if request is not None:
-            self._check_dataset(request)
+            self._check_episode(request)
         self._open = False
         self.mutation.discard_buffer()
         return self._changed(error)

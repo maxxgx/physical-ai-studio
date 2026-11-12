@@ -52,26 +52,28 @@ export const relaySession = (
 
 type Send = (
     command:
-        | { command: 'start_episode'; task: string; dataset_id: string | null }
-        | { command: 'save_episode'; dataset_id: string | null }
-        | { command: 'discard_episode'; dataset_id: string | null }
+        | { command: 'start_episode'; task: string; dataset_id: string | null; episode_id: string | null }
+        | { command: 'save_episode'; dataset_id: string | null; episode_id: string | null }
+        | { command: 'discard_episode'; dataset_id: string | null; episode_id: string | null }
 ) => Promise<SchemaAckMessage>;
 
 /**
  * Run one of the simulation's commands as the page's own buttons do, and say how it went.
  *
- * It names the dataset it is for: the session refuses it if another one was loaded meanwhile, even
- * if this page has not heard of that yet.
+ * It names the dataset and episode it is for: the session refuses it if another dataset was loaded
+ * or another episode started meanwhile, even if this page has not heard of that yet.
  */
 export const runRelayed = async (
     command: SchemaSimulationRelayCommand,
     dataset_id: string | null,
     send: Send
 ): Promise<SchemaSimulationRelayResult> => {
+    // The simulation names the dataset and episode; the page's own dataset is the fallback.
+    const fence = { dataset_id: command.dataset_id ?? dataset_id, episode_id: command.episode_id ?? null };
     const request =
         command.command === 'start_episode'
-            ? ({ command: 'start_episode', task: command.task ?? '', dataset_id } as const)
-            : ({ command: command.command, dataset_id } as const);
+            ? ({ command: 'start_episode', task: command.task ?? '', ...fence } as const)
+            : ({ command: command.command, ...fence } as const);
     let timer = 0;
     const timeout = new Promise<SchemaAckMessage>((resolve) => {
         timer = window.setTimeout(
