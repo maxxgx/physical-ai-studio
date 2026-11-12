@@ -26,7 +26,7 @@ export const describeAutopilot = (
         };
     }
     if (autopilot.mode === 'off') {
-        return { variant: 'neutral', text: 'off, it leads while you teleoperate' };
+        return { variant: 'neutral', text: 'off, it leads while you record automatically' };
     }
     if (autopilot.mode === 'drive') {
         return { variant: 'notice', text: 'driving the arm itself' };
