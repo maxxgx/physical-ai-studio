@@ -11,7 +11,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.dependencies import RobotSimulationServiceDep, get_robot_catalog_service, get_simulation_manager
 from schemas.project_camera import Camera, SimulationCamera
-from schemas.simulation import AddSimulationCamerasRequest, ProjectRobotSimulation, RobotSimulation
+from schemas.simulation import (
+    AddSimulationCamerasRequest,
+    ProjectRobotSimulation,
+    RobotSimulation,
+    SimulationRelayReply,
+    SimulationRelayRequest,
+)
 from services.robot_simulation_service import RobotSimulationService
 
 router = APIRouter(prefix="/api/projects/{project_id}", tags=["Simulation"])
@@ -27,6 +33,21 @@ async def get_robot_simulation(
 ) -> RobotSimulation:
     """Whether the robot's simulation runs, who started it, and its viewer, speed and cameras."""
     return await service.get(project_id, robot_id)
+
+
+@router.post("/robots/{robot_id}/simulation/recording-relay")
+async def relay_simulation_recording(
+    project_id: ProjectID,
+    robot_id: UUID,
+    request: SimulationRelayRequest,
+    service: RobotSimulationServiceDep,
+) -> SimulationRelayReply:
+    """Relay the simulation's automatic recording: the session's state in, the commands to run out.
+
+    The recording page calls it while the simulation reports its recording running, runs the
+    commands it gets back as its own buttons do, and sends their results with the next call.
+    """
+    return await service.relay_recording(project_id, robot_id, request)
 
 
 @router.get("/simulations")

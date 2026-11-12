@@ -31,6 +31,9 @@ from schemas.simulation import (
     RobotSimulation,
     SimulationAutopilot,
     SimulationCameraInfo,
+    SimulationRecording,
+    SimulationRelayReply,
+    SimulationRelayRequest,
     SimulationStatus,
     simulation_proxy_path,
 )
@@ -40,6 +43,7 @@ from services.simulation_proxy import is_proxied_http_path, local_base_url
 
 PROBE_TIMEOUT_S = 1.0
 AUTOPILOT_TIMEOUT_S = 2.0
+RELAY_TIMEOUT_S = 2.0
 SIMULATION_CAMERA_IDS = UUID("5d1b2a4e-7c1f-4e0a-9a3c-2f6b8d0e1a7c")
 """Namespace of the ids of simulation cameras: one id per project, robot and camera."""
 
@@ -91,6 +95,35 @@ class RobotSimulationService:
                 raise SimulationNotServingError(f"The simulation {owner_name!r} is not running.")
             http_url, viewer_url = simulation.http_url, simulation.viewer_url
         return local_base_url(http_url), local_base_url(viewer_url)
+
+    async def relay_recording(
+        self, project_id: UUID, robot_id: UUID, request: SimulationRelayRequest
+    ) -> SimulationRelayReply:
+        """Pass one exchange of the recording page on to the robot's simulation, and its reply back.
+
+        Raises:
+            ResourceNotFoundError: The robot does not exist.
+            SimulationNotSupportedError: The robot type has no simulation.
+            SimulationNotServingError: The simulation does not run, does not answer, or does not
+                relay automatic recording (an older plugin).
+        """
+        http_url, _ = await self.proxy_addresses(project_id, robot_id)
+        if http_url is None:
+            raise SimulationNotServingError("The simulation serves no HTTP API on this machine.")
+        try:
+            async with httpx.AsyncClient(timeout=RELAY_TIMEOUT_S, transport=self._transport) as client:
+                response = await client.post(f"{http_url}/studio/relay", json=request.model_dump(mode="json"))
+        except httpx.HTTPError as error:
+            raise SimulationNotServingError(f"The simulation at {http_url} does not answer: {error}") from error
+        if response.status_code == httpx.codes.NOT_FOUND:
+            raise SimulationNotServingError(
+                "This simulation cannot be recorded automatically from Studio: update physicalai-mujoco-plugin."
+            )
+        try:
+            response.raise_for_status()
+            return SimulationRelayReply.model_validate(response.json())
+        except (httpx.HTTPError, ValueError) as error:
+            raise SimulationNotServingError(f"The simulation's recording relay failed: {error}") from error
 
     async def list_running(self, project_id: UUID) -> list[ProjectRobotSimulation]:
         """Return the running simulations of the project's simulated robots, probed in parallel."""
@@ -153,6 +186,7 @@ class RobotSimulationService:
             scene=_str_or_none(health.get("scene")) or _str_or_none(root.get("scene")),
             cameras=_cameras(http_url, cameras),
             autopilot=_autopilot(health.get("autopilot")),
+            recording=_recording(health.get("studio")),
         )
 
     async def add_cameras(
@@ -358,6 +392,16 @@ def _autopilot(status: object) -> SimulationAutopilot | None:
         return SimulationAutopilot.model_validate(status)
     except ValidationError as error:
         logger.debug("Ignoring a malformed autopilot status {}: {}", status, error)
+        return None
+
+
+def _recording(status: object) -> SimulationRecording | None:
+    if not isinstance(status, dict):
+        return None
+    try:
+        return SimulationRecording.model_validate(status)
+    except ValidationError as error:
+        logger.debug("Ignoring a malformed recording status {}: {}", status, error)
         return None
 
 

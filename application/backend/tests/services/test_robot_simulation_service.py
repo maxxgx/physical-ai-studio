@@ -35,7 +35,7 @@ from robots.catalog.registry import RobotCatalogRegistry
 from robots.robot_service import RobotService as RealRobotService
 from schemas.environment import CameraEnvironmentConfiguration, Environment
 from schemas.project_camera import IPCamera, IPCameraPayload, SimulationCamera, SimulationCameraPayload
-from schemas.simulation import Simulation, SimulationStatus
+from schemas.simulation import Simulation, SimulationRelayRequest, SimulationStatus
 from services.environment_service import EnvironmentService
 from services.project_camera_service import ProjectCameraService
 from services.robot_simulation_service import RobotSimulationService
@@ -712,3 +712,84 @@ async def test_a_simulation_that_does_not_answer_cannot_switch_its_autopilot() -
 
     with pytest.raises(SimulationNotServingError, match="does not answer"):
         await module.set_autopilot_mode(EXTERNAL, "off", transport=httpx.MockTransport(fail))
+
+
+async def test_the_simulation_reports_its_automatic_recording(robot: SimpleNamespace) -> None:
+    responses = sim_api(EXTERNAL)
+    responses[f"{EXTERNAL}/health"] = {
+        "scene": "bucket_sort",
+        "studio": {"phase": "recording", "message": "Recording episode 3.", "saved": 2, "discarded": 1, "task": "x"},
+    }
+
+    recording = (await service(responses).get(PROJECT_ID, ROBOT_ID)).recording
+
+    assert recording is not None
+    assert (recording.phase, recording.message, recording.saved, recording.discarded) == (
+        "recording",
+        "Recording episode 3.",
+        2,
+        1,
+    )
+    responses[f"{EXTERNAL}/health"] = {"scene": "yahtzee", "studio": {"saved": "many"}}
+    assert (await service(responses).get(PROJECT_ID, ROBOT_ID)).recording is None
+
+
+def _relaying(reply: Any, status: int = 200) -> tuple[RobotSimulationService, list[Any]]:
+    """A service whose robot's simulation runs externally and answers ``/studio/relay`` with *reply*."""
+    posted: list[Any] = []
+    api = sim_api(EXTERNAL)
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if url == f"{EXTERNAL}/studio/relay":
+            posted.append(json.loads(request.content))
+            return httpx.Response(status, json=reply)
+        return httpx.Response(200, json=api[url]) if url in api else httpx.Response(404)
+
+    simulations = service({})
+    simulations._transport = httpx.MockTransport(handle)
+    return simulations, posted
+
+
+async def test_an_exchange_is_passed_on_to_the_simulation_and_its_commands_back(robot: SimpleNamespace) -> None:
+    reply = {"active": True, "commands": [{"command": "start_episode", "request_id": "r1", "task": "Sort"}]}
+    simulations, posted = _relaying(reply)
+    request = SimulationRelayRequest.model_validate(
+        {
+            "session": {"dataset": True, "recording": False, "teleop": True, "follower": "Sim arm"},
+            "results": [{"request_id": "r0", "ok": False, "error": "disk full"}],
+        }
+    )
+
+    answer = await simulations.relay_recording(PROJECT_ID, ROBOT_ID, request)
+
+    assert answer.model_dump() == {
+        "active": True,
+        "commands": [{"command": "start_episode", "request_id": "r1", "task": "Sort"}],
+    }
+    assert posted == [request.model_dump(mode="json")]
+
+
+@pytest.mark.parametrize(
+    ("reply", "status", "match"),
+    [
+        ({"detail": "Not Found"}, 404, "update physicalai-mujoco-plugin"),
+        ({"active": True, "commands": [{"command": "unload_environment", "request_id": "r"}]}, 200, "relay failed"),
+        ({"detail": "boom"}, 500, "relay failed"),
+    ],
+)
+async def test_a_simulation_that_cannot_relay_says_so(
+    robot: SimpleNamespace, reply: Any, status: int, match: str
+) -> None:
+    simulations, _posted = _relaying(reply, status)
+    request = SimulationRelayRequest.model_validate({"session": {"dataset": True, "recording": False, "teleop": True}})
+
+    with pytest.raises(SimulationNotServingError, match=match):
+        await simulations.relay_recording(PROJECT_ID, ROBOT_ID, request)
+
+
+async def test_no_exchange_without_a_running_simulation(robot: SimpleNamespace) -> None:
+    request = SimulationRelayRequest.model_validate({"session": {"dataset": True, "recording": False, "teleop": True}})
+
+    with pytest.raises(SimulationNotServingError, match="not running"):
+        await service({}).relay_recording(PROJECT_ID, ROBOT_ID, request)

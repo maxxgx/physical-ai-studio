@@ -9,6 +9,7 @@ import { useHotkey } from '../../hotkeys/use-hotkey';
 import { useProjectId } from '../../projects/use-project';
 import { AUTOPILOT_LABEL } from '../../robots/environment-form/robot-form';
 import { AutopilotStatus } from '../../simulation/autopilot-status';
+import { SimulationRecordingRelay } from '../../simulation/recording-relay';
 import { useRobotSimulationLaunch } from '../../simulation/robot-simulation';
 import { TeleopSwitch } from '../cells/robot-cell';
 import { ERROR_TOAST, failureOf, savedEnvironmentDraft, useRuntimeSession } from '../runtime-session-provider';
@@ -178,6 +179,33 @@ const TeleoperatorChoice = ({ environment }: { environment: SchemaSessionEnviron
     );
 };
 
+/** Relays the automatic recording of a simulated follower's simulation, while its viewer has it on. */
+const SimulationRelay = ({ environment }: { environment: SchemaSessionEnvironment }) => {
+    const { project_id } = useProjectId();
+    const { state, send } = useRuntimeSession();
+    const { data: robots } = $api.useSuspenseQuery('get', '/api/projects/{project_id}/robots', {
+        params: { path: { project_id } },
+    });
+    const follower = robots.find(({ id }) => id === environment.robot_id);
+    const isSimulated = useRobotSimulationLaunch(follower?.type ?? '') !== null;
+    if (follower === undefined || !isSimulated) {
+        return null;
+    }
+    const leader = environment.autopilot
+        ? `${follower.name} autopilot`
+        : (robots.find(({ id }) => id === environment.leader_id)?.name ?? null);
+
+    return (
+        <SimulationRecordingRelay
+            robot_id={follower.id}
+            state={state}
+            follower={follower.name}
+            leader={leader}
+            send={send}
+        />
+    );
+};
+
 /** Record mode's side bar: teleoperation, the task, and start / accept / discard with their hotkeys. */
 export const RecordMode = () => {
     const { state, statuses } = useRuntimeSession();
@@ -219,6 +247,7 @@ export const RecordMode = () => {
             {state?.environment != null && <TeleoperatorChoice environment={state.environment} />}
             {state?.environment?.leader_id != null && <TeleopSwitch />}
             {state?.environment?.autopilot && <AutopilotStatus robot_id={state.environment.robot_id} />}
+            {state?.environment != null && <SimulationRelay environment={state.environment} />}
             <Form validationBehavior='native' onSubmit={onStart}>
                 <Flex direction='column' gap='size-150'>
                     <TextArea

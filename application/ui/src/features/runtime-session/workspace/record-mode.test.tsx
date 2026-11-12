@@ -19,6 +19,7 @@ const ENVIRONMENT_ID = 'environment-1';
 
 const send = rs.fn(async () => ({ type: 'ack', request_id: '', ok: true }));
 const session = { autopilot: false };
+let recording: { phase: string; message: string; saved: number; discarded: number; max_episodes: number } | null = null;
 
 rs.mock('../runtime-session-provider', () => ({
     ERROR_TOAST: {},
@@ -58,6 +59,7 @@ const autopilot = {
 beforeEach(() => {
     send.mockClear();
     session.autopilot = false;
+    recording = null;
     server.use(
         http.get('/api/settings', () => HttpResponse.json({ hotkeys: { bindings: {} } } as never)),
         http.get('/api/robots/catalog', () =>
@@ -96,6 +98,7 @@ beforeEach(() => {
                 owner_name: 'arm',
                 cameras: [],
                 autopilot,
+                recording,
             } as never)
         )
     );
@@ -139,6 +142,86 @@ describe('RecordMode with a simulated follower', () => {
 
         expect(await screen.findByRole('button', { name: /Teleoperator/ })).toBeInTheDocument();
         expect(screen.queryByText(/Autopilot:/)).not.toBeInTheDocument();
+    });
+});
+
+describe("RecordMode relaying the simulation's automatic recording", () => {
+    it('runs what the simulation asks for and reports back how it went', async () => {
+        session.autopilot = true;
+        recording = { phase: 'waiting', message: '', saved: 1, discarded: 0, max_episodes: 0 };
+        const bodies: unknown[] = [];
+        let replies = 0;
+        server.use(
+            http.post(
+                '/api/projects/{project_id}/robots/{robot_id}/simulation/recording-relay',
+                async ({ request }) => {
+                    bodies.push(await request.json());
+                    replies += 1;
+                    return HttpResponse.json({
+                        active: true,
+                        commands:
+                            replies === 1
+                                ? [{ command: 'start_episode', request_id: 'sim-1', task: 'Put the cpu away' }]
+                                : [],
+                    });
+                }
+            )
+        );
+        renderMode();
+
+        expect(
+            await screen.findByText(/Recording from the simulation: waiting \(1 saved, 0 discarded\)/)
+        ).toBeInTheDocument();
+        await waitFor(() => expect(send).toHaveBeenCalledWith({ command: 'start_episode', task: 'Put the cpu away' }));
+        await waitFor(() =>
+            expect(bodies).toContainEqual({
+                session: {
+                    dataset: false,
+                    recording: false,
+                    teleop: false,
+                    follower: 'Sim arm',
+                    leader: 'Sim arm autopilot',
+                },
+                results: [{ request_id: 'sim-1', ok: true, error: null }],
+            })
+        );
+    });
+
+    it('says so when the simulation cannot be relayed', async () => {
+        recording = { phase: 'connecting', message: '', saved: 0, discarded: 0, max_episodes: 0 };
+        server.use(
+            http.post('/api/projects/{project_id}/robots/{robot_id}/simulation/recording-relay', () =>
+                HttpResponse.json(
+                    {
+                        error_code: 'simulation_not_serving',
+                        message:
+                            'This simulation cannot be recorded automatically from Studio: update physicalai-mujoco-plugin.',
+                        http_status: 409,
+                    } as never,
+                    { status: 409 }
+                )
+            )
+        );
+        renderMode();
+
+        expect(await screen.findByText(/update physicalai-mujoco-plugin/)).toBeInTheDocument();
+        expect(send).not.toHaveBeenCalled();
+    });
+
+    it('relays nothing while the simulation does not record', async () => {
+        const relayed = rs.fn();
+        server.use(
+            http.post('/api/projects/{project_id}/robots/{robot_id}/simulation/recording-relay', () => {
+                relayed();
+                return HttpResponse.json({ active: false, commands: [] });
+            })
+        );
+        renderMode();
+
+        expect(await screen.findByRole('button', { name: /Teleoperator/ })).toBeInTheDocument();
+        await new Promise((resolve) => setTimeout(resolve, 600));
+        expect(relayed).not.toHaveBeenCalled();
+        expect(screen.queryByText(/Recording from the simulation/)).not.toBeInTheDocument();
     });
 });
 

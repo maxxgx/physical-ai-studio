@@ -19,11 +19,12 @@ from exceptions import (
     ResourceType,
     SimulationInvalidRequestError,
     SimulationNotRunningError,
+    SimulationNotServingError,
     SimulationNotSupportedError,
 )
 from main import app
 from schemas.project_camera import IPCamera, SimulationCamera
-from schemas.simulation import RobotSimulation
+from schemas.simulation import RobotSimulation, SimulationRelayReply
 
 PROJECT_ID = uuid4()
 ROBOT_ID = uuid4()
@@ -37,6 +38,12 @@ class StubService:
         if self.error is not None:
             raise self.error
         return RobotSimulation(running=True, started_by="external", owner_name="sim", scene="yahtzee")
+
+    async def relay_recording(self, project_id, robot_id, request) -> SimulationRelayReply:
+        self.relayed = request
+        if self.error is not None:
+            raise self.error
+        return SimulationRelayReply(active=True, commands=[])
 
     async def add_cameras(self, project_id, environment_id, robot_id, names, camera_names) -> list:
         self.added = (names, camera_names)
@@ -145,3 +152,19 @@ async def test_an_export_resolves_its_simulation_cameras(monkeypatch: pytest.Mon
 
     assert resolved == [PLAIN]
     assert calls == [manager]
+
+
+def test_the_recording_relay_passes_the_exchange_on(stub: StubService) -> None:
+    url = f"/api/projects/{PROJECT_ID}/robots/{ROBOT_ID}/simulation/recording-relay"
+    session = {"dataset": True, "recording": False, "teleop": True}
+
+    response = TestClient(app).post(url, json={"session": session})
+
+    assert response.status_code == 200
+    assert response.json() == {"active": True, "commands": []}
+    assert stub.relayed.session.teleop is True
+    assert TestClient(app).post(url, json={"session": {**session, "teleop": "maybe"}}).status_code in {400, 422}
+    stub.error = SimulationNotServingError("update physicalai-mujoco-plugin")
+    response = TestClient(app).post(url, json={"session": session})
+    assert response.status_code >= 400
+    assert response.json()["error_code"] == "simulation_not_serving"

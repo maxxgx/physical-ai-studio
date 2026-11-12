@@ -115,6 +115,20 @@ class SimulationAutopilot(BaseModel):
     failure: str | None = None
 
 
+class SimulationRecording(BaseModel):
+    """The simulation's automatic recording ("Record in Studio" in its viewer), as its ``/health`` reports it.
+
+    While it runs (``phase`` neither ``off``, ``done``, ``stopped`` nor ``error``), Studio's
+    recording page relays it: see ``SimulationRelayRequest``.
+    """
+
+    phase: str = "off"
+    message: str = ""
+    saved: int = 0
+    discarded: int = 0
+    max_episodes: int = 0
+
+
 class RobotSimulation(BaseModel):
     """Whether a simulated robot's simulation runs, who started it, and what it serves."""
 
@@ -129,6 +143,9 @@ class RobotSimulation(BaseModel):
     scene: str | None = None
     cameras: list[SimulationCameraInfo] = Field(default_factory=list)
     autopilot: SimulationAutopilot | None = Field(None, description="None when the simulation reports no autopilot")
+    recording: SimulationRecording | None = Field(
+        None, description="None when the simulation reports no automatic recording"
+    )
 
 
 class ProjectRobotSimulation(RobotSimulation):
@@ -159,3 +176,41 @@ def simulation_proxy_path(project_id: UUID, robot_id: UUID) -> str:
     its HTTP API.
     """
     return f"/api/projects/{project_id}/robots/{robot_id}/simulation"
+
+
+class SimulationRelaySession(BaseModel):
+    """The recording page's session, as it relays it to the simulation."""
+
+    dataset: bool = Field(..., description="Whether a dataset is loaded to record into")
+    recording: bool = Field(..., description="Whether an episode is being recorded")
+    teleop: bool = Field(..., description="Whether teleoperation drives the follower")
+    follower: str | None = Field(None, max_length=200)
+    leader: str | None = Field(None, max_length=200)
+
+
+class SimulationRelayResult(BaseModel):
+    """How a relayed command went in the session."""
+
+    request_id: str = Field(..., min_length=1, max_length=64, description="The simulation's id of the command")
+    ok: bool
+    error: str | None = Field(None, max_length=2000)
+
+
+class SimulationRelayRequest(BaseModel):
+    """One exchange of the recording page with the simulation's automatic recording."""
+
+    session: SimulationRelaySession
+    results: list[SimulationRelayResult] = Field(default_factory=list, max_length=16)
+
+
+class SimulationRelayCommand(BaseModel):
+    """A session command the simulation asks the recording page to run, as its own buttons do."""
+
+    command: Literal["start_episode", "save_episode", "discard_episode"]
+    request_id: str = Field(..., min_length=1, max_length=64)
+    task: str | None = Field(None, max_length=200, description="With ``start_episode``: the episode's task")
+
+
+class SimulationRelayReply(BaseModel):
+    active: bool = Field(..., description="Whether the simulation's automatic recording runs, so keep relaying")
+    commands: list[SimulationRelayCommand] = Field(default_factory=list)
