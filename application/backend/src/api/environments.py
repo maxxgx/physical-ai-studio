@@ -75,7 +75,7 @@ async def get_runtime_config(
     leader: ReadableRobot | None = None
     if isinstance(relation.tele_operator, TeleoperatorAutopilotWithRobot):
         leader = simulations.autopilot_leader(relation.robot)
-        header = _autopilot_header(relation.robot)
+        header = _autopilot_header(leader)
     elif isinstance(relation.tele_operator, TeleoperatorRobotWithRobot):
         leader = relation.tele_operator.robot
     if leader is None:
@@ -103,13 +103,18 @@ async def get_runtime_config(
     )
 
 
-def _autopilot_header(follower: ReadableRobot) -> str:
-    """Comment lines for an export whose leader is the simulation's autopilot."""
-    http_url = getattr(follower.payload, "http_url", None) or "<the simulation's address>"
+def _autopilot_header(leader: ReadableRobot) -> str:
+    """Comment lines for an export whose leader is the simulation's autopilot.
+
+    The address is built from the leader's validated port, never from the follower's stored
+    ``http_url``: that is free text, which must not end up in a comment or a shell command.
+    """
+    port = int(leader.payload.http_port)
     return (
         "# The leader is the simulation's autopilot. It leads only in leader mode: set Autopilot to\n"
         "# 'Virtual leader' in the simulation's viewer before running, or run\n"
-        f"#   curl -X POST {http_url}/autopilot -H 'Content-Type: application/json' -d '{{\"mode\": \"leader\"}}'\n"
+        f"#   curl -X POST http://127.0.0.1:{port}/autopilot -H 'Content-Type: application/json' "
+        '-d \'{"mode": "leader"}\'\n'
     )
 
 

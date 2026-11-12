@@ -93,8 +93,8 @@ async def test_runtime_config_download_requires_leader(mocker) -> None:
         )
 
 
-async def test_runtime_config_exports_the_autopilot_leader_and_how_to_switch_it_on(mocker) -> None:
-    environment = EnvironmentWithRelations.model_validate(
+def _autopilot_environment(http_url: str) -> EnvironmentWithRelations:
+    return EnvironmentWithRelations.model_validate(
         {
             "id": str(uuid4()),
             "name": "Sim bench",
@@ -104,7 +104,7 @@ async def test_runtime_config_exports_the_autopilot_leader_and_how_to_switch_it_
                         "id": str(uuid4()),
                         "name": "Sim arm",
                         "type": "MuJoCo_SO101_Follower",
-                        "payload": {"http_url": "http://127.0.0.1:50488"},
+                        "payload": {"http_url": http_url},
                     },
                     "tele_operator": {"type": "autopilot"},
                 }
@@ -112,6 +112,25 @@ async def test_runtime_config_exports_the_autopilot_leader_and_how_to_switch_it_
             "cameras": [],
         }
     )
+
+
+async def _export(mocker, environment: EnvironmentWithRelations) -> str:
+    environment_service = SimpleNamespace(
+        get_environment_by_id=mocker.AsyncMock(return_value=environment), session=None
+    )
+    response = await get_runtime_config(
+        request=SimpleNamespace(),
+        project_id=uuid4(),
+        environment_id=environment.id,
+        environment_service=environment_service,
+        robot_client_factory=RobotClientFactory(robot_manager=mocker.MagicMock()),
+        simulations=SimulationManager(RobotCatalogRegistry()),
+    )
+    return response.body.decode()
+
+
+async def test_runtime_config_exports_the_autopilot_leader_and_how_to_switch_it_on(mocker) -> None:
+    environment = _autopilot_environment("http://127.0.0.1:50488")
     environment_service = SimpleNamespace(
         get_environment_by_id=mocker.AsyncMock(return_value=environment), session=None
     )
@@ -134,3 +153,13 @@ async def test_runtime_config_exports_the_autopilot_leader_and_how_to_switch_it_
     document = yaml.safe_load(body)
     leader_driver = document["init_args"]["action_source"]["init_args"]["leader"]["init_args"]["robot"]
     assert leader_driver["init_args"]["http_port"] == 50488
+
+
+@pytest.mark.parametrize("http_url", ["http://127.0.0.1:50488\n", "http://127.0.0.1:50488/$(touch pwned)"])
+async def test_the_autopilot_instructions_take_only_the_port_from_the_stored_address(mocker, http_url: str) -> None:
+    body = await _export(mocker, _autopilot_environment(http_url))
+
+    # The stored address is free text: none of it but the port reaches the comment or the command.
+    assert "#   curl -X POST http://127.0.0.1:50488/autopilot -H" in body
+    assert "$(" not in body
+    yaml.safe_load(body)
