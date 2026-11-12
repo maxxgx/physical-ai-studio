@@ -124,15 +124,10 @@ export const AutomaticRecording = ({
                 // Nothing records: leave the arm as it was. A start that reached the simulation after all
                 // is switched off too.
                 await setRecording(project_id, robot_id, { ...SETTINGS, enabled: false }).catch(() => undefined);
-                // Not if the user moved on meanwhile (another leader, inference): that control is theirs.
-                const current = stateRef.current;
-                if (
-                    turnedOn &&
-                    mounted.current &&
-                    current?.session_id === session_id &&
-                    current?.control?.type === 'teleop' &&
-                    !current?.dataset?.is_recording
-                ) {
+                // Not if the user moved on meanwhile (another leader, inference): that replaces this panel,
+                // and the control is theirs. While it shows, the session drives nothing but this start's control
+                // (whether or not its state has arrived yet).
+                if (turnedOn && mounted.current && stateRef.current?.session_id === session_id) {
                     await setTeleop(false).catch(() => undefined);
                 }
                 throw error;

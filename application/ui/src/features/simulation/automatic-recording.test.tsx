@@ -36,6 +36,7 @@ beforeEach(() => {
     send.mockClear();
     posted = [];
     refuse = false;
+    stateLagMs = 0;
     running = true;
     delay = null;
     recording = { ...RECORDING };
@@ -73,14 +74,22 @@ beforeEach(() => {
 });
 
 /** The panel on a session whose control follows the commands it is sent, as the runtime session's does. */
+let stateLagMs = 0;
+
 const Harness = ({ initial }: { initial: Record<string, unknown> }) => {
     const [state, setState] = useState(initial);
     const sendAndApply = async (command: unknown) => {
         const ack = await send(command);
         const { command: name, control } = command as { command: string; control?: unknown };
         if (name === 'set_control') {
-            setState((previous) => ({ ...previous, control }));
-            await new Promise((resolve) => setTimeout(resolve, 20)); // the session's state message arrives
+            // The session's state message comes on its own, by default before the acknowledgement.
+            const apply = () => setState((previous) => ({ ...previous, control }));
+            if (stateLagMs > 0) {
+                setTimeout(apply, stateLagMs);
+            } else {
+                apply();
+                await new Promise((resolve) => setTimeout(resolve, 20));
+            }
         }
         return ack;
     };
@@ -168,6 +177,18 @@ describe('AutomaticRecording', () => {
             null,
         ]);
         await waitFor(() => expect(screen.getByRole('button', { name: 'Record automatically' })).toBeEnabled());
+    });
+
+    it('undoes a failed start whose control state has not arrived yet', async () => {
+        refuse = true;
+        stateLagMs = 1_000; // the acknowledgement comes first
+        renderPanel();
+        const user = userEvent.setup();
+        const button = await screen.findByRole('button', { name: 'Record automatically' });
+        await waitFor(() => expect(button).toBeEnabled());
+        await user.click(button);
+
+        await waitFor(() => expect(send).toHaveBeenCalledWith({ command: 'set_control', control: null }));
     });
 
     it('stops teleoperation even when the simulation does not take the stop', async () => {
