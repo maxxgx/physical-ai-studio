@@ -4,7 +4,7 @@ import { Button, Flex, Item, Picker, Slider, TextArea, toast } from '@geti-ui/ui
 
 import { SchemaExecutionConfig, SchemaModelControlConfig } from '../../../api/openapi-spec';
 import { ERROR_TOAST, failureOf, useRuntimeSession } from '../runtime-session-provider';
-import { useInferenceSettings } from './inference-settings';
+import { HZ_RANGE, THRESHOLD_RANGE, useInferenceSettings } from './inference-settings';
 
 const EXECUTION_MODES: { key: SchemaExecutionConfig['mode']; label: string }[] = [
     { key: 'sync', label: 'Synchronous' },
@@ -80,9 +80,9 @@ export const InferenceMode = () => {
             <Slider
                 label='Action rate'
                 width='100%'
-                minValue={5}
-                maxValue={100}
-                step={5}
+                minValue={HZ_RANGE.min}
+                maxValue={HZ_RANGE.max}
+                step={HZ_RANGE.step}
                 value={hz}
                 onChange={setHz}
                 getValueLabel={(value) => `${value} Hz`}
@@ -91,9 +91,9 @@ export const InferenceMode = () => {
             <Slider
                 label='Request the next chunk at'
                 width='100%'
-                minValue={0}
-                maxValue={1}
-                step={0.05}
+                minValue={THRESHOLD_RANGE.min}
+                maxValue={THRESHOLD_RANGE.max}
+                step={THRESHOLD_RANGE.step}
                 value={threshold}
                 onChange={setThreshold}
                 formatOptions={{ style: 'percent' }}
