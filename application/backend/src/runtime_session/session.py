@@ -185,8 +185,9 @@ class RuntimeSession:
         """Where each robot's simulation was last reported running, and which run (``follow_simulation``)."""
         self._followed: tuple[int, str, str] | None = None
         """The generation, run and address the environment last followed a simulation to, once each."""
-        self._connected_runs: dict[UUID, str] = {}
-        """Which run of each robot's simulation the environment's devices last connected to."""
+        self._connected_runs: dict[UUID, str | None] = {}
+        """Which run of each robot's simulation the environment's devices last connected to; ``None`` after
+        they failed to reconnect, so the next run is followed even on the same address."""
         self._autopilot: AutopilotRecording | None = None
         """Autopilot recording while it runs; its control drives the follower meanwhile."""
         self._autopilot_shown: AutopilotRecording | None = None
@@ -799,6 +800,7 @@ class RuntimeSession:
                 await self.bus.request(RELOAD, ReloadEnvironment(), CommandDone, timeout=_RELOAD_S)
                 self._note_connected(loaded.environment.description, run)
             except BusRequestError as error:
+                self._connected_runs[loaded.environment.description.follower.robot_id] = None
                 raise RuntimeSessionCommandError(error.message, error_code=error.error_code) from error
             finally:
                 self._emit(StateMessage(data=self.state()))
@@ -808,11 +810,15 @@ class RuntimeSession:
         """Have the loaded environment connect as *description* says from its next reload; hold the lock.
 
         Raises:
-            RuntimeSessionCommandError: It has other robots or another spec than the store and
-                the claims were made for.
+            RuntimeSessionCommandError: It has other robots, another spec or other camera settings
+                than the store and the claims were made for.
         """
         held = loaded.environment.description
-        if description.spec != held.spec or description.robot_names.keys() != held.robot_names.keys():
+        if (
+            description.spec != held.spec
+            or description.robot_names.keys() != held.robot_names.keys()
+            or _claimed_cameras(description) != _claimed_cameras(held)
+        ):
             raise RuntimeSessionCommandError(
                 f"Environment {held.name!r} changed since it was loaded; load it again.",
                 error_code="environment_changed",
@@ -853,8 +859,8 @@ class RuntimeSession:
             if description.simulation_url is None or reported is None:
                 return
             target, run = reported
-            connected = self._connected_runs.get(robot)
-            if target == description.simulation_url and connected in {None, run}:
+            connected = self._connected_runs.get(robot, run)
+            if target == description.simulation_url and connected == run:
                 # Same address and run, or loaded before this session heard of the simulation: it
                 # connected to the one serving there now.
                 self._connected_runs[robot] = run
@@ -1056,6 +1062,13 @@ class RuntimeSession:
             self._bus.publish(EVENTS, event)
         if event.type == "state":
             self._registry.changed()
+
+
+def _claimed_cameras(
+    description: EnvironmentDescription,
+) -> dict[str, tuple[dict[str, Any] | None, tuple[int, int, int]]]:
+    """What the session claims of each camera: which one, at which settings."""
+    return {name: (camera.fingerprint, settings_from_camera(camera)) for name, camera in description.cameras.items()}
 
 
 def _hold(store: Store) -> None:

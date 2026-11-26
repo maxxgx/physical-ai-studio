@@ -203,7 +203,7 @@ SIM_A = "http://127.0.0.1:8080"
 SIM_B = "http://127.0.0.1:50123"
 
 
-def _simulated(http_url: str, *, cameras: int = 1):
+def _simulated(http_url: str, *, cameras: int = 1, fps: int = 30):
     """An environment whose follower is simulated, its cameras resolved to the simulation at *http_url*.
 
     As ``resolve_cameras`` resolves them: IP cameras on the simulation's streams, whose fingerprint
@@ -216,7 +216,7 @@ def _simulated(http_url: str, *, cameras: int = 1):
             "id": f"00000000-0000-0000-0000-00000000000{index}",
             "driver": "ipcam",
             "fingerprint": {"robot_id": str(FOLLOWER_ID), "camera": f"cam{index}"},
-            "payload": {"url": f"{http_url}/cameras/cam{index}/mjpeg", "width": 160, "height": 120, "fps": 30},
+            "payload": {"url": f"{http_url}/cameras/cam{index}/mjpeg", "width": 160, "height": 120, "fps": fps},
         }
     return EnvironmentWithRelations.model_validate(data)
 
@@ -230,6 +230,7 @@ class Simulations:
     def __init__(self) -> None:
         self.url = SIM_A
         self.cameras = 1
+        self.fps = 30
         self.error: Exception | None = None
         self.gate: asyncio.Event | None = None
         self.looking_up = asyncio.Event()
@@ -243,7 +244,7 @@ class Simulations:
             await self.gate.wait()
         if self.error is not None:
             raise self.error
-        return _simulated(url, cameras=self.cameras)
+        return _simulated(url, cameras=self.cameras, fps=self.fps)
 
 
 async def _session_on(new_session, simulations: Simulations):
@@ -314,8 +315,9 @@ async def test_the_session_follows_its_simulation_to_a_new_address(new_session, 
     [
         ({"error": SimulationNotRunningError("Start the simulation", robot_name="Follower")}, "Start the simulation"),
         ({"cameras": 2}, "changed since it was loaded"),
+        ({"fps": 15}, "changed since it was loaded"),
     ],
-    ids=["stopped again", "other cameras"],
+    ids=["stopped again", "other cameras", "other camera rate"],
 )
 async def test_a_simulation_the_environment_cannot_follow_fails_it_and_says_why(
     new_session, fake_cameras, change, reason
@@ -348,6 +350,24 @@ async def test_a_new_run_on_an_address_a_failed_follow_tried_is_followed(new_ses
     await session.follow_simulation(FOLLOWER_ID, SIM_B, run="3")
 
     assert _streamed_from(fake_cameras) == f"{SIM_B}/cameras/cam0/mjpeg"
+    await session.stop()
+
+
+async def test_a_new_run_where_the_devices_failed_to_reconnect_is_followed(new_session, fake_cameras) -> None:
+    simulations = Simulations()
+    session = await _session_on(new_session, simulations)  # loaded before any run was reported
+    simulations.url = SIM_B
+    fake_cameras.return_value.connect.side_effect = RuntimeError("no stream yet")
+    await session.follow_simulation(FOLLOWER_ID, SIM_B, run="2")  # found at SIM_B, but the camera did not connect
+    statuses = subscribe_statuses(session)
+
+    fake_cameras.return_value.connect.side_effect = None
+    await session.follow_simulation(FOLLOWER_ID, SIM_B, run="3")
+
+    async with asyncio.timeout(1):
+        while (status := await statuses.next()).component != "environment":
+            pass
+    assert status.state in {"starting", "running"}  # reconnecting, not left failed
     await session.stop()
 
 
