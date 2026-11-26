@@ -5,6 +5,7 @@ import { Button, Divider, Flex, Grid, Item, Loading, minmax, Picker, Text, View 
 import { SessionPartName, useRuntimeSession } from '../runtime-session-provider';
 import { SessionViewer } from '../session-viewer';
 import { InferenceMode } from './inference-mode';
+import { InferenceSettingsProvider } from './inference-settings';
 import { PartControlsProvider, usePartControls } from './part-controls';
 import { PartsPanel } from './parts-panel';
 import { RecordMode } from './record-mode';
@@ -86,35 +87,38 @@ export const SessionWorkspace = ({ initialMode, cancelHref }: { initialMode: Mod
 
     return (
         <PartControlsProvider>
-            <Grid
-                columns={[minmax(0, '1fr'), 'size-4600']}
-                gap='size-200'
-                height='100%'
-                minHeight={0}
-                UNSAFE_style={{ gridTemplateRows: minmax(0, '1fr') }}
-            >
-                <SessionViewer cancelHref={cancelHref} />
-                <View backgroundColor='gray-100' padding='size-200' overflow='auto' minHeight={0}>
-                    <Flex direction='column' gap='size-200'>
-                        <Suspense fallback={<Loading mode='inline' />}>
-                            <PartsPanel />
-                        </Suspense>
-                        <Divider size='S' />
-                        <Picker
-                            label='Mode'
-                            width='100%'
-                            items={MODES}
-                            selectedKey={mode.key}
-                            onSelectionChange={(key) => key !== null && selectMode(key as ModeKey)}
-                            isDisabled={state?.dataset?.is_recording}
-                        >
-                            {(candidate) => <Item key={candidate.key}>{candidate.label}</Item>}
-                        </Picker>
-                        <MissingParts needs={mode.needs} />
-                        <Suspense fallback={<Loading mode='inline' />}>{mode.panel}</Suspense>
-                    </Flex>
-                </View>
-            </Grid>
+            {/* Above the mode panels, which unmount on a mode switch: the inference settings outlive them. */}
+            <InferenceSettingsProvider>
+                <Grid
+                    columns={[minmax(0, '1fr'), 'size-4600']}
+                    gap='size-200'
+                    height='100%'
+                    minHeight={0}
+                    UNSAFE_style={{ gridTemplateRows: minmax(0, '1fr') }}
+                >
+                    <SessionViewer cancelHref={cancelHref} />
+                    <View backgroundColor='gray-100' padding='size-200' overflow='auto' minHeight={0}>
+                        <Flex direction='column' gap='size-200'>
+                            <Suspense fallback={<Loading mode='inline' />}>
+                                <PartsPanel />
+                            </Suspense>
+                            <Divider size='S' />
+                            <Picker
+                                label='Mode'
+                                width='100%'
+                                items={MODES}
+                                selectedKey={mode.key}
+                                onSelectionChange={(key) => key !== null && selectMode(key as ModeKey)}
+                                isDisabled={state?.dataset?.is_recording}
+                            >
+                                {(candidate) => <Item key={candidate.key}>{candidate.label}</Item>}
+                            </Picker>
+                            <MissingParts needs={mode.needs} />
+                            <Suspense fallback={<Loading mode='inline' />}>{mode.panel}</Suspense>
+                        </Flex>
+                    </View>
+                </Grid>
+            </InferenceSettingsProvider>
         </PartControlsProvider>
     );
 };

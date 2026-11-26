@@ -3,6 +3,7 @@ import { fireEvent, screen } from '@testing-library/react';
 
 import { render } from '../../../test-utils/render';
 import { InferenceMode } from './inference-mode';
+import { InferenceSettingsProvider } from './inference-settings';
 
 const send = rs.fn(async () => ({ ok: true }));
 
@@ -21,7 +22,12 @@ rs.mock('../runtime-session-provider', () => ({
 
 describe('InferenceMode', () => {
     it('runs a multi-task model on one of its tasks, without free text', async () => {
-        render(<InferenceMode />);
+        render(
+            <InferenceSettingsProvider>
+                <InferenceMode />
+            </InferenceSettingsProvider>,
+            { route: '/projects/p/inference', path: '/projects/:project_id/inference' }
+        );
 
         expect(screen.queryByRole('textbox', { name: 'Task' })).not.toBeInTheDocument();
         fireEvent.click(await screen.findByRole('button', { name: 'Play' }));
