@@ -21,6 +21,8 @@ export const THRESHOLD_RANGE: Range = { min: 0, max: 1, step: 0.05 };
 /** What the next Play runs the model with, as the operator last set it. */
 interface Settings {
     task: string;
+    /** Whether the operator set the task: a task a fixed-task model picks by itself does not replace it. */
+    taskEdited: boolean;
     /** The model whose default task was last offered: a model loaded after it fills an empty task. */
     modelId: string | null;
     mode: SchemaExecutionConfig['mode'];
@@ -31,7 +33,7 @@ interface Settings {
 
 type Field = keyof Settings;
 
-const DEFAULTS: Settings = { task: '', modelId: null, mode: 'sync', threshold: 0.5, hz: 30 };
+const DEFAULTS: Settings = { task: '', taskEdited: false, modelId: null, mode: 'sync', threshold: 0.5, hz: 30 };
 
 const fits = (value: unknown, { min, max, step }: Range): value is number => {
     if (typeof value !== 'number' || !Number.isFinite(value) || value < min || value > max) {
@@ -44,6 +46,7 @@ const fits = (value: unknown, { min, max, step }: Range): value is number => {
 /** Whether a stored value is one the field can take; anything else reads as the default. */
 const VALID: { [F in Field]: (value: unknown) => value is Settings[F] } = {
     task: (value): value is string => typeof value === 'string',
+    taskEdited: (value): value is boolean => typeof value === 'boolean',
     modelId: (value): value is string => typeof value === 'string',
     mode: (value): value is Settings['mode'] => value === 'sync' || value === 'async',
     threshold: (value): value is number => fits(value, THRESHOLD_RANGE),
@@ -51,9 +54,10 @@ const VALID: { [F in Field]: (value: unknown) => value is Settings[F] } = {
 };
 
 /**
- * The settings of one project in this browser, each field under its own key: a tab writes only
- * the fields it changed, so two tabs on one project never write back each other's older values.
- * ``onFailure`` is called when the browser blocks or cannot fit a value.
+ * The settings of one project in this tab's session storage, which outlives a reload but is not
+ * shared with other tabs. They are read once, when the workspace mounts; after that the page holds
+ * them, so a write that fails never brings back an older stored value. ``onFailure`` is called when
+ * the browser blocks storage or cannot fit a value.
  */
 const projectStorage = (projectId: string, onFailure: () => void) => {
     const key = (field: Field) => `physicalai:inferenceSettings:${projectId}:${field}`;
@@ -62,7 +66,7 @@ const projectStorage = (projectId: string, onFailure: () => void) => {
     const read = <F extends Field>(field: F): Settings[F] | undefined => {
         let raw: string | null;
         try {
-            raw = window.localStorage.getItem(key(field));
+            raw = window.sessionStorage.getItem(key(field));
         } catch {
             onFailure();
             return undefined;
@@ -78,7 +82,7 @@ const projectStorage = (projectId: string, onFailure: () => void) => {
     const write = (change: Partial<Settings>) => {
         for (const [field, value] of Object.entries(change)) {
             try {
-                window.localStorage.setItem(key(field as Field), JSON.stringify(value));
+                window.sessionStorage.setItem(key(field as Field), JSON.stringify(value));
             } catch {
                 onFailure();
             }
@@ -87,21 +91,22 @@ const projectStorage = (projectId: string, onFailure: () => void) => {
 
     const readAll = (): Settings => ({
         task: read('task') ?? DEFAULTS.task,
+        taskEdited: read('taskEdited') ?? DEFAULTS.taskEdited,
         modelId: read('modelId') ?? DEFAULTS.modelId,
         mode: read('mode') ?? DEFAULTS.mode,
         threshold: read('threshold') ?? DEFAULTS.threshold,
         hz: read('hz') ?? DEFAULTS.hz,
     });
 
-    return { read, write, readAll };
+    return { write, readAll };
 };
 
-let warned = false;
+/** Whether the page said its settings will not be kept; storage fails for every project alike. */
+export const storageWarning = { shown: false };
 
-/** Say once per page that the settings will not outlive it: the browser blocks storage for every project. */
 const warnOnce = () => {
-    if (!warned) {
-        warned = true;
+    if (!storageWarning.shown) {
+        storageWarning.shown = true;
         toast.info(
             'This browser does not let Studio store the inference settings: they will not be kept after a reload.'
         );
@@ -137,7 +142,10 @@ const useDefaultTask = (model_id: string | undefined): string | undefined => {
 
 interface InferenceSettings {
     task: string;
+    /** The operator set the task. */
     setTask: (task: string) => void;
+    /** A task picked for the operator, such as a fixed-task model's first one: kept unless they set one. */
+    offerTask: (task: string) => void;
     mode: SchemaExecutionConfig['mode'];
     setMode: (mode: SchemaExecutionConfig['mode']) => void;
     threshold: number;
@@ -149,12 +157,12 @@ interface InferenceSettings {
 const InferenceSettingsContext = createContext<InferenceSettings | null>(null);
 
 /**
- * The task and execution settings for the whole workspace, kept per project in this browser.
+ * The task and execution settings for the whole workspace, kept per project in this tab.
  *
  * They live above the mode panels, which unmount on every mode switch, and are stored so that a
- * page load or a new session starts from what the operator last ran, not from Studio's defaults.
- * The task is what the operator sees: a model's default fills it only when it is empty and that
- * model was not the last one offered, so neither a model swap nor a reload replaces a task.
+ * reload starts from what the operator last set, not from Studio's defaults. A model's default
+ * fills the task only when it is empty and that model was not the last one offered, so neither a
+ * model swap nor a reload replaces a task.
  */
 export const InferenceSettingsProvider = ({ children }: { children: ReactNode }) => {
     const { project_id } = useProjectId();
@@ -172,7 +180,12 @@ export const InferenceSettingsProvider = ({ children }: { children: ReactNode })
         };
         return {
             task: settings.task,
-            setTask: (task) => update({ task }),
+            setTask: (task) => update({ task, taskEdited: true }),
+            offerTask: (task) => {
+                if (!settings.taskEdited) {
+                    update({ task });
+                }
+            },
             mode: settings.mode,
             setMode: (mode) => update({ mode }),
             threshold: settings.threshold,
@@ -183,19 +196,14 @@ export const InferenceSettingsProvider = ({ children }: { children: ReactNode })
     }, [storage, settings]);
 
     // Another model is loaded and its default task is known: it fills the task if that is empty.
-    // Another tab may have offered this model or set a task meanwhile, so decide from what is stored now.
     useEffect(() => {
         if (model_id === undefined || defaultTask === undefined || model_id === settings.modelId) {
             return;
         }
-        const offered = storage.read('modelId') ?? settings.modelId;
-        const stored = storage.read('task') ?? settings.task;
-        const fill = offered !== model_id && stored === '';
-        const task = fill ? defaultTask : stored;
-        setSettings((current) => ({ ...current, modelId: model_id, task }));
-        if (offered !== model_id) {
-            storage.write(fill ? { modelId: model_id, task } : { modelId: model_id });
-        }
+        const change: Partial<Settings> =
+            settings.task === '' ? { modelId: model_id, task: defaultTask, taskEdited: false } : { modelId: model_id };
+        setSettings((current) => ({ ...current, ...change }));
+        storage.write(change);
     }, [storage, model_id, defaultTask, settings.modelId, settings.task]);
 
     return <InferenceSettingsContext.Provider value={value}>{children}</InferenceSettingsContext.Provider>;

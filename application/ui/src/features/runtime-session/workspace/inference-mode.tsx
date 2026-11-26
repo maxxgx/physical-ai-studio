@@ -15,18 +15,19 @@ const EXECUTION_MODES: { key: SchemaExecutionConfig['mode']; label: string }[] =
 export const InferenceMode = () => {
     const { state, statuses, send } = useRuntimeSession();
     // Held above this panel, which unmounts on every mode switch.
-    const { task, setTask, mode, setMode, threshold, setThreshold, hz, setHz } = useInferenceSettings();
+    const { task, setTask, offerTask, mode, setMode, threshold, setThreshold, hz, setHz } = useInferenceSettings();
     const [isPending, setIsPending] = useState(false);
 
     // A model trained on a fixed set of tasks only takes one of them.
     const tasks = state?.model?.tasks ?? [];
     const selectedTask = tasks.length > 0 && !tasks.includes(task) ? tasks[0] : task;
-    // Keep the one shown as the task, so a free-text model loaded next starts from what ran.
+    // Keep the one shown as the task, so a free-text model loaded next starts from what ran,
+    // unless the operator set a task.
     useEffect(() => {
         if (selectedTask !== task) {
-            setTask(selectedTask);
+            offerTask(selectedTask);
         }
-    }, [selectedTask, task, setTask]);
+    }, [selectedTask, task, offerTask]);
 
     const isRunning = state?.control?.type === 'model';
     const canRun =

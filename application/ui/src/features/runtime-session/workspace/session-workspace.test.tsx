@@ -12,6 +12,7 @@ import { HttpResponse } from 'msw';
 import { http } from '../../../api/utils';
 import { server } from '../../../msw-node-setup';
 import { render } from '../../../test-utils/render';
+import { storageWarning } from './inference-settings';
 import { SessionWorkspace } from './session-workspace';
 
 // model-c was trained on another dataset with the same default task as model-a; model-m only
@@ -144,14 +145,16 @@ const played = async () => {
     return command.control;
 };
 
-/** Store ``values`` as a tab of project-1 would have, each setting under its own key. */
+/** Store ``values`` as this tab would have for project-1, each setting under its own key. */
 const storeRaw = (values: Record<string, string>) =>
     Object.entries(values).forEach(([field, raw]) =>
-        window.localStorage.setItem(`physicalai:inferenceSettings:project-1:${field}`, raw)
+        window.sessionStorage.setItem(`physicalai:inferenceSettings:project-1:${field}`, raw)
     );
 
 beforeEach(() => {
     window.localStorage.clear();
+    window.sessionStorage.clear();
+    storageWarning.shown = false;
     modelId = 'model-a';
     served = [];
     nextDataset = null;
@@ -232,7 +235,7 @@ describe('SessionWorkspace inference settings', () => {
         expect(await taskBox()).toHaveValue('');
     });
 
-    it('keeps what each of two tabs on one project changed, not the last tab’s whole draft', async () => {
+    it("keeps each workspace's draft its own, and nothing in storage shared with other tabs", async () => {
         const tabA = renderWorkspace();
         const tabB = renderWorkspace();
         const a = within(tabA.container);
@@ -240,15 +243,14 @@ describe('SessionWorkspace inference settings', () => {
         await waitFor(async () => expect(await taskBox(a)).toHaveValue('Pick the cube'));
         await waitFor(async () => expect(await taskBox(b)).toHaveValue('Pick the cube'));
 
-        await setSlider('Request the next chunk at', 0.2, a);
+        fireEvent.change(await taskBox(a), { target: { value: 'Stack the cups' } });
         fireEvent.change(await taskBox(b), { target: { value: TYPED } });
-        await setSlider('Action rate', 15, b);
-        tabA.unmount();
-        tabB.unmount();
+        await loadModel('model-b');
 
-        renderWorkspace();
-        expect(await taskBox()).toHaveValue(TYPED);
-        expect(await played()).toMatchObject({ task: TYPED, hz: 15, execution: { request_threshold: 0.2 } });
+        expect(await taskBox(a)).toHaveValue('Stack the cups');
+        expect(await taskBox(b)).toHaveValue(TYPED);
+        // localStorage is shared by every tab of the origin; sessionStorage belongs to this tab.
+        expect(window.localStorage.length).toBe(0);
     });
 
     it.each([
@@ -291,25 +293,18 @@ describe('SessionWorkspace inference settings', () => {
         expect(await played()).toMatchObject({ task: 'Pick the cube', execution: { mode: 'sync' } });
     });
 
-    it('keeps the task another tab typed while this tab still waited for the default', async () => {
-        let release = () => {};
-        nextDataset = new Promise<void>((resolve) => (release = resolve));
-        const waiting = within(renderWorkspace().container);
-        // The other tab's default arrives at once; it is filled there, then replaced by a typed task.
-        const typing = renderWorkspace();
-        const b = within(typing.container);
-        await waitFor(async () => expect(await taskBox(b)).toHaveValue('Pick the cube'));
-        fireEvent.change(await taskBox(b), { target: { value: TYPED } });
-        typing.unmount();
+    it('keeps the task a fixed-task model picked by itself when a free-text model is loaded next', async () => {
+        renderWorkspace();
+        await waitFor(async () => expect(await taskBox()).toHaveValue('Pick the cube'));
 
-        await act(async () => release());
-        await waitFor(() => expect(served.filter((id) => id === 'dataset-of-model-a')).toHaveLength(2));
-        await act(async () => {});
-        expect(await taskBox(waiting)).toHaveValue(TYPED);
-        expect(window.localStorage.getItem('physicalai:inferenceSettings:project-1:task')).toBe(JSON.stringify(TYPED));
+        await loadModel('model-m');
+        expect(await played()).toMatchObject({ task: 'pick' });
+        await loadModel('model-b');
+
+        expect(await taskBox()).toHaveValue('pick');
     });
 
-    it('keeps the task a fixed-task model ran when a free-text model is loaded next', async () => {
+    it('keeps a typed task over the one a fixed-task model picks by itself', async () => {
         renderWorkspace();
         await waitFor(async () => expect(await taskBox()).toHaveValue('Pick the cube'));
         fireEvent.change(await taskBox(), { target: { value: TYPED } });
@@ -318,7 +313,7 @@ describe('SessionWorkspace inference settings', () => {
         expect(await played()).toMatchObject({ task: 'pick' });
         await loadModel('model-b');
 
-        expect(await taskBox()).toHaveValue('pick');
+        expect(await taskBox()).toHaveValue(TYPED);
     });
 
     it("fills the task once a model's default task can be fetched after a failed fetch", async () => {
@@ -354,6 +349,30 @@ describe('SessionWorkspace inference settings', () => {
             expect(String(notify.mock.calls[0][0])).toMatch(/not be kept/);
         } finally {
             getItem.mockRestore();
+            setItem.mockRestore();
+            notify.mockRestore();
+        }
+    });
+
+    it('keeps the draft on the page over older stored values when storing fails', async () => {
+        storeRaw({ task: JSON.stringify('Stored earlier'), hz: '20' });
+        const setItem = rs.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+            throw new DOMException('full', 'QuotaExceededError');
+        });
+        const notify = rs.spyOn(toast, 'info').mockReturnValue(rs.fn() as never);
+        try {
+            renderWorkspace();
+            expect(await taskBox()).toHaveValue('Stored earlier');
+            fireEvent.change(await taskBox(), { target: { value: TYPED } });
+            await setSlider('Action rate', 15);
+            await loadModel('model-b');
+            await switchMode('Record');
+            await switchMode('Inference');
+
+            expect(await taskBox()).toHaveValue(TYPED);
+            expect(await played()).toMatchObject({ task: TYPED, hz: 15 });
+            expect(notify).toHaveBeenCalledTimes(1);
+        } finally {
             setItem.mockRestore();
             notify.mockRestore();
         }
