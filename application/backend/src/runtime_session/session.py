@@ -494,7 +494,8 @@ class RuntimeSession:
             environment.store.write(ACTION, state.value, timestamp=time.monotonic())
         if config is not None:
             await self._control.load(self._watched_control(config, environment))
-            logger.info("Session {} switched to {} control", self.id, config.type)
+            # Which task and settings a run used, for anyone reading the log afterwards.
+            logger.info("Session {} switched to {} control: {}", self.id, config.type, _describe_control(config))
 
     @asynccontextmanager
     async def _watched_control(self, config: ControlConfig, environment: Environment) -> AsyncIterator[Control]:
@@ -791,6 +792,13 @@ class RuntimeSession:
             self._bus.publish(EVENTS, event)
         if event.type == "state":
             self._registry.changed()
+
+
+def _describe_control(config: ControlConfig) -> str:
+    """The control's settings as one line: ``task='pick', hz=30.0, grace_s=3.0, mode='sync', request_threshold=0.5``."""
+    fields = config.model_dump(exclude={"type"})
+    fields.update(fields.pop("execution", {}))
+    return ", ".join(f"{name}={value!r}" for name, value in fields.items())
 
 
 def _model_mismatch(model: ProcessModel, spec: FeatureSpec) -> str | None:

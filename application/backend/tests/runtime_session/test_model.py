@@ -11,6 +11,7 @@ from uuid import uuid4
 
 import numpy as np
 import pytest
+from loguru import logger
 
 from exceptions import RuntimeSessionCommandError
 from runtime_session.controls.model import ModelControl
@@ -108,6 +109,30 @@ async def test_the_model_drives_the_follower(new_session, fake_cameras, fake_mod
     await session.unload_model()
     assert session.state().model is None
     assert session.state().control is None
+
+
+async def test_each_run_logs_its_task_and_settings(new_session, fake_cameras, fake_model_worker, tmp_path) -> None:
+    session: RuntimeSession = await new_session()
+    await session.load_environment(make_environment())
+    await session.load_model(_model(tmp_path), "torch", "cpu")
+    messages: list[str] = []
+    sink_id = logger.add(lambda message: messages.append(message.record["message"]), level="INFO")
+    try:
+        execution = ExecutionConfig(mode="async", request_threshold=0.2)
+        await session.set_control(ModelControlConfig(task="Put the red cube in the bucket", hz=15, execution=execution))
+        # Another task mid-run restarts the control, and is logged too.
+        await session.set_control(ModelControlConfig(task="Sort the bucket", hz=15, execution=execution))
+    finally:
+        logger.remove(sink_id)
+        await session.stop()
+
+    runs = [message for message in messages if "switched to model control" in message]
+    assert runs == [
+        f"Session {session.id} switched to model control: task='Put the red cube in the bucket', hz=15.0,"
+        " grace_s=3, mode='async', request_threshold=0.2",
+        f"Session {session.id} switched to model control: task='Sort the bucket', hz=15.0,"
+        " grace_s=3, mode='async', request_threshold=0.2",
+    ]
 
 
 async def test_a_model_needs_an_environment_it_fits(new_session, fake_cameras, fake_model_worker, tmp_path) -> None:
