@@ -61,6 +61,39 @@ export interface LogEntry {
     record: LogRecord;
 }
 
+const describe = (value: unknown): string => {
+    if (typeof value === 'string') {
+        return value;
+    }
+    try {
+        return JSON.stringify(value) ?? '';
+    } catch {
+        return '';
+    }
+};
+
+/**
+ * The exception of a record: the plain traceback the backend stores in `extra.traceback`, or else the
+ * exception's type and value. `null` when the record has none. Built from the structured record, so it
+ * does not depend on the text format, and it never throws on a malformed record.
+ */
+export const getExceptionText = (entry: LogEntry): string | null => {
+    const { exception, extra } = entry.record;
+    if (exception === null || typeof exception !== 'object') {
+        return null;
+    }
+    const traceback = typeof extra === 'object' && extra !== null ? (extra as Record<string, unknown>).traceback : null;
+    if (typeof traceback === 'string' && traceback.trim() !== '') {
+        return traceback.trimEnd();
+    }
+    const { type, value } = exception as { type?: unknown; value?: unknown };
+    if (typeof type !== 'string') {
+        return null;
+    }
+    const description = describe(value);
+    return description === '' ? type : `${type}: ${description}`;
+};
+
 export interface LogFilters {
     levels: Set<LogLevelName>;
     searchQuery: string;
