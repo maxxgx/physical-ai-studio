@@ -1,4 +1,4 @@
-import { createContext, ReactNode, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
 import { toast } from '@geti-ui/ui';
 
@@ -23,8 +23,10 @@ interface Settings {
     task: string;
     /** Whether the operator set the task: a task a fixed-task model picks by itself does not replace it. */
     taskEdited: boolean;
-    /** The model whose default task was last offered: a model loaded after it fills an empty task. */
+    /** The model last loaded. */
     modelId: string | null;
+    /** Whether the model last loaded still owes its default task: it fills the task once known, if empty. */
+    fillPending: boolean;
     mode: SchemaExecutionConfig['mode'];
     threshold: number;
     // shortcut: set by hand, upgrade to the model's training fps once exports record it.
@@ -33,7 +35,16 @@ interface Settings {
 
 type Field = keyof Settings;
 
-const DEFAULTS: Settings = { task: '', taskEdited: false, modelId: null, mode: 'sync', threshold: 0.5, hz: 30 };
+const DEFAULTS: Settings = {
+    task: '',
+    taskEdited: false,
+    modelId: null,
+    fillPending: false,
+    mode: 'sync',
+    threshold: 0.5,
+    hz: 30,
+};
+const FIELDS = Object.keys(DEFAULTS) as Field[];
 
 const fits = (value: unknown, { min, max, step }: Range): value is number => {
     if (typeof value !== 'number' || !Number.isFinite(value) || value < min || value > max) {
@@ -48,69 +59,62 @@ const VALID: { [F in Field]: (value: unknown) => value is Settings[F] } = {
     task: (value): value is string => typeof value === 'string',
     taskEdited: (value): value is boolean => typeof value === 'boolean',
     modelId: (value): value is string => typeof value === 'string',
+    fillPending: (value): value is boolean => typeof value === 'boolean',
     mode: (value): value is Settings['mode'] => value === 'sync' || value === 'async',
     threshold: (value): value is number => fits(value, THRESHOLD_RANGE),
     hz: (value): value is number => fits(value, HZ_RANGE),
 };
 
 /**
- * The settings of one project in this tab's session storage, which outlives a reload but is not
- * shared with other tabs. They are read once, when the workspace mounts; after that the page holds
- * them, so a write that fails never brings back an older stored value. ``onFailure`` is called when
- * the browser blocks storage or cannot fit a value.
+ * The settings of one project in this tab's session storage, which a reload keeps. They are read
+ * once, when the workspace opens the project; after that the page holds them and only writes, so a
+ * write that fails never brings back an older value. A value that cannot be replaced is removed,
+ * so a later workspace does not start from it either.
  */
-const projectStorage = (projectId: string, onFailure: () => void) => {
+const projectStorage = (projectId: string) => {
     const key = (field: Field) => `physicalai:inferenceSettings:${projectId}:${field}`;
 
-    /** The stored value of ``field``: its default if missing or invalid, undefined if storage failed. */
-    const read = <F extends Field>(field: F): Settings[F] | undefined => {
-        let raw: string | null;
-        try {
-            raw = window.sessionStorage.getItem(key(field));
-        } catch {
-            onFailure();
-            return undefined;
+    /** The stored settings, each missing or invalid one at its default, and whether storage failed. */
+    const readAll = (): { settings: Settings; failed: boolean } => {
+        const settings = { ...DEFAULTS };
+        for (const field of FIELDS) {
+            let raw: string | null;
+            try {
+                raw = window.sessionStorage.getItem(key(field));
+            } catch {
+                return { settings: DEFAULTS, failed: true };
+            }
+            try {
+                const value: unknown = raw === null ? undefined : JSON.parse(raw);
+                if (VALID[field](value)) {
+                    Object.assign(settings, { [field]: value });
+                }
+            } catch {
+                // Not JSON: the default stays.
+            }
         }
-        try {
-            const value: unknown = raw === null ? undefined : JSON.parse(raw);
-            return VALID[field](value) ? (value as Settings[F]) : DEFAULTS[field];
-        } catch {
-            return DEFAULTS[field];
-        }
+        return { settings, failed: false };
     };
 
-    const write = (change: Partial<Settings>) => {
+    /** Store ``change``; false if a value could not be stored. */
+    const write = (change: Partial<Settings>): boolean => {
+        let stored = true;
         for (const [field, value] of Object.entries(change)) {
             try {
                 window.sessionStorage.setItem(key(field as Field), JSON.stringify(value));
             } catch {
-                onFailure();
+                stored = false;
+                try {
+                    window.sessionStorage.removeItem(key(field as Field));
+                } catch {
+                    // Blocked altogether: nothing stored to go stale.
+                }
             }
         }
+        return stored;
     };
 
-    const readAll = (): Settings => ({
-        task: read('task') ?? DEFAULTS.task,
-        taskEdited: read('taskEdited') ?? DEFAULTS.taskEdited,
-        modelId: read('modelId') ?? DEFAULTS.modelId,
-        mode: read('mode') ?? DEFAULTS.mode,
-        threshold: read('threshold') ?? DEFAULTS.threshold,
-        hz: read('hz') ?? DEFAULTS.hz,
-    });
-
-    return { write, readAll };
-};
-
-/** Whether the page said its settings will not be kept; storage fails for every project alike. */
-export const storageWarning = { shown: false };
-
-const warnOnce = () => {
-    if (!storageWarning.shown) {
-        storageWarning.shown = true;
-        toast.info(
-            'This browser does not let Studio store the inference settings: they will not be kept after a reload.'
-        );
-    }
+    return { readAll, write };
 };
 
 /**
@@ -156,13 +160,16 @@ interface InferenceSettings {
 
 const InferenceSettingsContext = createContext<InferenceSettings | null>(null);
 
+const STORAGE_FAILED_MESSAGE =
+    'This browser does not let Studio store the inference settings: they will not be kept after a reload.';
+
 /**
  * The task and execution settings for the whole workspace, kept per project in this tab.
  *
  * They live above the mode panels, which unmount on every mode switch, and are stored so that a
  * reload starts from what the operator last set, not from Studio's defaults. A model's default
- * fills the task only when it is empty and that model was not the last one offered, so neither a
- * model swap nor a reload replaces a task.
+ * fills the task only when it is empty, once per model loaded, so neither a model swap nor a
+ * reload replaces a task.
  */
 export const InferenceSettingsProvider = ({ children }: { children: ReactNode }) => {
     const { project_id } = useProjectId();
@@ -170,15 +177,40 @@ export const InferenceSettingsProvider = ({ children }: { children: ReactNode })
     const model_id = state?.model?.model_id;
     const defaultTask = useDefaultTask(model_id);
 
-    const storage = useMemo(() => projectStorage(project_id, warnOnce), [project_id]);
-    const [settings, setSettings] = useState(() => storage.readAll());
+    const storage = useMemo(() => projectStorage(project_id), [project_id]);
+    const [opened, setOpened] = useState(() => ({ project_id, ...storage.readAll() }));
+    let current = opened;
+    if (opened.project_id !== project_id) {
+        // Another project opened in place: start from its settings, not the last project's.
+        const read = storage.readAll();
+        current = { project_id, settings: read.settings, failed: opened.failed || read.failed };
+        setOpened(current);
+    }
+    const { settings, failed } = current;
 
-    const value = useMemo<InferenceSettings>(() => {
-        const update = (change: Partial<Settings>) => {
-            setSettings((current) => ({ ...current, ...change }));
-            storage.write(change);
-        };
-        return {
+    const update = useCallback(
+        (change: Partial<Settings>) => {
+            const stored = storage.write(change);
+            setOpened((open) => ({
+                ...open,
+                settings: { ...open.settings, ...change },
+                failed: open.failed || !stored,
+            }));
+        },
+        [storage]
+    );
+
+    // Once per workspace, and only for one that is shown.
+    const warned = useRef(false);
+    useEffect(() => {
+        if (failed && !warned.current) {
+            warned.current = true;
+            toast.info(STORAGE_FAILED_MESSAGE);
+        }
+    }, [failed]);
+
+    const value = useMemo<InferenceSettings>(
+        () => ({
             task: settings.task,
             setTask: (task) => update({ task, taskEdited: true }),
             offerTask: (task) => {
@@ -192,19 +224,26 @@ export const InferenceSettingsProvider = ({ children }: { children: ReactNode })
             setThreshold: (threshold) => update({ threshold }),
             hz: settings.hz,
             setHz: (hz) => update({ hz }),
-        };
-    }, [storage, settings]);
+        }),
+        [update, settings]
+    );
 
-    // Another model is loaded and its default task is known: it fills the task if that is empty.
+    // Each model loaded owes its default task, which fills the task once known if the task is empty.
+    // A failed fetch leaves it owed, for a reload or the next load of that model.
     useEffect(() => {
-        if (model_id === undefined || defaultTask === undefined || model_id === settings.modelId) {
+        if (model_id === undefined) {
             return;
         }
-        const change: Partial<Settings> =
-            settings.task === '' ? { modelId: model_id, task: defaultTask, taskEdited: false } : { modelId: model_id };
-        setSettings((current) => ({ ...current, ...change }));
-        storage.write(change);
-    }, [storage, model_id, defaultTask, settings.modelId, settings.task]);
+        if (model_id !== settings.modelId) {
+            update({ modelId: model_id, fillPending: true });
+        } else if (settings.fillPending && defaultTask !== undefined) {
+            update(
+                settings.task === ''
+                    ? { task: defaultTask, taskEdited: false, fillPending: false }
+                    : { fillPending: false }
+            );
+        }
+    }, [update, model_id, defaultTask, settings.modelId, settings.fillPending, settings.task]);
 
     return <InferenceSettingsContext.Provider value={value}>{children}</InferenceSettingsContext.Provider>;
 };

@@ -8,11 +8,11 @@ import { afterEach, beforeEach, describe, expect, it, rs } from '@rstest/core';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse } from 'msw';
+import { useNavigate } from 'react-router';
 
 import { http } from '../../../api/utils';
 import { server } from '../../../msw-node-setup';
 import { render } from '../../../test-utils/render';
-import { storageWarning } from './inference-settings';
 import { SessionWorkspace } from './session-workspace';
 
 // model-c was trained on another dataset with the same default task as model-a; model-m only
@@ -73,6 +73,8 @@ rs.mock('../runtime-session-provider', () => ({
 
 /** The datasets whose default task the backend has served, in order. */
 let served: string[] = [];
+/** The datasets whose default task failed to fetch, in order. */
+let failed: string[] = [];
 /** How the next request for a dataset's default task goes: fails, waits for a release, or is served. */
 let nextDataset: 'fail' | Promise<void> | null = null;
 
@@ -90,6 +92,7 @@ const mockModels = () =>
             const next = nextDataset;
             nextDataset = null;
             if (next === 'fail') {
+                failed.push(dataset_id);
                 return HttpResponse.json({ message: 'unavailable' }, { status: 503 }) as never;
             }
             await next;
@@ -101,11 +104,20 @@ const mockModels = () =>
         })
     );
 
+/** Opens another project in place, as a link in the app would: the workspace stays mounted. */
+const GoToProject = ({ project_id }: { project_id: string }) => {
+    const navigate = useNavigate();
+    return <button onClick={() => navigate(`/projects/${project_id}/inference`)}>Open {project_id}</button>;
+};
+
 const renderWorkspace = (project_id = 'project-1') =>
-    render(<SessionWorkspace initialMode='inference' cancelHref='/' />, {
-        route: `/projects/${project_id}/inference`,
-        path: '/projects/:project_id/inference',
-    });
+    render(
+        <>
+            <SessionWorkspace initialMode='inference' cancelHref='/' />
+            <GoToProject project_id='project-2' />
+        </>,
+        { route: `/projects/${project_id}/inference`, path: '/projects/:project_id/inference' }
+    );
 
 type Scope = Pick<typeof screen, 'findByRole'>;
 
@@ -154,9 +166,9 @@ const storeRaw = (values: Record<string, string>) =>
 beforeEach(() => {
     window.localStorage.clear();
     window.sessionStorage.clear();
-    storageWarning.shown = false;
     modelId = 'model-a';
     served = [];
+    failed = [];
     nextDataset = null;
     mockModels();
 });
@@ -373,6 +385,82 @@ describe('SessionWorkspace inference settings', () => {
             expect(await played()).toMatchObject({ task: TYPED, hz: 15 });
             expect(notify).toHaveBeenCalledTimes(1);
         } finally {
+            setItem.mockRestore();
+            notify.mockRestore();
+        }
+    });
+
+    it("fills a cleared task again when its model comes back after another model's default failed to fetch", async () => {
+        renderWorkspace();
+        await waitFor(async () => expect(await taskBox()).toHaveValue('Pick the cube'));
+        fireEvent.change(await taskBox(), { target: { value: '' } });
+
+        nextDataset = 'fail';
+        act(() => swapModel('model-b'));
+        await waitFor(() => expect(failed).toContain('dataset-of-model-b'));
+        await act(async () => {});
+        expect(await taskBox()).toHaveValue('');
+        await loadModel('model-a');
+
+        expect(await taskBox()).toHaveValue('Pick the cube');
+    });
+
+    it('starts from the other project’s settings when another project opens in place', async () => {
+        renderWorkspace('project-1');
+        await waitFor(async () => expect(await taskBox()).toHaveValue('Pick the cube'));
+        fireEvent.change(await taskBox(), { target: { value: TYPED } });
+        await setSlider('Action rate', 15);
+
+        fireEvent.click(screen.getByRole('button', { name: 'Open project-2' }));
+
+        await waitFor(async () => expect(await taskBox()).toHaveValue('Pick the cube'));
+        expect(await played()).toMatchObject({ task: 'Pick the cube', hz: 30 });
+        expect(window.sessionStorage.getItem('physicalai:inferenceSettings:project-1:task')).toBe(
+            JSON.stringify(TYPED)
+        );
+        expect(window.sessionStorage.getItem('physicalai:inferenceSettings:project-2:task')).not.toBe(
+            JSON.stringify(TYPED)
+        );
+    });
+
+    it('drops a stored value it could not replace, so a later workspace does not bring it back', async () => {
+        storeRaw({ task: JSON.stringify('Stored earlier') });
+        const setItem = rs.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+            throw new DOMException('full', 'QuotaExceededError');
+        });
+        const notify = rs.spyOn(toast, 'info').mockReturnValue(rs.fn() as never);
+        try {
+            const first = renderWorkspace();
+            expect(await taskBox()).toHaveValue('Stored earlier');
+            fireEvent.change(await taskBox(), { target: { value: TYPED } });
+            first.unmount();
+        } finally {
+            setItem.mockRestore();
+            notify.mockRestore();
+        }
+
+        renderWorkspace();
+        await waitFor(async () => expect(await taskBox()).toHaveValue('Pick the cube'));
+    });
+
+    it('says in each workspace that its settings will not be kept', async () => {
+        const blocked = () => {
+            throw new DOMException('blocked', 'SecurityError');
+        };
+        const getItem = rs.spyOn(Storage.prototype, 'getItem').mockImplementation(blocked);
+        const setItem = rs.spyOn(Storage.prototype, 'setItem').mockImplementation(blocked);
+        const notify = rs.spyOn(toast, 'info').mockReturnValue(rs.fn() as never);
+        try {
+            const first = renderWorkspace();
+            await waitFor(async () => expect(await taskBox()).toHaveValue('Pick the cube'));
+            await waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
+            first.unmount();
+
+            renderWorkspace();
+            await waitFor(async () => expect(await taskBox()).toHaveValue('Pick the cube'));
+            await waitFor(() => expect(notify).toHaveBeenCalledTimes(2));
+        } finally {
+            getItem.mockRestore();
             setItem.mockRestore();
             notify.mockRestore();
         }
