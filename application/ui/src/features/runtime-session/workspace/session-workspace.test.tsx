@@ -3,6 +3,7 @@
 
 import { useSyncExternalStore } from 'react';
 
+import { toast } from '@geti-ui/ui';
 import { afterEach, beforeEach, describe, expect, it, rs } from '@rstest/core';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -13,12 +14,15 @@ import { server } from '../../../msw-node-setup';
 import { render } from '../../../test-utils/render';
 import { SessionWorkspace } from './session-workspace';
 
-// model-c was trained on another dataset with the same default task as model-a.
+// model-c was trained on another dataset with the same default task as model-a; model-m only
+// takes a fixed set of tasks, which its dataset's default is not one of.
 const DEFAULT_TASKS: Record<string, string> = {
     'model-a': 'Pick the cube',
     'model-b': 'Sort the bucket',
     'model-c': 'Pick the cube',
+    'model-m': 'Do something else',
 };
+const FIXED_TASKS: Record<string, string[]> = { 'model-m': ['pick', 'place'] };
 const TYPED = 'Put the red cube in the bucket';
 
 const send = rs.fn(async () => ({ ok: true }));
@@ -52,7 +56,13 @@ rs.mock('../runtime-session-provider', () => ({
             state: {
                 environment: { name: 'Bench', cameras: [] },
                 dataset: { is_recording: false },
-                model: { model_id, name: model_id, backend: 'torch', device: 'cpu', tasks: [] },
+                model: {
+                    model_id,
+                    name: model_id,
+                    backend: 'torch',
+                    device: 'cpu',
+                    tasks: FIXED_TASKS[model_id] ?? [],
+                },
             },
             statuses: {},
             send,
@@ -62,6 +72,8 @@ rs.mock('../runtime-session-provider', () => ({
 
 /** The datasets whose default task the backend has served, in order. */
 let served: string[] = [];
+/** How the next request for a dataset's default task goes: fails, waits for a release, or is served. */
+let nextDataset: 'fail' | Promise<void> | null = null;
 
 const mockModels = () =>
     server.use(
@@ -72,8 +84,14 @@ const mockModels = () =>
                     model: { id: params.model_id, dataset_id: `dataset-of-${params.model_id}` },
                 }) as never
         ),
-        http.get('/api/dataset/{dataset_id}', ({ params }) => {
+        http.get('/api/dataset/{dataset_id}', async ({ params }) => {
             const dataset_id = String(params.dataset_id);
+            const next = nextDataset;
+            nextDataset = null;
+            if (next === 'fail') {
+                return HttpResponse.json({ message: 'unavailable' }, { status: 503 }) as never;
+            }
+            await next;
             served.push(dataset_id);
             return HttpResponse.json({
                 id: dataset_id,
@@ -126,12 +144,17 @@ const played = async () => {
     return command.control;
 };
 
-const STORAGE_KEY = 'physicalai:inferenceSettings:project-1';
+/** Store ``values`` as a tab of project-1 would have, each setting under its own key. */
+const storeRaw = (values: Record<string, string>) =>
+    Object.entries(values).forEach(([field, raw]) =>
+        window.localStorage.setItem(`physicalai:inferenceSettings:project-1:${field}`, raw)
+    );
 
 beforeEach(() => {
     window.localStorage.clear();
     modelId = 'model-a';
     served = [];
+    nextDataset = null;
     mockModels();
 });
 
@@ -233,7 +256,7 @@ describe('SessionWorkspace inference settings', () => {
         { name: 'off the steps', stored: { mode: 'async', hz: 7, threshold: 0.33 } },
         { name: 'of the wrong type', stored: { task: ['x'], mode: 3, hz: '15', threshold: null } },
     ])('runs the defaults in place of stored values $name', async ({ stored }) => {
-        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
+        storeRaw(Object.fromEntries(Object.entries(stored).map(([field, value]) => [field, JSON.stringify(value)])));
         renderWorkspace();
         await waitFor(async () => expect(await taskBox()).toHaveValue('Pick the cube'));
 
@@ -245,7 +268,7 @@ describe('SessionWorkspace inference settings', () => {
     });
 
     it('starts from the defaults when the stored settings are not JSON', async () => {
-        window.localStorage.setItem(STORAGE_KEY, '{not json');
+        storeRaw({ task: '{not json', mode: 'async', hz: '1e', threshold: '' });
         renderWorkspace();
         await waitFor(async () => expect(await taskBox()).toHaveValue('Pick the cube'));
 
@@ -266,5 +289,73 @@ describe('SessionWorkspace inference settings', () => {
         renderWorkspace('project-2');
         await waitFor(async () => expect(await taskBox()).toHaveValue('Pick the cube'));
         expect(await played()).toMatchObject({ task: 'Pick the cube', execution: { mode: 'sync' } });
+    });
+
+    it('keeps the task another tab typed while this tab still waited for the default', async () => {
+        let release = () => {};
+        nextDataset = new Promise<void>((resolve) => (release = resolve));
+        const waiting = within(renderWorkspace().container);
+        // The other tab's default arrives at once; it is filled there, then replaced by a typed task.
+        const typing = renderWorkspace();
+        const b = within(typing.container);
+        await waitFor(async () => expect(await taskBox(b)).toHaveValue('Pick the cube'));
+        fireEvent.change(await taskBox(b), { target: { value: TYPED } });
+        typing.unmount();
+
+        await act(async () => release());
+        await waitFor(() => expect(served.filter((id) => id === 'dataset-of-model-a')).toHaveLength(2));
+        await act(async () => {});
+        expect(await taskBox(waiting)).toHaveValue(TYPED);
+        expect(window.localStorage.getItem('physicalai:inferenceSettings:project-1:task')).toBe(JSON.stringify(TYPED));
+    });
+
+    it('keeps the task a fixed-task model ran when a free-text model is loaded next', async () => {
+        renderWorkspace();
+        await waitFor(async () => expect(await taskBox()).toHaveValue('Pick the cube'));
+        fireEvent.change(await taskBox(), { target: { value: TYPED } });
+
+        await loadModel('model-m');
+        expect(await played()).toMatchObject({ task: 'pick' });
+        await loadModel('model-b');
+
+        expect(await taskBox()).toHaveValue('pick');
+    });
+
+    it("fills the task once a model's default task can be fetched after a failed fetch", async () => {
+        nextDataset = 'fail';
+        const first = renderWorkspace();
+        await waitFor(async () => expect(await screen.findByRole('textbox', { name: 'Task' })).toBeInTheDocument());
+        await act(async () => {});
+        expect(await taskBox()).toHaveValue('');
+        first.unmount();
+
+        renderWorkspace();
+        await waitFor(async () => expect(await taskBox()).toHaveValue('Pick the cube'));
+    });
+
+    it('says once that the settings will not be kept when the browser blocks storage', async () => {
+        const blocked = () => {
+            throw new DOMException('blocked', 'SecurityError');
+        };
+        const getItem = rs.spyOn(Storage.prototype, 'getItem').mockImplementation(blocked);
+        const setItem = rs.spyOn(Storage.prototype, 'setItem').mockImplementation(blocked);
+        const notify = rs.spyOn(toast, 'info').mockReturnValue(rs.fn() as never);
+        try {
+            renderWorkspace();
+            await waitFor(async () => expect(await taskBox()).toHaveValue('Pick the cube'));
+            fireEvent.change(await taskBox(), { target: { value: TYPED } });
+            await setSlider('Action rate', 15);
+            await switchMode('Record');
+            await switchMode('Inference');
+
+            // The settings still hold on this page.
+            expect(await played()).toMatchObject({ task: TYPED, hz: 15 });
+            expect(notify).toHaveBeenCalledTimes(1);
+            expect(String(notify.mock.calls[0][0])).toMatch(/not be kept/);
+        } finally {
+            getItem.mockRestore();
+            setItem.mockRestore();
+            notify.mockRestore();
+        }
     });
 });

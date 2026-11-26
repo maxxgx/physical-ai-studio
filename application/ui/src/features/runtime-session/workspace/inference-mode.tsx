@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { Button, Flex, Item, Picker, Slider, TextArea, toast } from '@geti-ui/ui';
 
@@ -21,6 +21,12 @@ export const InferenceMode = () => {
     // A model trained on a fixed set of tasks only takes one of them.
     const tasks = state?.model?.tasks ?? [];
     const selectedTask = tasks.length > 0 && !tasks.includes(task) ? tasks[0] : task;
+    // Keep the one shown as the task, so a free-text model loaded next starts from what ran.
+    useEffect(() => {
+        if (selectedTask !== task) {
+            setTask(selectedTask);
+        }
+    }, [selectedTask, task, setTask]);
 
     const isRunning = state?.control?.type === 'model';
     const canRun =

@@ -1,5 +1,7 @@
 import { createContext, ReactNode, useContext, useEffect, useMemo, useState } from 'react';
 
+import { toast } from '@geti-ui/ui';
+
 import { $api } from '../../../api/client';
 import { SchemaExecutionConfig } from '../../../api/openapi-spec';
 import { useProjectId } from '../../projects/use-project';
@@ -27,11 +29,9 @@ interface Settings {
     hz: number;
 }
 
+type Field = keyof Settings;
+
 const DEFAULTS: Settings = { task: '', modelId: null, mode: 'sync', threshold: 0.5, hz: 30 };
-
-const STORAGE_KEY_PREFIX = 'physicalai:inferenceSettings:';
-
-const getStorageKey = (projectId: string): string => `${STORAGE_KEY_PREFIX}${projectId}`;
 
 const fits = (value: unknown, { min, max, step }: Range): value is number => {
     if (typeof value !== 'number' || !Number.isFinite(value) || value < min || value > max) {
@@ -41,64 +41,98 @@ const fits = (value: unknown, { min, max, step }: Range): value is number => {
     return Math.abs(steps - Math.round(steps)) < 1e-6;
 };
 
-const readStored = (projectId: string): Record<string, unknown> => {
-    try {
-        const stored = JSON.parse(window.localStorage.getItem(getStorageKey(projectId)) ?? '{}');
-        return typeof stored === 'object' && stored !== null && !Array.isArray(stored) ? stored : {};
-    } catch {
-        return {};
-    }
-};
-
-/** The settings stored for ``projectId``, each one that is missing or does not fit its control at its default. */
-export const readInferenceSettings = (projectId: string): Settings => {
-    const stored = readStored(projectId);
-    return {
-        task: typeof stored.task === 'string' ? stored.task : DEFAULTS.task,
-        modelId: typeof stored.modelId === 'string' ? stored.modelId : DEFAULTS.modelId,
-        mode: stored.mode === 'sync' || stored.mode === 'async' ? stored.mode : DEFAULTS.mode,
-        threshold: fits(stored.threshold, THRESHOLD_RANGE) ? stored.threshold : DEFAULTS.threshold,
-        hz: fits(stored.hz, HZ_RANGE) ? stored.hz : DEFAULTS.hz,
-    };
+/** Whether a stored value is one the field can take; anything else reads as the default. */
+const VALID: { [F in Field]: (value: unknown) => value is Settings[F] } = {
+    task: (value): value is string => typeof value === 'string',
+    modelId: (value): value is string => typeof value === 'string',
+    mode: (value): value is Settings['mode'] => value === 'sync' || value === 'async',
+    threshold: (value): value is number => fits(value, THRESHOLD_RANGE),
+    hz: (value): value is number => fits(value, HZ_RANGE),
 };
 
 /**
- * Store only the settings that changed, over what is stored now: another tab on the same project
- * keeps the settings it changed, rather than losing them to this tab's older copy.
+ * The settings of one project in this browser, each field under its own key: a tab writes only
+ * the fields it changed, so two tabs on one project never write back each other's older values.
+ * ``onFailure`` is called when the browser blocks or cannot fit a value.
  */
-const writeInferenceSettings = (projectId: string, change: Partial<Settings>): void => {
-    try {
-        window.localStorage.setItem(getStorageKey(projectId), JSON.stringify({ ...readStored(projectId), ...change }));
-    } catch {
-        // Storage blocked or full: the settings still hold for this page.
+const projectStorage = (projectId: string, onFailure: () => void) => {
+    const key = (field: Field) => `physicalai:inferenceSettings:${projectId}:${field}`;
+
+    /** The stored value of ``field``: its default if missing or invalid, undefined if storage failed. */
+    const read = <F extends Field>(field: F): Settings[F] | undefined => {
+        let raw: string | null;
+        try {
+            raw = window.localStorage.getItem(key(field));
+        } catch {
+            onFailure();
+            return undefined;
+        }
+        try {
+            const value: unknown = raw === null ? undefined : JSON.parse(raw);
+            return VALID[field](value) ? (value as Settings[F]) : DEFAULTS[field];
+        } catch {
+            return DEFAULTS[field];
+        }
+    };
+
+    const write = (change: Partial<Settings>) => {
+        for (const [field, value] of Object.entries(change)) {
+            try {
+                window.localStorage.setItem(key(field as Field), JSON.stringify(value));
+            } catch {
+                onFailure();
+            }
+        }
+    };
+
+    const readAll = (): Settings => ({
+        task: read('task') ?? DEFAULTS.task,
+        modelId: read('modelId') ?? DEFAULTS.modelId,
+        mode: read('mode') ?? DEFAULTS.mode,
+        threshold: read('threshold') ?? DEFAULTS.threshold,
+        hz: read('hz') ?? DEFAULTS.hz,
+    });
+
+    return { read, write, readAll };
+};
+
+let warned = false;
+
+/** Say once per page that the settings will not outlive it: the browser blocks storage for every project. */
+const warnOnce = () => {
+    if (!warned) {
+        warned = true;
+        toast.info(
+            'This browser does not let Studio store the inference settings: they will not be kept after a reload.'
+        );
     }
 };
 
-/** The default task of the dataset ``model_id`` was trained on: empty if none, undefined until known. */
+/**
+ * The default task of the dataset ``model_id`` was trained on: empty if none, undefined while
+ * it is not known, which includes a failed fetch: a reload or the next load tries again.
+ */
 const useDefaultTask = (model_id: string | undefined): string | undefined => {
-    const modelQuery = $api.useQuery(
+    const { data: model } = $api.useQuery(
         'get',
         '/api/models/{model_id}',
         { params: { path: { model_id: model_id ?? '' } } },
         { enabled: model_id !== undefined }
     );
-    const dataset_id = modelQuery.data?.model.dataset_id ?? undefined;
-    const datasetQuery = $api.useQuery(
+    const dataset_id = model?.model.dataset_id ?? undefined;
+    const { data: dataset } = $api.useQuery(
         'get',
         '/api/dataset/{dataset_id}',
         { params: { path: { dataset_id: dataset_id ?? '' } } },
         { enabled: dataset_id !== undefined }
     );
-    if (modelQuery.isError || datasetQuery.isError) {
-        return '';
-    }
-    if (modelQuery.data === undefined) {
+    if (model === undefined) {
         return undefined;
     }
     if (dataset_id === undefined) {
         return '';
     }
-    return datasetQuery.data === undefined ? undefined : (datasetQuery.data.default_task ?? '');
+    return dataset === undefined ? undefined : (dataset.default_task ?? '');
 };
 
 interface InferenceSettings {
@@ -127,12 +161,14 @@ export const InferenceSettingsProvider = ({ children }: { children: ReactNode })
     const { state } = useRuntimeSession();
     const model_id = state?.model?.model_id;
     const defaultTask = useDefaultTask(model_id);
-    const [settings, setSettings] = useState(() => readInferenceSettings(project_id));
+
+    const storage = useMemo(() => projectStorage(project_id, warnOnce), [project_id]);
+    const [settings, setSettings] = useState(() => storage.readAll());
 
     const value = useMemo<InferenceSettings>(() => {
         const update = (change: Partial<Settings>) => {
             setSettings((current) => ({ ...current, ...change }));
-            writeInferenceSettings(project_id, change);
+            storage.write(change);
         };
         return {
             task: settings.task,
@@ -144,18 +180,23 @@ export const InferenceSettingsProvider = ({ children }: { children: ReactNode })
             hz: settings.hz,
             setHz: (hz) => update({ hz }),
         };
-    }, [project_id, settings]);
+    }, [storage, settings]);
 
     // Another model is loaded and its default task is known: it fills the task if that is empty.
+    // Another tab may have offered this model or set a task meanwhile, so decide from what is stored now.
     useEffect(() => {
         if (model_id === undefined || defaultTask === undefined || model_id === settings.modelId) {
             return;
         }
-        const change: Partial<Settings> =
-            settings.task === '' ? { modelId: model_id, task: defaultTask } : { modelId: model_id };
-        setSettings((current) => ({ ...current, ...change }));
-        writeInferenceSettings(project_id, change);
-    }, [project_id, model_id, defaultTask, settings.modelId, settings.task]);
+        const offered = storage.read('modelId') ?? settings.modelId;
+        const stored = storage.read('task') ?? settings.task;
+        const fill = offered !== model_id && stored === '';
+        const task = fill ? defaultTask : stored;
+        setSettings((current) => ({ ...current, modelId: model_id, task }));
+        if (offered !== model_id) {
+            storage.write(fill ? { modelId: model_id, task } : { modelId: model_id });
+        }
+    }, [storage, model_id, defaultTask, settings.modelId, settings.task]);
 
     return <InferenceSettingsContext.Provider value={value}>{children}</InferenceSettingsContext.Provider>;
 };
