@@ -2,6 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from .log_config import LogConfig
-from .setup import global_log_config, setup_logging, setup_uvicorn_logging
+from .setup import flush_logs, global_log_config, prune_worker_files, setup_logging, setup_uvicorn_logging
 
-__all__ = ["LogConfig", "global_log_config", "setup_logging", "setup_uvicorn_logging"]
+__all__ = [
+    "LogConfig",
+    "flush_logs",
+    "global_log_config",
+    "prune_worker_files",
+    "setup_logging",
+    "setup_uvicorn_logging",
+]

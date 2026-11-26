@@ -277,14 +277,26 @@ class ProcessWorker[C](mp.Process, _Worker[C], ABC):
         self._failures: Queue[str] = mp.get_context("spawn").Queue()
         self._failure: str | None = None
 
+    def start(self) -> None:
+        """Start the child; first remove old worker log files, so they stay bounded while the backend runs."""
+        from core.logging import prune_worker_files
+
+        prune_worker_files()
+        super().start()
+
     def run(self) -> None:
-        from core.logging import setup_logging
+        from core.logging import flush_logs, setup_logging
 
         # Loguru sinks do not cross the process boundary.
-        setup_logging()
+        setup_logging(worker=type(self))
         signal.signal(signal.SIGINT, signal.SIG_IGN)
         signal.signal(signal.SIGTERM, self._on_sigterm)
-        self._run_body()
+        try:
+            self._run_body()
+        finally:
+            # The shared files are written from a queue; the child exits with os._exit, which would drop
+            # what is still in it. Bounded, so a stuck sink cannot hold the worker here.
+            flush_logs()
 
     def _on_sigterm(self, _signum: int, _frame: FrameType | None) -> None:
         logger.info("Worker {} received SIGTERM, stopping", self.name)
